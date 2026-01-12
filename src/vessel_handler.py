@@ -1,6 +1,14 @@
 import struct
 import re
 from source_data_handler import SourceDataHandler
+import time
+
+
+def get_now_timestamp():
+    EPOCH_OFFSET = 11644473600
+    now_unix = time.time()
+    filetime_long = int((now_unix + EPOCH_OFFSET) * 1000) * 10000
+    return filetime_long
 
 
 class HeroLoadout:
@@ -13,14 +21,14 @@ class HeroLoadout:
         # Stores offsets for hero-level fields
         self.offsets = offsets
 
-    def add_preset(self, idx, name, vessel_id, relics, offset_dict, counter_val, timestamp):
+    def add_preset(self, index, name, vessel_id, relics, offsets, counter, timestamp):
         self.presets.append({
-            "index": idx,
+            "index": index,
             "name": name,
             "vessel_id": vessel_id,
             "relics": relics,
-            "offsets": offset_dict,
-            "counter": counter_val,
+            "offsets": offsets,
+            "counter": counter,
             "timestamp": timestamp
         })
 
@@ -29,9 +37,9 @@ class VesselParser:
     def __init__(self, data: bytes, data_handler: SourceDataHandler):
         self.data = data
         self.handler = data_handler
-        self.heroes = {} 
 
     def parse(self):
+        heroes = {}
         magic_pattern = re.escape(bytes.fromhex("C2000300002C000003000A0004004600"))
         marker = re.escape(bytes.fromhex("64000000"))
         
@@ -79,7 +87,7 @@ class VesselParser:
                 })
                 cursor += 24
             
-            self.heroes[hero_id] = HeroLoadout(hero_id, cur_idx, cur_v_id, universal_vessels, hero_offsets)
+            heroes[hero_id] = HeroLoadout(hero_id, cur_idx, cur_v_id, universal_vessels, hero_offsets)
             last_hero_id = hero_id
 
         # 2. Hero Vessels
@@ -97,8 +105,8 @@ class VesselParser:
             target_hero = v_meta.get("hero_type") if v_meta else None
             assigned_id = last_hero_id if target_hero == 11 else target_hero
             
-            if assigned_id in self.heroes:
-                self.heroes[assigned_id].vessels.append({
+            if assigned_id in heroes:
+                heroes[assigned_id].vessels.append({
                     "vessel_id": v_id,
                     "relics": relics,
                     "offsets": {
@@ -108,8 +116,8 @@ class VesselParser:
                 })
             cursor += 24
         # Sort hero loadout vessels by vessel id
-        for h_id in self.heroes:
-            self.heroes[h_id].vessels.sort(key=lambda x: x["vessel_id"])
+        for h_id in heroes:
+            heroes[h_id].vessels.sort(key=lambda x: x["vessel_id"])
 
         # 3. Custom Presets Section
         preset_index = 0
@@ -148,15 +156,16 @@ class VesselParser:
             timestamp = struct.unpack_from("<Q", self.data, cursor)[0]  # not sure
             cursor += 8
             
-            if h_id in self.heroes:
-                self.heroes[h_id].add_preset(preset_index, name, v_id, relics, p_offsets, counter_val, timestamp)
+            if h_id in heroes:
+                heroes[h_id].add_preset(preset_index, name, v_id, relics, p_offsets, counter_val, timestamp)
                 
             preset_index += 1
             
             if counter_val == 0:
                 break
+        return heroes
 
-    def display_results(self):
+    def display_results(self, heroes):
         """
         Terminal output with formatted offsets (06X), hero_id (int), and relics (08X).
         """
@@ -165,8 +174,8 @@ class VesselParser:
         print(f"{'='*80}")
 
         # Sort by hero_id for a cleaner list
-        for h_id in sorted(self.heroes.keys()):
-            loadout = self.heroes[h_id]
+        for h_id in sorted(heroes.keys()):
+            loadout = heroes[h_id]
             h_off = loadout.offsets
             
             print(f"\n[Hero ID: {h_id}]")
@@ -250,3 +259,68 @@ class VesselModifier:
         Return the modified data as immutable bytes.
         """
         return bytes(self.data)
+
+
+class LoadoutHandler:
+    class PresetsCapacityFullError(Exception):
+        pass
+
+    def __init__(self, data: bytes, data_handler: SourceDataHandler):
+        self.parser = VesselParser(data, data_handler)
+        self.modifier = VesselModifier(data)
+        self.data_handler = data_handler
+        self.heroes = {}
+        self.all_presets = []
+
+    def parse(self):
+        self.heroes = self.parser.parse()
+        self.all_presets = [p for h in self.heroes.values() for p in h.presets]
+
+    def display_results(self):
+        self.parser.display_results(self.heroes)
+
+    def update_hero_loadout(self, hero_index: int):
+        self.modifier.update_hero_loadout(self.heroes[hero_index])
+
+    def get_modified_data(self) -> bytes:
+        return self.modifier.get_updated_data()
+    
+    def push_preset(self, hero_index: int, vessel_id: int, relics: list[int], name: str):
+        _vessel_info = self.data_handler.get_vessel_data(vessel_id)
+        if not _vessel_info:
+            return
+        
+        if _vessel_info["hero_type"] != 11 and _vessel_info["hero_type"] != hero_index:
+            raise ValueError("This vessel is not assigned to this hero")
+        
+        if len(self.all_presets) > 100:
+            raise LoadoutHandler.PresetsCapacityFullError("Maximum preset capacity reached.")
+        
+        # Create a new preset
+        # new preset offsets are caculated by last preset
+        new_preset_offsets = {
+            "base": self.all_presets[-1]["offsets"]["base"] + 80 if self.all_presets else self.parser.base_offset + 120 * 10 + 28 * 70 + 4,  # Heuristic: 10 heroes * 120 bytes + 60 vessels * 28 bytes + 4 bytes padding
+            "hero_id": self.all_presets[-1]["offsets"]["base"] + 80 + 1 if self.all_presets else self.parser.base_offset + 120 * 10 + 28 * 70 + 4 + 1,
+            "counter": self.all_presets[-1]["offsets"]["base"] + 80 + 3 if self.all_presets else self.parser.base_offset + 120 * 10 + 28 * 70 + 4 + 3,
+            "name": self.all_presets[-1]["offsets"]["base"] + 80 + 4 if self.all_presets else self.parser.base_offset + 120 * 10 + 28 * 70 + 4 + 4,
+            "vessel_id": self.all_presets[-1]["offsets"]["base"] + 80 + 44 if self.all_presets else self.parser.base_offset + 120 * 10 + 28 * 70 + 4 + 44,
+            "relics": self.all_presets[-1]["offsets"]["base"] + 80 + 48 if self.all_presets else self.parser.base_offset + 120 * 10 + 28 * 70 + 4 + 48,
+            "timestamp": self.all_presets[-1]["offsets"]["base"] + 80 + 72 if self.all_presets else self.parser.base_offset + 120 * 10 + 28 * 70 + 4 + 72,
+        }
+        
+        new_timestamp = get_now_timestamp()
+
+        new_preset = {
+            "index": len(self.all_presets),
+            "name": name,
+            "vessel_id": vessel_id,
+            "relics": relics,
+            "counter": 0,
+            "timestamp": new_timestamp,
+            "offsets": new_preset_offsets
+        }
+        for preset in self.all_presets:
+            preset["counter"] += 1
+        self.heroes[hero_index].add_preset(**new_preset)
+        self.all_presets = [p for h in self.heroes.values() for p in h.presets]
+        self.update_hero_loadout(hero_index)
