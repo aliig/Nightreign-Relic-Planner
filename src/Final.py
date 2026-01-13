@@ -7,6 +7,7 @@ from pathlib import Path
 # openpyxl is lazy-loaded in export/import functions to speed up startup
 from relic_checker import RelicChecker, InvalidReason, is_curse_invalid
 from source_data_handler import SourceDataHandler, get_system_language, CHARACTER_NAMES
+from vessel_handler import LoadoutHandler
 from typing import Optional
 import sys
 
@@ -16,9 +17,10 @@ working_directory = os.path.dirname(os.path.abspath(__file__))
 working_directory = Path(working_directory)
 os.chdir(working_directory)
 
-# Data storage - SourceDataHandler is lazy-initialized to speed up startup
+# Data storage - SourceDataHandler and LoadoutHandler are lazy-initialized to speed up startup
 data_source: Optional[SourceDataHandler] = None
 relic_checker: Optional[RelicChecker] = None
+loadout_handler: Optional[LoadoutHandler] = None
 items_json = {}
 effects_json = {}
 data = None
@@ -27,7 +29,7 @@ userdata_path = None
 
 def _ensure_data_source():
     """Lazy initialize data_source on first use"""
-    global data_source
+    global data_source, loadout_handler
     if data_source is None:
         data_source = SourceDataHandler(language=get_system_language())
 
@@ -95,7 +97,6 @@ char_name_list = []
 char_name_list_import = []
 ga_relic = []
 ga_items = []
-ga_to_characters = {}  # Maps GA handle -> list of character names
 current_murks = 0
 current_sigs = 0
 # AOB_search='00 00 00 00 ?? 00 00 00 ?? ?? 00 00 00 00 00 00 ??'
@@ -175,13 +176,6 @@ def load_json_data():
     global items_json, effects_json
     _ensure_data_source()  # Lazy init data_source
     try:
-        # file_path = os.path.join(working_directory, "Resources/Json")
-
-        # with open(os.path.join(file_path, 'items.json'), 'r', encoding='utf-8') as f:
-        #     items_json = json.load(f)
-
-        # with open(os.path.join(file_path, 'effects.json'), 'r', encoding='utf-8') as f:
-        #     effects_json = json.load(f)
         items_json = data_source.get_relic_origin_structure()
         effects_json = data_source.get_effect_origin_structure()
 
@@ -365,10 +359,6 @@ def read_char_name(data):
     name = raw_name.decode("utf-16-le", errors="ignore").rstrip("\x00")
     return name if name else None
 
-
-# Global vessel data storage
-vessel_data = {}  # Maps (char_id, vessel_slot) -> {'offset': int, 'ga_handles': [6 handles], 'relic_slot_offsets': [6 offsets]}
-character_vessels = {}  # Maps char_name -> {vessel_slot -> [list of ga handles]}
 
 def debug_dump_complete_relic_analysis(file_data):
     """Complete deep dive analysis of relics in save file and data files."""
@@ -678,546 +668,6 @@ def debug_dump_save_analysis(file_data):
     # Call the complete analysis
     debug_dump_complete_relic_analysis(file_data)
 
-    # Search for preset names
-    debug_find_preset_names(file_data)
-
-
-def debug_find_preset_names(file_data):
-    """Search for preset names in the save file (UTF-16 encoded strings)."""
-    output_lines = []
-    def log(msg=""):
-        output_lines.append(msg)
-
-    log("\n" + "="*60)
-    log("PRESET NAME SEARCH")
-    log("="*60)
-
-    # Common words that might appear in preset names
-    search_terms = ['build', 'Build', 'preset', 'Preset', 'loadout', 'Loadout', 'Jail', 'Ever']
-
-    found_presets = []
-
-    for term in search_terms:
-        search_bytes = term.encode('utf-16-le')
-        pos = 0
-        while True:
-            idx = file_data.find(search_bytes, pos)
-            if idx == -1:
-                break
-
-            # Extract the full UTF-16 string
-            str_start = idx
-            while str_start > 0 and file_data[str_start-2:str_start] != b'\x00\x00':
-                str_start -= 2
-
-            str_end = idx + len(search_bytes)
-            while str_end < len(file_data) - 1 and file_data[str_end:str_end+2] != b'\x00\x00':
-                str_end += 2
-
-            try:
-                full_string = file_data[str_start:str_end].decode('utf-16-le')
-                if len(full_string) < 50 and full_string not in [p[0] for p in found_presets]:
-                    # Look for vessel IDs nearby
-                    nearby_vessels = []
-                    for check_offset in range(max(0, str_start - 256), min(len(file_data) - 4, str_end + 256), 4):
-                        val = struct.unpack_from('<I', file_data, check_offset)[0]
-                        if 1000 <= val <= 10010 or 19000 <= val <= 19020:
-                            char_id = (val - 1000) // 1000
-                            vessel_slot = val % 1000
-                            if vessel_slot <= 10:
-                                nearby_vessels.append((check_offset, val, char_id, vessel_slot))
-
-                    found_presets.append((full_string, str_start, nearby_vessels))
-            except:
-                pass
-
-            pos = idx + 1
-
-    log(f"\nFound {len(found_presets)} potential preset names:")
-    for preset_name, offset, nearby_vessels in found_presets:
-        log(f"\n  '{preset_name}' at offset 0x{offset:06X}")
-        if nearby_vessels:
-            log(f"    Nearby vessel IDs:")
-            for v_offset, v_id, char_id, slot in nearby_vessels:
-                char_name = CHARACTER_NAMES[char_id] if char_id < len(CHARACTER_NAMES) else f'Char_{char_id}'
-                log(f"      {v_id} at 0x{v_offset:06X} ({char_name}, slot {slot})")
-
-    # Write to file
-    with open("debug_preset_names.txt", "w", encoding="utf-8") as f:
-        f.write("\n".join(output_lines))
-
-
-# Global storage for vessel presets (additional occurrences after the first/active)
-vessel_presets = {}  # (char_id, vessel_slot) -> list of {'offset': int, 'ga_handles': list, 'name': str}
-
-# Global storage for preset names found in save file
-preset_name_map = {}  # vessel_offset -> preset_name
-
-
-def find_preset_names(file_data):
-    """Find preset names in save file and map them to vessel offsets.
-
-    Preset structure in save file:
-    - [vessel_id (4 bytes)] [6 GA handles (24 bytes)] [name string (UTF-16)] [next vessel...]
-    - The name appears AFTER the vessel data block, before the next vessel
-    """
-    global preset_name_map
-    preset_name_map = {}
-
-    # Look for vessel IDs in the preset area (after the active loadout area)
-    # Presets start around 0x01C1A0
-    preset_area_start = 0x01C100
-    preset_area_end = min(0x02A000, len(file_data) - 28)
-
-    # Find all vessel occurrences in preset area
-    vessel_offsets = []
-    for offset in range(preset_area_start, preset_area_end, 4):
-        try:
-            val = struct.unpack_from('<I', file_data, offset)[0]
-            if 1000 <= val <= 10010 or 19000 <= val <= 19020:
-                char_id = (val - 1000) // 1000
-                vessel_slot = val % 1000
-                if vessel_slot <= 10:
-                    vessel_offsets.append((offset, val, char_id, vessel_slot))
-        except:
-            continue
-
-    # Sort by offset
-    vessel_offsets.sort(key=lambda x: x[0])
-
-    # Structure: [name string] [vessel_id + 6 GA handles] [name string] [vessel_id + 6 GA handles]...
-    # The name BEFORE a vessel belongs to THAT vessel
-    #
-    # Orphan detection: When a preset is deleted in-game, the name string may remain
-    # but the vessel data is removed. We detect this by checking:
-    # 1. The name must be within a reasonable distance (80 bytes) from the vessel start
-    # 2. If the gap is too large, it's likely an orphaned name from a deleted preset
-
-    for i in range(len(vessel_offsets)):
-        current_offset = vessel_offsets[i][0]
-
-        # Look for name BEFORE this vessel
-        if i > 0:
-            prev_offset = vessel_offsets[i-1][0]
-            prev_end = prev_offset + 28  # End of previous vessel's data
-        else:
-            prev_end = current_offset - 100  # Search up to 100 bytes before first vessel
-
-        # Search between previous vessel's end and current vessel's start
-        search_start = max(prev_end, current_offset - 100)  # Limit search to 100 bytes before
-        search_end = current_offset
-
-        # Look for null-terminated UTF-16 string, searching from END backwards
-        # to find the name closest to this vessel
-        best_name = None
-        best_distance = float('inf')
-
-        for str_start in range(search_start, search_end - 4, 2):
-            # Skip null bytes
-            if file_data[str_start:str_start+2] == b'\x00\x00':
-                continue
-
-            # Try to find end of string (double null)
-            str_end = str_start
-            while str_end < search_end - 1:
-                if file_data[str_end:str_end+2] == b'\x00\x00':
-                    break
-                str_end += 2
-
-            if str_end <= str_start:
-                continue
-
-            # Try to decode
-            try:
-                candidate = file_data[str_start:str_end].decode('utf-16-le')
-                # Strip non-ASCII characters from the start
-                cleaned = ''.join(c for c in candidate if 32 <= ord(c) <= 126)
-                # Valid preset name: reasonable length after cleaning
-                if 2 <= len(cleaned) <= 30:
-                    # Calculate distance from name END to vessel START
-                    distance = current_offset - str_end
-
-                    # Orphan filter: name must be within 80 bytes of vessel
-                    # and prefer the name closest to the vessel
-                    if distance <= 80 and distance < best_distance:
-                        best_name = cleaned
-                        best_distance = distance
-            except:
-                continue
-
-        if best_name:
-            preset_name_map[current_offset] = best_name
-
-    return preset_name_map
-
-
-def parse_vessel_assignments(file_data):
-    """Parse vessel data to map GA handles to character names.
-
-    Vessel structure:
-    - Each character (0-9) has vessels at IDs 1000-1006, 2000-2006, etc.
-    - Each vessel slot contains: ID (4 bytes) + 6 GA handles (24 bytes)
-
-    Note: Vessel IDs can appear multiple times in save:
-    - Occurrence with most relics = active loadout (what's currently equipped)
-    - Other occurrences = saved presets
-    """
-    global ga_to_characters, vessel_data, character_vessels, vessel_presets
-    ga_to_characters = {}
-    vessel_data = {}
-    vessel_presets = {}
-    character_vessels = {name: {} for name in CHARACTER_NAMES}
-
-    # Debug log
-    debug_lines = []
-    def log(msg=""):
-        debug_lines.append(msg)
-
-    log("="*60)
-    log("VESSEL PARSING DEBUG")
-    log("="*60)
-
-    # NOTE: debug_dump_save_analysis removed for performance - it was adding ~3s to every file load
-    # Uncomment below line if you need detailed debug output:
-    # debug_dump_save_analysis(file_data)
-
-    # Find preset names in save file
-    find_preset_names(file_data)
-    log(f"\nPreset names found: {preset_name_map}")
-
-    # First pass: collect ALL vessel occurrences
-    vessel_occurrences = {}  # (char_id, vessel_slot) -> list of (offset, ga_handles)
-
-    log("\nSearching for vessel IDs (1000-10010 for character-specific vessels)...")
-    for offset in range(0x10000, min(0x50000, len(file_data) - 28), 4):
-        try:
-            val = struct.unpack_from('<I', file_data, offset)[0]
-
-            # Only process character-specific vessel IDs (1000-10010)
-            # Skip shared vessel IDs (19000-19020) - they are handled separately
-            if 1000 <= val <= 10010:
-                vessel_slot = val % 1000  # vessel 0-10
-
-                # Only process valid vessel slots (0-10, for 11 vessels per character)
-                if vessel_slot > 10:
-                    continue
-
-                char_id = (val - 1000) // 1000  # 0-based character index
-
-                # Read the 6 potential GA handles
-                ga_handles = list(struct.unpack_from('<6I', file_data, offset + 4))
-
-                key = (char_id, vessel_slot)
-                if key not in vessel_occurrences:
-                    vessel_occurrences[key] = []
-                vessel_occurrences[key].append((offset, ga_handles))
-
-                char_name = CHARACTER_NAMES[char_id] if char_id < len(CHARACTER_NAMES) else f'Char_{char_id}'
-                log(f"\nFound vessel ID {val} at 0x{offset:06X} ({char_name}, vessel={vessel_slot})")
-                log(f"  GA handles: {[f'0x{h:08X}' for h in ga_handles]}")
-        except:
-            continue
-
-    # Second pass: filter out template entries (first block with non-relic GA handles like 0x00004A38)
-    # and determine which is active vs preset
-    log("\n" + "="*60)
-    log("DETERMINING ACTIVE VS PRESET")
-    log("="*60)
-
-    def is_template_entry(ga_handles):
-        """Check if this is a template entry (first GA is not a relic handle)"""
-        if ga_handles[0] == 0:
-            return False  # Empty is not a template
-        # Template entries have non-relic values like 0x00004A38
-        return (ga_handles[0] & 0xF0000000) != ITEM_TYPE_RELIC
-
-    def count_relics(ga_handles):
-        """Count actual relic GA handles"""
-        return sum(1 for ga in ga_handles if ga != 0 and (ga & 0xF0000000) == ITEM_TYPE_RELIC)
-
-    found_count = 0
-    for (char_id, vessel_slot), occurrences in vessel_occurrences.items():
-        char_name = CHARACTER_NAMES[char_id] if char_id < len(CHARACTER_NAMES) else f'Char_{char_id}'
-
-        # Filter out template entries
-        valid_occurrences = [(off, ga) for off, ga in occurrences if not is_template_entry(ga)]
-        template_count = len(occurrences) - len(valid_occurrences)
-
-        if not valid_occurrences:
-            # All entries are templates or empty - use first non-template
-            valid_occurrences = occurrences
-
-        # FIRST valid occurrence (after filtering templates) is the ACTIVE loadout
-        # Additional occurrences are saved presets
-        active_idx = 0
-        offset, ga_handles = valid_occurrences[active_idx]
-
-        if len(occurrences) > 1 or template_count > 0:
-            log(f"\n{char_name} Vessel {vessel_slot}: {len(occurrences)} total, {template_count} templates filtered, {len(valid_occurrences)} valid")
-            for idx, (off, ga) in enumerate(valid_occurrences):
-                cnt = count_relics(ga)
-                marker = " <-- ACTIVE (first valid)" if idx == active_idx else " (preset)"
-                log(f"  [{idx}] at 0x{off:06X}: {cnt} relics, handles={[f'0x{h:08X}' for h in ga]}{marker}")
-
-            # Store non-active occurrences as presets
-            vessel_presets[(char_id, vessel_slot)] = []
-            preset_num = 1
-            for idx, (preset_offset, preset_ga) in enumerate(valid_occurrences):
-                if idx != active_idx:
-                    # Check if we have a name for this preset from the save file
-                    preset_name = preset_name_map.get(preset_offset, f'Preset {preset_num}')
-                    log(f"  Preset at 0x{preset_offset:06X} -> name: '{preset_name}'")
-                    vessel_presets[(char_id, vessel_slot)].append({
-                        'offset': preset_offset,
-                        'ga_handles': preset_ga,
-                        'name': preset_name
-                    })
-                    preset_num += 1
-
-        found_count += 1
-
-        # Store vessel data with offsets for modification
-        vessel_data[(char_id, vessel_slot)] = {
-            'offset': offset,
-            'ga_handles': ga_handles,
-            'relic_slot_offsets': [offset + 4 + (i * 4) for i in range(6)]
-        }
-
-        # Store in character_vessels for easy access
-        if char_name in character_vessels:
-            character_vessels[char_name][vessel_slot] = ga_handles
-
-        for idx, ga in enumerate(ga_handles):
-            # Check if this is a relic GA handle (type bits = 0xC0000000)
-            if (ga & 0xF0000000) == ITEM_TYPE_RELIC and ga != 0:
-                if ga not in ga_to_characters:
-                    ga_to_characters[ga] = set()
-                ga_to_characters[ga].add(char_name)
-
-    log(f"\n{'='*60}")
-    log("PARSING SHARED VESSELS (per-character configurations)")
-    log(f"{'='*60}")
-
-    # Shared vessels are stored under GlobalPresets (19000-19010) but have per-character configs
-    # Two patterns exist:
-    # 1. Characters 0-8: [header] [marker like 1000, 2000] [19000] [6 handles] [19001] [6 handles]...
-    # 2. Character 9 (Undertaker): [header with lo=0x0A] [19010] [19000] [6 handles]... (no marker)
-    shared_vessel_configs = {}  # char_id -> {shared_slot -> (offset, ga_handles)}
-
-    def parse_shared_vessels(char_id, start_offset, log_prefix=""):
-        """Parse shared vessel configs starting at given offset"""
-        char_name = CHARACTER_NAMES[char_id] if char_id < len(CHARACTER_NAMES) else f'Char_{char_id}'
-        if char_id not in shared_vessel_configs:
-            shared_vessel_configs[char_id] = {}
-
-        curr_off = start_offset
-        for i in range(5):  # Up to 5 shared vessels (slots 0,1,2,10,...)
-            vessel_id = struct.unpack_from('<I', file_data, curr_off)[0]
-            if not (19000 <= vessel_id <= 19020):
-                break
-            shared_slot = vessel_id % 1000
-            ga_handles = list(struct.unpack_from('<6I', file_data, curr_off + 4))
-            has_relics = any((h & 0xF0000000) == ITEM_TYPE_RELIC for h in ga_handles if h != 0)
-
-            # Map shared slot to vessel slot 7-10 (7=slot0, 8=slot1, 9=slot2, 10=slot10)
-            if shared_slot <= 2:
-                vessel_slot = 7 + shared_slot
-            elif shared_slot == 10:
-                vessel_slot = 10
-            else:
-                vessel_slot = 7 + shared_slot  # fallback
-
-            shared_vessel_configs[char_id][vessel_slot] = {
-                'offset': curr_off,
-                'ga_handles': ga_handles,
-                'relic_slot_offsets': [curr_off + 4 + (j * 4) for j in range(6)],
-                'shared_slot': shared_slot
-            }
-
-            log(f"{log_prefix}  Shared slot {shared_slot} -> Vessel {vessel_slot}: {'HAS RELICS' if has_relics else 'empty'}")
-            if has_relics:
-                log(f"{log_prefix}    Handles: {[f'0x{h:08X}' for h in ga_handles]}")
-
-            curr_off += 28  # vessel_id (4) + 6 handles (24)
-
-    for offset in range(0x10000, min(0x50000, len(file_data) - 120), 4):
-        try:
-            val = struct.unpack_from('<I', file_data, offset)[0]
-            next_val = struct.unpack_from('<I', file_data, offset + 4)[0]
-
-            # Pattern 1: Character marker (1000-9999) followed by GlobalPresets vessel
-            if 1000 <= val <= 9999 and 19000 <= next_val <= 19020:
-                char_id = (val // 1000) - 1  # 1000->0, 2000->1, etc.
-                if 0 <= char_id <= 8:  # Characters 0-8 only
-                    char_name = CHARACTER_NAMES[char_id] if char_id < len(CHARACTER_NAMES) else f'Char_{char_id}'
-                    log(f"\nFound shared vessel config for {char_name} at 0x{offset:06X} (marker={val})")
-                    parse_shared_vessels(char_id, offset + 4)
-
-            # Pattern 2: Header with lo byte = 0x0A (10) for Undertaker
-            # Structure: [header 0x010A] [19010] [19000] [6 handles] [19001] [6 handles]...
-            # The first 19010 is a marker, not a vessel with handles
-            elif val < 1000 and (val & 0xFF) == 0x0A and 19000 <= next_val <= 19020:
-                char_id = 9  # Undertaker
-                char_name = CHARACTER_NAMES[char_id]
-                log(f"\nFound shared vessel config for {char_name} at 0x{offset:06X} (header=0x{val:04X})")
-
-                # Check if first vessel ID is followed by another vessel ID (marker pattern)
-                # or by relic handles (normal pattern)
-                third_val = struct.unpack_from('<I', file_data, offset + 8)[0]
-                if 19000 <= third_val <= 19020:
-                    # First vessel ID is a marker, skip it and start from the second
-                    log(f"  Skipping marker vessel {next_val}, starting from {third_val}")
-                    parse_shared_vessels(char_id, offset + 8)
-                else:
-                    # Normal pattern
-                    parse_shared_vessels(char_id, offset + 4)
-        except:
-            continue
-
-    # Merge shared vessel configs into vessel_data and character_vessels
-    for char_id, shared_vessels in shared_vessel_configs.items():
-        char_name = CHARACTER_NAMES[char_id] if char_id < len(CHARACTER_NAMES) else f'Char_{char_id}'
-        for vessel_slot, config in shared_vessels.items():
-            key = (char_id, vessel_slot)
-            if key not in vessel_data:  # Don't override if already found
-                vessel_data[key] = config
-                if char_name in character_vessels:
-                    character_vessels[char_name][vessel_slot] = config['ga_handles']
-                    log(f"Added shared vessel {vessel_slot} to {char_name}")
-
-    # Collect all shared vessel config offsets - these are NOT presets
-    shared_config_offsets = set()
-    for char_id, shared_vessels in shared_vessel_configs.items():
-        for vessel_slot, config in shared_vessels.items():
-            shared_config_offsets.add(config['offset'])
-    log(f"Shared vessel config offsets (not presets): {[f'0x{o:06X}' for o in sorted(shared_config_offsets)]}")
-
-    # Map shared vessel presets (19000-19010) to correct vessel slots (7-10)
-    # The occurrence-based parsing already assigned the correct character,
-    # but the vessel slot needs to be remapped: 0->7, 1->8, 2->9, 10->10
-    # Also filter out shared vessel config entries (active loadouts, not presets)
-    shared_vessel_presets_to_remap = []
-    for (char_id, vessel_slot), presets in list(vessel_presets.items()):
-        # Only remap shared vessel slots (0, 1, 2, 10) for characters 0-9
-        if char_id < 10 and vessel_slot in [0, 1, 2, 10]:
-            for preset in presets:
-                preset_offset = preset['offset']
-
-                # Skip if this is a shared vessel config entry (not a real preset)
-                if preset_offset in shared_config_offsets:
-                    log(f"Skipping shared vessel config at 0x{preset_offset:06X} (not a preset)")
-                    continue
-
-                ga_handles = preset.get('ga_handles', [])
-
-                # Skip empty presets (no actual relics)
-                has_relics = any((h & 0xF0000000) == ITEM_TYPE_RELIC and h != 0 for h in ga_handles)
-                if not has_relics:
-                    log(f"Skipping empty preset at 0x{preset_offset:06X}")
-                    continue
-
-                # Map shared vessel slot: 0,1,2 -> 7,8,9; 10 stays 10
-                if vessel_slot <= 2:
-                    target_vessel = 7 + vessel_slot
-                else:
-                    target_vessel = vessel_slot
-
-                shared_vessel_presets_to_remap.append({
-                    'char_id': char_id,
-                    'source_slot': vessel_slot,
-                    'target_slot': target_vessel,
-                    'preset': preset.copy()
-                })
-
-    # Apply the remapping
-    for remap in shared_vessel_presets_to_remap:
-        char_id = remap['char_id']
-        source_slot = remap['source_slot']
-        target_slot = remap['target_slot']
-        preset = remap['preset']
-
-        # Remove from source slot
-        source_key = (char_id, source_slot)
-        if source_key in vessel_presets:
-            vessel_presets[source_key] = [p for p in vessel_presets[source_key]
-                                          if p['offset'] != preset['offset']]
-            if not vessel_presets[source_key]:
-                del vessel_presets[source_key]
-
-        # Add to target slot
-        target_key = (char_id, target_slot)
-        if target_key not in vessel_presets:
-            vessel_presets[target_key] = []
-
-        # Avoid duplicates
-        existing_offsets = {p['offset'] for p in vessel_presets[target_key]}
-        if preset['offset'] not in existing_offsets:
-            vessel_presets[target_key].append(preset)
-            char_name = CHARACTER_NAMES[char_id]
-            log(f"Remapped preset '{preset.get('name', 'Unknown')}' for {char_name} from slot {source_slot} to slot {target_slot}")
-
-    log(f"\n{'='*60}")
-    log("SUMMARY")
-    log(f"{'='*60}")
-    log(f"Total vessel slots: {found_count}")
-    log(f"Total presets found: {sum(len(p) for p in vessel_presets.values())}")
-    log(f"Shared vessel configs found: {sum(len(v) for v in shared_vessel_configs.values())}")
-
-    # Write debug to file
-    with open("debug_vessel_parsing.txt", "w", encoding="utf-8") as f:
-        f.write("\n".join(debug_lines))
-
-    # Convert sets to sorted lists for display
-    for ga in ga_to_characters:
-        ga_to_characters[ga] = sorted(list(ga_to_characters[ga]))
-
-    return ga_to_characters
-
-
-def get_vessel_slot_offset(char_name, vessel_slot, relic_index):
-    """Get the file offset for a specific relic slot in a vessel.
-
-    Args:
-        char_name: Character name (e.g., 'Wylder')
-        vessel_slot: Vessel slot number (0-6)
-        relic_index: Index within vessel (0-5)
-
-    Returns:
-        File offset or None if not found
-    """
-    char_id = CHARACTER_NAMES.index(char_name) if char_name in CHARACTER_NAMES else -1
-    if char_id < 0:
-        return None
-
-    key = (char_id, vessel_slot)
-    if key in vessel_data:
-        return vessel_data[key]['relic_slot_offsets'][relic_index]
-    return None
-
-
-def modify_vessel_assignment(file_data, char_name, vessel_slot, relic_index, new_ga_handle):
-    """Modify a relic assignment in a vessel slot.
-
-    Args:
-        file_data: Bytearray of save file
-        char_name: Character name
-        vessel_slot: Vessel slot (0-6)
-        relic_index: Relic index within vessel (0-5)
-        new_ga_handle: New GA handle to assign (0 to clear)
-
-    Returns:
-        True if successful, False otherwise
-    """
-    offset = get_vessel_slot_offset(char_name, vessel_slot, relic_index)
-    if offset is None:
-        return False
-
-    try:
-        struct.pack_into('<I', file_data, offset, new_ga_handle)
-        return True
-    except:
-        return False
-
 
 def get_character_loadout(char_name):
     """Get the current relic loadout for a character.
@@ -1225,17 +675,16 @@ def get_character_loadout(char_name):
     Returns:
         Dict with vessel_slot -> {'relics': list of (ga_handle, relic_info), 'unlocked': bool}
     """
-    if char_name not in character_vessels:
-        return {}
-
+    
     char_id = CHARACTER_NAMES.index(char_name) if char_name in CHARACTER_NAMES else -1
-
+    if char_id < 0:
+        return {}
+    hero_type = char_id + 1
     loadout = {}
-    for vessel_slot, ga_handles in character_vessels[char_name].items():
+    for idx, vessel in enumerate(loadout_handler.heroes[hero_type].vessels):
         relics = []
         has_any_relic = False
-
-        for ga in ga_handles:
+        for ga in vessel['relics']:
             if ga != 0 and (ga & 0xF0000000) == ITEM_TYPE_RELIC:
                 has_any_relic = True
                 # Find relic info
@@ -1262,9 +711,9 @@ def get_character_loadout(char_name):
         # 2. It has any relic assigned (player must have unlocked it to assign relics)
         # Note: We can't reliably detect unlock status from save data alone,
         # so we show "Unknown" for empty vessels beyond slot 0
-        is_unlocked = vessel_slot == 0 or has_any_relic
+        is_unlocked = idx == 0 or has_any_relic
 
-        loadout[vessel_slot] = {
+        loadout[idx] = {
             'relics': relics,
             'unlocked': is_unlocked,
             'has_relics': has_any_relic
@@ -1301,7 +750,7 @@ def read_murks_and_sigs(data):
 
 
 def write_murks_and_sigs(murks_value, sigs_value):
-    global data
+    global data, loadout_handler
     offset = gaprint(data)
     name_offset = offset + 0x94
     murks_offset = name_offset + 52
@@ -2028,7 +1477,7 @@ def delete_all_illegal_relics():
 
 
 def save_current_data():
-    global data, userdata_path
+    global data, userdata_path, loadout_handler
     if data and userdata_path:
         with open(userdata_path, 'wb') as f:
 
@@ -2181,6 +1630,7 @@ class SearchableCombobox(ttk.Frame):
 
 class SaveEditorGUI:
     def __init__(self, root):
+        global loadout_handler
         self.root = root
         self.root.title("Elden Ring NightReign Save Editor")
         self.root.geometry("1000x700")
@@ -2610,7 +2060,7 @@ class SaveEditorGUI:
 
         char_name = self.vessel_char_var.get()
         char_id = CHARACTER_NAMES.index(char_name) if char_name in CHARACTER_NAMES else -1
-
+        hero_type = char_id + 1
         if char_id == -1:
             return
 
@@ -2659,153 +2109,154 @@ class SaveEditorGUI:
 
         # Find presets for this character
         card_row = 0
-        for (preset_char_id, vessel_slot), presets in vessel_presets.items():
-            if preset_char_id != char_id:
-                continue
+        
+        presets = loadout_handler.heroes[hero_type].presets
 
-            for preset in presets:
-                preset_name = preset.get('name', 'Unknown')
-                ga_handles = preset.get('ga_handles', [])
+        for preset in presets:
+            vessel_id = preset.get('vessel_id', 0)
+            vessel_slot = loadout_handler.get_vessel_index_in_hero(hero_type, vessel_id)
+            preset_name = preset.get('name', 'Unknown')
+            ga_handles = preset.get('relics', [])
 
-                # Collect relic info with names and effects grouped per relic
-                relic_data_list = []  # For color indicators
-                relics_with_effects = []  # List of (relic_name, color, is_deep, effects, curses)
+            # Collect relic info with names and effects grouped per relic
+            relic_data_list = []  # For color indicators
+            relics_with_effects = []  # List of (relic_name, color, is_deep, effects, curses)
 
-                for ga in ga_handles:
-                    if ga != 0 and (ga & 0xF0000000) == ITEM_TYPE_RELIC:
-                        relic_info = ga_to_relic_info.get(ga)
-                        if relic_info:
-                            color = relic_info.get('color', 'Unknown')
-                            is_deep = relic_info.get('is_deep', False)
-                            relic_name = relic_info.get('name', 'Unknown Relic')
-                            relic_data_list.append({'color': color, 'is_deep': is_deep})
+            for ga in ga_handles:
+                if ga != 0 and (ga & 0xF0000000) == ITEM_TYPE_RELIC:
+                    relic_info = ga_to_relic_info.get(ga)
+                    if relic_info:
+                        color = relic_info.get('color', 'Unknown')
+                        is_deep = relic_info.get('is_deep', False)
+                        relic_name = relic_info.get('name', 'Unknown Relic')
+                        relic_data_list.append({'color': color, 'is_deep': is_deep})
 
-                            # Collect effects for this relic
-                            effects = []
-                            for eff in relic_info.get('effects', []):
-                                if eff and eff not in [0, -1, 4294967295]:
-                                    eff_name = effects_json.get(str(eff), {}).get('name', f'Effect {eff}')
-                                    effects.append(eff_name)
+                        # Collect effects for this relic
+                        effects = []
+                        for eff in relic_info.get('effects', []):
+                            if eff and eff not in [0, -1, 4294967295]:
+                                eff_name = effects_json.get(str(eff), {}).get('name', f'Effect {eff}')
+                                effects.append(eff_name)
 
-                            # Collect curses for this relic
-                            curses = []
-                            for curse in relic_info.get('curses', []):
-                                if curse and curse not in [0, -1, 4294967295]:
-                                    curse_name = effects_json.get(str(curse), {}).get('name', f'Curse {curse}')
-                                    curses.append(curse_name)
+                        # Collect curses for this relic
+                        curses = []
+                        for curse in relic_info.get('curses', []):
+                            if curse and curse not in [0, -1, 4294967295]:
+                                curse_name = effects_json.get(str(curse), {}).get('name', f'Curse {curse}')
+                                curses.append(curse_name)
 
-                            relics_with_effects.append((relic_name, color, is_deep, effects, curses))
+                        relics_with_effects.append((relic_name, color, is_deep, effects, curses))
 
-                # Get vessel name
-                vessel_info = get_vessel_info(char_name, vessel_slot)
-                vessel_name = vessel_info.get('name', f'Vessel {vessel_slot}')
+            # Get vessel name
+            vessel_info = get_vessel_info(char_name, vessel_slot)
+            vessel_name = vessel_info.get('name', f'Vessel {vessel_slot}')
 
-                # Create card frame
-                card = tk.Frame(self.presets_cards_frame, bg=BG_CARD, relief='flat', bd=0)
-                card.pack(fill='x', padx=8, pady=6)
+            # Create card frame
+            card = tk.Frame(self.presets_cards_frame, bg=BG_CARD, relief='flat', bd=0)
+            card.pack(fill='x', padx=8, pady=6)
 
-                # Header row with name, vessel, and color indicators
-                header = tk.Frame(card, bg=BG_HEADER, cursor='hand2')
-                header.pack(fill='x', padx=2, pady=2)
+            # Header row with name, vessel, and color indicators
+            header = tk.Frame(card, bg=BG_HEADER, cursor='hand2')
+            header.pack(fill='x', padx=2, pady=2)
 
-                # Collapse/expand indicator
-                collapse_var = tk.StringVar(value='▼')
-                collapse_lbl = tk.Label(header, textvariable=collapse_var, font=('Segoe UI', 9),
-                                        fg=FG_DIM, bg=BG_HEADER, cursor='hand2')
-                collapse_lbl.pack(side='left', padx=(10, 0), pady=6)
+            # Collapse/expand indicator
+            collapse_var = tk.StringVar(value='▼')
+            collapse_lbl = tk.Label(header, textvariable=collapse_var, font=('Segoe UI', 9),
+                                    fg=FG_DIM, bg=BG_HEADER, cursor='hand2')
+            collapse_lbl.pack(side='left', padx=(10, 0), pady=6)
 
-                tk.Label(header, text=f"📋 {preset_name}", font=('Segoe UI', 11, 'bold'),
-                         fg=FG_TEXT, bg=BG_HEADER).pack(side='left', padx=(5, 10), pady=6)
-                tk.Label(header, text=f"({vessel_name})", font=('Segoe UI', 9),
-                         fg=FG_DIM, bg=BG_HEADER).pack(side='left', padx=5)
+            tk.Label(header, text=f"📋 {preset_name}", font=('Segoe UI', 11, 'bold'),
+                        fg=FG_TEXT, bg=BG_HEADER).pack(side='left', padx=(5, 10), pady=6)
+            tk.Label(header, text=f"({vessel_name})", font=('Segoe UI', 9),
+                        fg=FG_DIM, bg=BG_HEADER).pack(side='left', padx=5)
 
-                # Color indicators on the right
-                colors_frame = tk.Frame(header, bg=BG_HEADER)
-                colors_frame.pack(side='right', padx=10)
+            # Color indicators on the right
+            colors_frame = tk.Frame(header, bg=BG_HEADER)
+            colors_frame.pack(side='right', padx=10)
 
-                for rd in relic_data_list:
-                    color = rd['color']
-                    is_deep = rd['is_deep']
-                    c_hex = color_hex_map.get(color, '#888888')
-                    indicator = tk.Label(colors_frame, text='●' if not is_deep else '◆',
-                                        font=('Segoe UI', 12), fg=c_hex, bg=BG_HEADER)
-                    indicator.pack(side='left', padx=2)
+            for rd in relic_data_list:
+                color = rd['color']
+                is_deep = rd['is_deep']
+                c_hex = color_hex_map.get(color, '#888888')
+                indicator = tk.Label(colors_frame, text='●' if not is_deep else '◆',
+                                    font=('Segoe UI', 12), fg=c_hex, bg=BG_HEADER)
+                indicator.pack(side='left', padx=2)
 
-                # Collapsible content frame
-                content_frame = tk.Frame(card, bg=BG_CARD)
-                content_frame.pack(fill='x')
+            # Collapsible content frame
+            content_frame = tk.Frame(card, bg=BG_CARD)
+            content_frame.pack(fill='x')
 
-                # Relics section - show each relic with its effects
-                effects_frame = tk.Frame(content_frame, bg=BG_CARD)
-                effects_frame.pack(fill='x', padx=12, pady=(8, 10))
+            # Relics section - show each relic with its effects
+            effects_frame = tk.Frame(content_frame, bg=BG_CARD)
+            effects_frame.pack(fill='x', padx=12, pady=(8, 10))
 
-                if relics_with_effects:
-                    for relic_name, color, is_deep, effects, curses in relics_with_effects:
-                        c_hex = color_hex_map.get(color, FG_EFFECT)
+            if relics_with_effects:
+                for relic_name, color, is_deep, effects, curses in relics_with_effects:
+                    c_hex = color_hex_map.get(color, FG_EFFECT)
 
-                        # Relic name header with deep indicator
-                        relic_prefix = "🔮 " if is_deep else "◆ "
-                        tk.Label(effects_frame, text=f"{relic_prefix}{relic_name}",
-                                font=('Segoe UI', 9, 'bold'), fg=c_hex, bg=BG_CARD,
-                                anchor='w').pack(anchor='w', pady=(4, 0))
+                    # Relic name header with deep indicator
+                    relic_prefix = "🔮 " if is_deep else "◆ "
+                    tk.Label(effects_frame, text=f"{relic_prefix}{relic_name}",
+                            font=('Segoe UI', 9, 'bold'), fg=c_hex, bg=BG_CARD,
+                            anchor='w').pack(anchor='w', pady=(4, 0))
 
-                        # Effects for this relic
-                        for eff_name in effects:
-                            eff_name = eff_name.replace('\n', ' ').replace('\r', ' ').strip()
-                            tk.Label(effects_frame, text=f"    ✦ {eff_name}",
-                                    font=('Segoe UI', 9), fg=c_hex, bg=BG_CARD,
-                                    anchor='w').pack(anchor='w')
+                    # Effects for this relic
+                    for eff_name in effects:
+                        eff_name = eff_name.replace('\n', ' ').replace('\r', ' ').strip()
+                        tk.Label(effects_frame, text=f"    ✦ {eff_name}",
+                                font=('Segoe UI', 9), fg=c_hex, bg=BG_CARD,
+                                anchor='w').pack(anchor='w')
 
-                        # Curses for this relic
-                        for curse_name in curses:
-                            curse_name = curse_name.replace('\n', ' ').replace('\r', ' ').strip()
-                            tk.Label(effects_frame, text=f"    ⚠ {curse_name}",
-                                    font=('Segoe UI', 9, 'italic'), fg=FG_CURSE, bg=BG_CARD,
-                                    anchor='w').pack(anchor='w')
-                else:
-                    tk.Label(effects_frame, text="No relics", font=('Segoe UI', 9, 'italic'),
-                             fg=FG_DIM, bg=BG_CARD).pack(anchor='w')
+                    # Curses for this relic
+                    for curse_name in curses:
+                        curse_name = curse_name.replace('\n', ' ').replace('\r', ' ').strip()
+                        tk.Label(effects_frame, text=f"    ⚠ {curse_name}",
+                                font=('Segoe UI', 9, 'italic'), fg=FG_CURSE, bg=BG_CARD,
+                                anchor='w').pack(anchor='w')
+            else:
+                tk.Label(effects_frame, text="No relics", font=('Segoe UI', 9, 'italic'),
+                            fg=FG_DIM, bg=BG_CARD).pack(anchor='w')
 
-                # Edit button (inside content_frame so it collapses too)
-                btn_frame = tk.Frame(content_frame, bg=BG_CARD)
-                btn_frame.pack(fill='x', padx=10, pady=(0, 8))
+            # Edit button (inside content_frame so it collapses too)
+            btn_frame = tk.Frame(content_frame, bg=BG_CARD)
+            btn_frame.pack(fill='x', padx=10, pady=(0, 8))
 
-                preset_data = {
-                    'char_name': char_name,
-                    'char_id': char_id,
-                    'vessel_slot': vessel_slot,
-                    'preset': preset,
-                    'ga_to_relic_info': ga_to_relic_info
-                }
+            preset_data = {
+                'char_name': char_name,
+                'char_id': char_id,
+                'vessel_slot': vessel_slot,
+                'preset': preset,
+                'ga_to_relic_info': ga_to_relic_info
+            }
 
-                edit_btn = ttk.Button(btn_frame, text="✏️ Edit Preset",
-                                      command=lambda pd=preset_data: self.edit_preset_relics(pd))
-                edit_btn.pack(side='right')
+            edit_btn = ttk.Button(btn_frame, text="✏️ Edit Preset",
+                                    command=lambda pd=preset_data: self.edit_preset_relics(pd))
+            edit_btn.pack(side='right')
 
-                # Toggle function for collapse/expand
-                def make_toggle(cf, cv):
-                    def toggle(event=None):
-                        if cf.winfo_viewable():
-                            cf.pack_forget()
-                            cv.set('▶')
-                        else:
-                            cf.pack(fill='x')
-                            cv.set('▼')
-                    return toggle
+            # Toggle function for collapse/expand
+            def make_toggle(cf, cv):
+                def toggle(event=None):
+                    if cf.winfo_viewable():
+                        cf.pack_forget()
+                        cv.set('▶')
+                    else:
+                        cf.pack(fill='x')
+                        cv.set('▼')
+                return toggle
 
-                toggle_fn = make_toggle(content_frame, collapse_var)
-                header.bind('<Button-1>', toggle_fn)
-                collapse_lbl.bind('<Button-1>', toggle_fn)
-                # Make all children of header clickable
-                for child in header.winfo_children():
-                    child.bind('<Button-1>', toggle_fn)
+            toggle_fn = make_toggle(content_frame, collapse_var)
+            header.bind('<Button-1>', toggle_fn)
+            collapse_lbl.bind('<Button-1>', toggle_fn)
+            # Make all children of header clickable
+            for child in header.winfo_children():
+                child.bind('<Button-1>', toggle_fn)
 
-                # Bind scroll to all widgets in this card
-                bind_scroll_recursive(card)
+            # Bind scroll to all widgets in this card
+            bind_scroll_recursive(card)
 
-                # Store for reference
-                self.preset_data_map[id(card)] = preset_data
-                card_row += 1
+            # Store for reference
+            self.preset_data_map[id(card)] = preset_data
+            card_row += 1
 
         # Show message if no presets
         if card_row == 0:
@@ -2828,8 +2279,8 @@ class SaveEditorGUI:
         ga_to_relic_info = preset_info['ga_to_relic_info']
 
         preset_name = preset.get('name', 'Unknown')
-        preset_offset = preset.get('offset', 0)
-        ga_handles = preset.get('ga_handles', [])
+        preset_offset = preset.get('offsets', 0)
+        ga_handles = preset.get('relics', [])
 
         # Build extended relic info with effects from ga_relic
         ga_to_full_info = {}
@@ -3369,10 +2820,11 @@ class SaveEditorGUI:
 
         # Preset structure: [vessel_id (4 bytes)] [6 GA handles (4 bytes each)]
         # GA handles start at offset + 4
-        relic_offset = preset_offset + 4 + (slot_idx * 4)
+        relic_offset = preset_offset['relics'] + (slot_idx * 4)
 
         try:
             struct.pack_into('<I', data, relic_offset, new_ga_handle)
+            loadout_handler.reload_data(data)
             return True
         except Exception as e:
             messagebox.showerror("Error", f"Failed to write preset relic: {e}")
@@ -3872,9 +3324,15 @@ class SaveEditorGUI:
             # Get selected relic GA
             item = selection[0]
             new_ga = int(relic_tree.item(item, 'text'))
+            selected_ga_item = None
+            if new_ga != 0:
+                for r in ga_relic:
+                    if r.gaitem_handle == new_ga:
+                        selected_ga_item = r
+                        break
 
             # Perform replacement
-            success = self.replace_vessel_relic(char_name, vessel_slot, slot_index, new_ga)
+            success = self.replace_vessel_relic(char_name, vessel_slot, slot_index, selected_ga_item)
             if success:
                 dialog.destroy()
                 self.refresh_vessels()
@@ -3961,64 +3419,33 @@ class SaveEditorGUI:
         # Auto-size columns after populating
         autosize_treeview_columns(tree)
 
-    def replace_vessel_relic(self, char_name, vessel_slot, slot_index, new_ga):
+    def replace_vessel_relic(self, char_name, vessel_slot, slot_index, new_item):
         """Replace a relic in a vessel slot with a new one"""
         global data
 
         char_id = CHARACTER_NAMES.index(char_name) if char_name in CHARACTER_NAMES else -1
+        hero_type = char_id + 1
         if char_id < 0:
             messagebox.showerror("Error", f"Unknown character: {char_name}")
             return False
+        vessel_id = loadout_handler.get_vessel_id(hero_type, vessel_slot)
 
-        # Get the offset for this relic slot
-        key = (char_id, vessel_slot)
-        if key not in vessel_data:
-            messagebox.showerror("Error", f"Vessel data not found for {char_name} vessel {vessel_slot}")
-            return False
-
-        vessel_info = vessel_data[key]
-        slot_offsets = vessel_info['relic_slot_offsets']
-
-        if slot_index >= len(slot_offsets):
-            messagebox.showerror("Error", f"Invalid slot index: {slot_index}")
-            return False
-
-        offset = slot_offsets[slot_index]
-
-        # Convert data to bytearray for modification, then back to bytes
-        data_array = bytearray(data)
-        struct.pack_into('<I', data_array, offset, new_ga)
-        data = bytes(data_array)
-
-        # Update the vessel_data cache
-        vessel_info['ga_handles'][slot_index] = new_ga
-
-        # Update character_vessels cache
-        if char_name in character_vessels and vessel_slot in character_vessels[char_name]:
-            character_vessels[char_name][vessel_slot][slot_index] = new_ga
-
+        data = loadout_handler.replace_vessel_relic(hero_type, vessel_id, slot_index, new_item)
+        
         return True
 
     def open_edit_relic_dialog(self, vessel_slot, slot_index):
         """Open dialog to edit a relic's effects from the vessel page"""
         char_name = self.vessel_char_var.get()
         char_id = CHARACTER_NAMES.index(char_name) if char_name in CHARACTER_NAMES else -1
+        hero_type = char_id + 1
         if char_id < 0:
             messagebox.showerror("Error", f"Unknown character: {char_name}")
             return
 
         # Get the GA handle for this slot
-        key = (char_id, vessel_slot)
-        if key not in vessel_data:
-            messagebox.showerror("Error", f"Vessel data not found")
-            return
-
-        ga_handles = vessel_data[key]['ga_handles']
-        if slot_index >= len(ga_handles):
-            messagebox.showerror("Error", f"Invalid slot index")
-            return
-
-        ga_handle = ga_handles[slot_index]
+        vessel_id = loadout_handler.get_vessel_id(hero_type, vessel_slot)
+        ga_handle = loadout_handler.get_relic_ga_handle(hero_type, vessel_id, slot_index)
         if ga_handle == 0:
             messagebox.showwarning("Warning", "Empty slot - no relic to edit")
             return
@@ -4047,22 +3474,14 @@ class SaveEditorGUI:
         """Copy effects from a relic in a vessel slot to clipboard"""
         char_name = self.vessel_char_var.get()
         char_id = CHARACTER_NAMES.index(char_name) if char_name in CHARACTER_NAMES else -1
+        hero_type = char_id + 1
         if char_id < 0:
             messagebox.showerror("Error", f"Unknown character: {char_name}")
             return
 
         # Get the GA handle for this slot
-        key = (char_id, vessel_slot)
-        if key not in vessel_data:
-            messagebox.showerror("Error", f"Vessel data not found")
-            return
-
-        ga_handles = vessel_data[key]['ga_handles']
-        if slot_index >= len(ga_handles):
-            messagebox.showerror("Error", f"Invalid slot index")
-            return
-
-        ga_handle = ga_handles[slot_index]
+        vessel_id = loadout_handler.get_vessel_id(hero_type, vessel_slot)
+        ga_handle = loadout_handler.get_relic_ga_handle(hero_type, vessel_id, slot_index)
         if ga_handle == 0:
             messagebox.showwarning("Warning", "Empty slot - no relic to copy")
             return
@@ -4499,7 +3918,7 @@ class SaveEditorGUI:
         self.load_character(path)
 
     def load_character(self, path):
-        global data, userdata_path, steam_id, data_source, ga_relic, relic_checker, ga_to_characters
+        global data, userdata_path, steam_id, data_source, ga_relic, relic_checker, loadout_handler
         userdata_path = path
 
         try:
@@ -4510,7 +3929,9 @@ class SaveEditorGUI:
             gaprint(data)
 
             # Parse vessel assignments (maps GA handles to character names)
-            parse_vessel_assignments(data)
+            # parse_vessel_assignments(data)
+            loadout_handler = LoadoutHandler(data, data_source)
+            loadout_handler.parse()
 
             # Initialize Relic Checker (set_illegal_relics will be called by refresh_inventory)
             relic_checker = RelicChecker(ga_relic=ga_relic,
@@ -4605,7 +4026,8 @@ class SaveEditorGUI:
         gaprint(data)
 
         # Re-parse vessel assignments
-        parse_vessel_assignments(data)
+        # parse_vessel_assignments(data)
+        loadout_handler.reload_data(data)
 
         # Update relic checker with new ga_relic and recalculate illegal relics
         if relic_checker:
@@ -4668,7 +4090,8 @@ class SaveEditorGUI:
             is_strict_invalid = relic_checker and ga in relic_checker.strict_invalid_gas
 
             # Get character assignment (which characters have this relic equipped)
-            equipped_by = ga_to_characters.get(ga, [])
+            equipped_by_hero_type = loadout_handler.relic_ga_hero_map.get(ga, [])
+            equipped_by = [CHARACTER_NAMES[h_t-1] for h_t in equipped_by_hero_type]
             equipped_by_str = ", ".join(equipped_by) if equipped_by else "-"
 
             # Check if this is a deep relic (ID range 2000000-2019999)
@@ -6562,7 +5985,8 @@ class ModifyRelicDialog:
         target_color_name = color_names.get(target_color, "Unknown")
 
         # Guard: Check if relic is assigned to a character or preset
-        assigned_to = ga_to_characters.get(self.ga_handle, [])
+        assigned_to_hero_type = loadout_handler.relic_ga_hero_map.get(self.ga_handle, [])
+        assigned_to = [CHARACTER_NAMES[h_t-1] for h_t in assigned_to_hero_type]
         if assigned_to:
             messagebox.showwarning(
                 "Cannot Change Color",

@@ -2,8 +2,6 @@ import pandas as pd
 import pathlib
 from typing import Optional
 import locale
-import sys
-import os
 
 
 COLOR_MAP = ["Red", "Blue", "Yellow", "Green", "White"]

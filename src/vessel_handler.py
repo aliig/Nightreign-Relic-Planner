@@ -1,6 +1,7 @@
 import struct
 import re
 from source_data_handler import SourceDataHandler
+from relic_checker import RelicChecker
 import time
 
 
@@ -12,10 +13,12 @@ def get_now_timestamp():
 
 
 class HeroLoadout:
-    def __init__(self, hero_id, cur_preset_idx, cur_vessel_id, vessels, offsets):
-        self.hero_id = hero_id
+    def __init__(self, hero_type, cur_preset_idx, cur_vessel_id, vessels, offsets):
+        self.hero_type = hero_type
         self.cur_preset_idx = cur_preset_idx
         self.cur_vessel_id = cur_vessel_id
+        # vessel list[dict]， keys: vessel_id, relics, offsets:dict
+        #   offsets store offests for vessel_id and relics, keys: vessel_id, relics
         self.vessels = vessels
         self.presets = []
         # Stores offsets for hero-level fields
@@ -39,10 +42,11 @@ class VesselParser:
     ITEM_TYPE_WEAPON = 0x80000000
     ITEM_TYPE_ARMOR = 0x90000000
     ITEM_TYPE_RELIC = 0xC0000000
+
     def __init__(self, user_data: bytes, data_handler: SourceDataHandler):
         self.user_data = user_data
         self.game_data = data_handler
-        self.heroes = {}
+        self.heroes: dict[int, HeroLoadout] = {}
         self.relic_ga_hero_map = {}
         self.base_offset = None
 
@@ -64,11 +68,13 @@ class VesselParser:
         cursor = match.end()
 
         # 1. Hero ID Section (Fixed 10 heroes)
-        last_hero_id = None
-        for hero_type in range(10):
+        last_hero_type = None
+        for _ in range(10):
             # Record hero-level offsets
             h_start = cursor
-            hero_id, cur_idx = struct.unpack_from("<BB", self.user_data, cursor)
+            hero_type, cur_idx = struct.unpack_from("<BB", self.user_data, cursor)
+            hero_type = int(hero_type)
+            cur_idx = int(cur_idx)
 
             hero_offsets = {
                 "base": h_start,
@@ -90,7 +96,7 @@ class VesselParser:
                     if (r & 0xF0000000) == self.ITEM_TYPE_RELIC and r != 0:
                         if r not in self.relic_ga_hero_map:
                             self.relic_ga_hero_map[r] = set()
-                        self.relic_ga_hero_map[r].add(hero_id)
+                        self.relic_ga_hero_map[r].add(hero_type)
                 universal_vessels.append({
                     "vessel_id": v_id,
                     "relics": relics,
@@ -101,8 +107,8 @@ class VesselParser:
                 })
                 cursor += 24
 
-            heroes[hero_id] = HeroLoadout(hero_id, cur_idx, cur_v_id, universal_vessels, hero_offsets)
-            last_hero_id = hero_id
+            heroes[hero_type] = HeroLoadout(hero_type, cur_idx, cur_v_id, universal_vessels, hero_offsets)
+            last_hero_type = hero_type
 
         # 2. Hero Vessels
         while cursor < len(self.user_data):
@@ -118,11 +124,11 @@ class VesselParser:
                 if (r & 0xF0000000) == self.ITEM_TYPE_RELIC and r != 0:
                     if r not in self.relic_ga_hero_map:
                         self.relic_ga_hero_map[r] = set()
-                    self.relic_ga_hero_map[r].add(hero_id)
+                    self.relic_ga_hero_map[r].add(hero_type)
 
             v_meta = self.game_data.get_vessel_data(v_id)
             target_hero = v_meta.get("hero_type") if v_meta else None
-            assigned_id = last_hero_id if target_hero == 11 else target_hero
+            assigned_id = last_hero_type if target_hero == 11 else target_hero
 
             if assigned_id in heroes:
                 heroes[assigned_id].vessels.append({
@@ -135,8 +141,8 @@ class VesselParser:
                 })
             cursor += 24
         # Sort hero loadout vessels by vessel id
-        for h_id in heroes:
-            heroes[h_id].vessels.sort(key=lambda x: x["vessel_id"])
+        for h_type in heroes:
+            heroes[h_type].vessels.sort(key=lambda x: x["vessel_id"])
 
         # 3. Custom Presets Section
         preset_index = 0
@@ -149,7 +155,7 @@ class VesselParser:
             # Offsets for custom preset fields
             p_offsets = {
                 "base": p_start,
-                "hero_id": p_start + 1,
+                "hero_type": p_start + 1,
                 "counter": p_start + 3,
                 "name": p_start + 4,
                 "vessel_id": p_start + 44,  # 4 + 36 + 4 padding
@@ -169,13 +175,13 @@ class VesselParser:
             v_id = struct.unpack_from("<I", self.user_data, cursor)[0]
             cursor += 4
 
-            relics = struct.unpack_from("<6I", self.user_data, cursor)
+            relics = list(struct.unpack_from("<6I", self.user_data, cursor))
             cursor += 24  # Relics
             for r in relics:
                 if (r & 0xF0000000) == self.ITEM_TYPE_RELIC and r != 0:
                     if r not in self.relic_ga_hero_map:
                         self.relic_ga_hero_map[r] = set()
-                    self.relic_ga_hero_map[r].add(hero_id)
+                    self.relic_ga_hero_map[r].add(h_id)
 
             timestamp = struct.unpack_from("<Q", self.user_data, cursor)[0]  # not sure
             cursor += 8
@@ -191,13 +197,13 @@ class VesselParser:
 
     def display_results(self):
         """
-        Terminal output with formatted offsets (06X), hero_id (int), and relics (08X).
+        Terminal output with formatted offsets (06X), hero_type (int), and relics (08X).
         """
         print(f"\n{'='*80}")
         print(f"{'Vessel Parser Results':^80}")
         print(f"{'='*80}")
 
-        # Sort by hero_id for a cleaner list
+        # Sort by hero_type for a cleaner list
         for h_id in sorted(self.heroes.keys()):
             loadout = self.heroes[h_id]
             h_off = loadout.offsets
@@ -299,6 +305,17 @@ class LoadoutHandler:
     def heroes(self):
         return self.parser.heroes
 
+    @property
+    def relic_ga_hero_map(self):
+        return self.parser.relic_ga_hero_map
+
+    def get_vessel_index_in_hero(self, hero_type: int, vessel_id: int):
+        if self.check_vessel(hero_type, vessel_id):
+            for index, vessel in enumerate(self.heroes[hero_type].vessels):
+                if vessel["vessel_id"] == vessel_id:
+                    return index
+        return -1
+
     def parse(self):
         self.parser.parse()
         self.all_presets = [p for h in self.heroes.values() for p in h.presets]
@@ -312,12 +329,60 @@ class LoadoutHandler:
     def get_modified_data(self) -> bytes:
         return self.modifier.get_updated_data()
 
-    def push_preset(self, hero_index: int, vessel_id: int, relics: list[int], name: str):
+    def reload_data(self, data: bytes, loadout_edited: bool = True):
+        self.modifier.user_data = bytearray(data)
+        self.parser.user_data = bytearray(data)
+        if loadout_edited:
+            self.parse()
+
+    def check_hero(self, hero_type: int):
+        return hero_type in self.heroes
+
+    def check_vessel(self, hero_type: int, vessel_id: int):
+        if not self.check_hero(hero_type):
+            raise ValueError("Hero not found")
+        return any(v["vessel_id"] == vessel_id for v in self.heroes[hero_type].vessels)
+
+    def get_vessel_id(self, hero_type: int, vessel_index: int):
+        if 0 <= vessel_index < len(self.heroes[hero_type].vessels):
+            return self.heroes[hero_type].vessels[vessel_index]["vessel_id"]
+        else:
+            raise ValueError("Invalid vessel index")
+
+    def get_relic_ga_handle(self, hero_type: int, vessel_id: int, relic_index: int):
+        if not self.check_vessel(hero_type, vessel_id):
+            raise ValueError("Vessel not found")
+        if 0 <= relic_index <= 5:
+            for v in self.heroes[hero_type].vessels:
+                if v["vessel_id"] == vessel_id:
+                    return v["relics"][relic_index]
+        else:
+            raise ValueError("Invalid relic index")
+
+    def push_preset(self, hero_type: int, vessel_id: int, relics: list[int], name: str):
+        """
+        Append a new preset to the specified hero's loadout.
+        
+        :param hero_type: 1-based\n
+            sequence: 1~10 for normal heroes, 11 for universal vessels\n
+            ['Wylder', 'Guardian', 'Ironeye', 'Duchess', 'Raider',\n
+             'Revenant', 'Recluse', 'Executor', 'Scholar', 'Undertaker', 'All']
+        :type hero_type: int
+        :param vessel_id: vessel ID Like 19001 etc.
+        :type vessel_id: int
+        :param relics: ga_handles
+        :type relics: list[int]
+        :param name: Perset Name, Max Chars 18
+        :type name: str
+
+        :returns: return the modified data as immutable bytes.
+        :rtype: bytes
+        """
         _vessel_info = self.data_handler.get_vessel_data(vessel_id)
         if not _vessel_info:
             return
 
-        if _vessel_info["hero_type"] != 11 and _vessel_info["hero_type"] != hero_index:
+        if _vessel_info["hero_type"] != 11 and _vessel_info["hero_type"] != hero_type:
             raise ValueError("This vessel is not assigned to this hero")
 
         if len(self.all_presets) > 100:
@@ -327,7 +392,7 @@ class LoadoutHandler:
         # new preset offsets are caculated by last preset
         new_preset_offsets = {
             "base": self.all_presets[-1]["offsets"]["base"] + 80 if self.all_presets else self.parser.base_offset + 120 * 10 + 28 * 70 + 4,  # Heuristic: 10 heroes * 120 bytes + 60 vessels * 28 bytes + 4 bytes padding
-            "hero_id": self.all_presets[-1]["offsets"]["base"] + 80 + 1 if self.all_presets else self.parser.base_offset + 120 * 10 + 28 * 70 + 4 + 1,
+            "hero_type": self.all_presets[-1]["offsets"]["base"] + 80 + 1 if self.all_presets else self.parser.base_offset + 120 * 10 + 28 * 70 + 4 + 1,
             "counter": self.all_presets[-1]["offsets"]["base"] + 80 + 3 if self.all_presets else self.parser.base_offset + 120 * 10 + 28 * 70 + 4 + 3,
             "name": self.all_presets[-1]["offsets"]["base"] + 80 + 4 if self.all_presets else self.parser.base_offset + 120 * 10 + 28 * 70 + 4 + 4,
             "vessel_id": self.all_presets[-1]["offsets"]["base"] + 80 + 44 if self.all_presets else self.parser.base_offset + 120 * 10 + 28 * 70 + 4 + 44,
@@ -348,6 +413,49 @@ class LoadoutHandler:
         }
         for preset in self.all_presets:
             preset["counter"] += 1
-        self.heroes[hero_index].add_preset(**new_preset)
+        self.heroes[hero_type].add_preset(**new_preset)
         self.all_presets = [p for h in self.heroes.values() for p in h.presets]
-        self.update_hero_loadout(hero_index)
+        self.update_hero_loadout(hero_type)
+        return self.modifier.get_updated_data()
+
+    def replace_vessel_relic(self, hero_type: int, vessel_id: int,
+                             relic_index: int, new_relic_item):
+        _vessel_info = self.data_handler.get_vessel_data(vessel_id)
+        if not _vessel_info:
+            return
+        
+        if not (0 <= relic_index <= 5):
+            raise ValueError("Invalid relic index")
+
+        if _vessel_info["hero_type"] != 11 and _vessel_info["hero_type"] != hero_type:
+            raise ValueError("This vessel is not assigned to this hero")
+
+        if new_relic_item:
+            type_bits = new_relic_item.gaitem_handle & 0xF0000000
+            if type_bits == self.ITEM_TYPE_RELIC:
+                real_id = new_relic_item.item_id - 2147483648
+                is_deep_relic = RelicChecker.is_deep_relic(real_id)
+                if relic_index < 3 and is_deep_relic:
+                    raise ValueError("Cannot replace normal slot with deep relic")
+                if relic_index >= 3 and not is_deep_relic:
+                    raise ValueError("Cannot replace deep slot with normal relic")
+                slot_color = _vessel_info['Colors'][relic_index]
+                new_relic_color = self.data_handler.get_relic_origin_structure()[str(real_id)]["color"]
+                if slot_color != new_relic_color:
+                    raise ValueError("Color mismatch")
+
+                # Valid
+                for vessel in self.heroes[hero_type].vessels:
+                    if vessel["vessel_id"] == vessel_id:
+                        vessel["relics"][relic_index] = new_relic_item.gaitem_handle
+                        self.update_hero_loadout(self.heroes[hero_type])
+                        return self.get_modified_data()
+            else:
+                raise ValueError("Invalid item type")
+        else:
+            # Valid
+            for vessel in self.heroes[hero_type].vessels:
+                if vessel["vessel_id"] == vessel_id:
+                    vessel["relics"][relic_index] = 0
+                    self.update_hero_loadout(self.heroes[hero_type])
+                    return self.get_modified_data()

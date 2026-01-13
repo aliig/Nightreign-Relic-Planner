@@ -757,3 +757,14 @@ class RelicChecker:
             if group_name in range_names:
                 safe_relic_ids.extend(range(group_range[0], group_range[1] + 1))
         return safe_relic_ids
+
+    def is_relic_in_safe_range(self, relic_id: int):
+        return relic_id in self.get_safe_relic_ids()
+
+    @staticmethod
+    def is_deep_relic(relic_id: int):
+        deep_range_1 = range(RelicChecker.RELIC_GROUPS['deep_102'][0],
+                             RelicChecker.RELIC_GROUPS['deep_102'][1] + 1)
+        deep_range_2 = range(RelicChecker.RELIC_GROUPS['deep_103'][0],
+                             RelicChecker.RELIC_GROUPS['deep_103'][1] + 1)
+        return relic_id in deep_range_1 or relic_id in deep_range_2
