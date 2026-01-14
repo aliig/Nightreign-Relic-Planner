@@ -365,19 +365,46 @@ class Validator:
                             if relic_after != 0 and relic == relic_after:
                                 ValueError(f"Relic can't be duplicated in normal slots. Slot:{r_af_idx+1}")
                     if 3 <= relic_index < 5:
-                        for  r_af_idx, relic_after in enumerate(vessel["relics"][relic_index + 1:5]):
+                        for r_af_idx, relic_after in enumerate(vessel["relics"][relic_index + 1:5]):
                             if relic_after != 0 and relic == relic_after:
                                 ValueError(f"Relic can't be duplicated in deep slots. Slot:{r_af_idx+1}")
-                               
+               
                 else:
                     raise ValueError("Invalid item type")
         return True
 
+    def auto_adjust_cur_equipment(self, heroes: dict[int, HeroLoadout], hero_type: int):
+        """
+        Automatically adjust the current preset index based on the current vessel's relics.
+
+        Args:
+            heroes (dict[int, HeroLoadout]): heroes loadout that needs to be adjusted
+            hero_type (int): Specific hero type to adjust
+        """
+        cur_vessel_id = heroes[hero_type].cur_vessel_id
+        cur_vessel = None
+        for v in heroes[hero_type].vessels:
+            if v["vessel_id"] == cur_vessel_id:
+                cur_vessel = v
+                break
+        _new_preset_idx = 0xFF
+        for preset in heroes[hero_type].presets:
+            if preset["vessel_id"] == cur_vessel_id and preset['relics'] == cur_vessel["relics"]:
+                _new_preset_idx = preset["index"]
+                break
+        heroes[hero_type].cur_preset_idx = _new_preset_idx
+
     def heroes_structure_check(self, heroes: dict[int, HeroLoadout]):
         pass
 
-    def validate_presets(self, hero: HeroLoadout):
-        pass
+    def validate_preset(self, heroes: dict[int, HeroLoadout], hero_type: int, new_preset: dict):
+        _t_vessel = {"vessel_id": new_preset["vessel_id"], "relics": new_preset['relics']}
+        self.validate_vessel(heroes, hero_type, _t_vessel)
+        for preset in heroes[hero_type].presets:
+            if preset["index"] == new_preset["index"]:
+                raise ValueError("Preset index duplicated. This shouldn't happen.")
+            if preset["vessel_id"] == new_preset["vessel_id"] and preset["relics"] == new_preset["relics"]:
+                raise ValueError("Preset relics combination exists.")
 
 
 class LoadoutHandler:
@@ -459,12 +486,22 @@ class LoadoutHandler:
         else:
             raise ValueError("Invalid relic index")
 
+    def equip_preset(self, hero_type: int, preset_index: int):
+        if hero_type not in range(1, 11):
+            raise ValueError("Invalid hero type")
+        if hero_type not in self.heroes:
+            raise ValueError("Hero not found. This shouldn't happen. Save file may be corrupted.")
+        if preset_index < len(self.heroes[hero_type].presets):
+            self.heroes[hero_type].cur_preset_idx = preset_index
+            self.heroes[hero_type].cur_vessel_id = self.heroes[hero_type].presets[preset_index]["vessel_id"]
+            self.update_hero_loadout(hero_type)
+        else:
+            raise ValueError("Invalid preset index")
+
     def push_preset(self, hero_type: int, vessel_id: int, relics: list[int], name: str):
         """
         Append a new preset to the specified hero's loadout.
         
-        :param user_data: The original binary data from the save file.
-        :type user_data: bytes
         :param hero_type: 1-based\n
             sequence: 1~10 for normal heroes, 11 for universal vessels\n
             ['Wylder', 'Guardian', 'Ironeye', 'Duchess', 'Raider',\n
@@ -480,15 +517,7 @@ class LoadoutHandler:
         :returns: return the modified data as immutable bytes.
         :rtype: bytes
         """
-
-        # Check Vessel Validity
-        _vessel_info = self.game_data.get_vessel_data(vessel_id)
-        if not _vessel_info:
-            return
-
-        if _vessel_info["hero_type"] != 11 and _vessel_info["hero_type"] != hero_type:
-            raise ValueError("This vessel is not assigned to this hero")
-
+        # Check Preset Capacity
         if len(self.all_presets) > 100:
             raise LoadoutHandler.PresetsCapacityFullError("Maximum preset capacity reached.")
 
@@ -518,10 +547,13 @@ class LoadoutHandler:
             "timestamp": new_timestamp,
             "offsets": new_preset_offsets
         }
+        # Check preset, if invalid will raise Exception
+        self.validator.validate_preset(self.heroes, hero_type, new_preset)
         for preset in self.all_presets:
             preset["counter"] += 1
         self.heroes[hero_type].add_preset(**new_preset)
         self.all_presets = [p for h in self.heroes.values() for p in h.presets]
+        self.validator.auto_adjust_cur_equipment(self.heroes, hero_type)
         self.update_hero_loadout(hero_type)
 
     def replace_vessel_relic(self, hero_type: int, vessel_id: int,
@@ -538,4 +570,34 @@ class LoadoutHandler:
         _new_vessel["relics"][relic_index] = new_relic_ga
         if self.validator.validate_vessel(self.heroes, hero_type, _new_vessel):
             self.heroes[hero_type].vessels[vessel_index] = _new_vessel
+            if self.heroes[hero_type].cur_vessel_id == vessel_id:
+                self.validator.auto_adjust_cur_equipment(self.heroes, hero_type)
             self.update_hero_loadout(hero_type)
+
+    def replace_preset_relic(self, hero_type: int, relic_index: int, new_relic_ga,
+                             hero_preset_index: int = -1, preset_index: int = -1):
+        if hero_preset_index < 0 and preset_index < 0:
+            raise ValueError("hero_preset_index or preset_index should be provided")
+        if hero_preset_index >= 0 and preset_index >= 0:
+            raise ValueError("Only one of hero_preset_index or preset_index should be provided")
+        if hero_preset_index >= len(self.heroes[hero_type].presets):
+            raise ValueError("Invalid preset index")
+        if preset_index >= len(self.all_presets):
+            raise ValueError("Invalid preset index")
+        if relic_index < 0 or relic_index >= 6:
+            raise ValueError("Invalid relic index")
+        
+        _new_preset = None
+        if preset_index >= 0:
+            _new_preset = deepcopy(self.all_presets[preset_index])
+        elif hero_preset_index >= 0:
+            _new_preset = deepcopy(self.heroes[hero_type].presets[hero_preset_index])
+        _new_preset["relics"][relic_index] = new_relic_ga
+        _t_vessel = {"vessel_id": _new_preset["vessel_id"], "relics": _new_preset['relics']}
+        self.validator.validate_vessel(self.heroes, hero_type, _t_vessel)
+        if preset_index >= 0:
+            self.all_presets[preset_index]['relics'][relic_index] = new_relic_ga
+        elif hero_preset_index >= 0:
+            self.heroes[hero_type].presets[hero_preset_index]['relics'][relic_index] = new_relic_ga
+        self.validator.auto_adjust_cur_equipment(self.heroes, hero_type)
+        self.update_hero_loadout(hero_type)
