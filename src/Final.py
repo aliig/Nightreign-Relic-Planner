@@ -351,6 +351,10 @@ def gaprint(data_type):
 def read_char_name(data):
     name_offset = gaprint(data) + 0x94
     max_chars = 16
+    for cur in range(name_offset, name_offset + max_chars * 2, 2):
+        if data[cur:cur + 2] == b'\x00\x00':
+            max_chars = (cur - name_offset) // 2
+            break
     raw_name = data[name_offset:name_offset + max_chars * 2]
     name = raw_name.decode("utf-16-le", errors="ignore").rstrip("\x00")
     return name if name else None
