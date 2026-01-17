@@ -334,14 +334,22 @@ def gaprint(data_type):
 
     for item in items:
         type_bits = item.gaitem_handle & 0xF0000000
-        ga_items.append((item.gaitem_handle, item.item_id, item.effect_1,
-                        item.effect_2, item.effect_3, item.sec_effect1,
-                        item.sec_effect2, item.sec_effect3, item.offset, item.size))
+        parsed_item = (
+                item.gaitem_handle,
+                item.item_id,
+                item.effect_1,
+                item.effect_2,
+                item.effect_3,
+                item.sec_effect1,
+                item.sec_effect2,
+                item.sec_effect3,
+                item.offset,
+                item.size,
+            )
+        ga_items.append(parsed_item)
 
         if type_bits == ITEM_TYPE_RELIC:
-            ga_relic.append((item.gaitem_handle, item.item_id, item.effect_1,
-                           item.effect_2, item.effect_3, item.sec_effect1,
-                           item.sec_effect2, item.sec_effect3, item.offset, item.size))
+            ga_relic.append(parsed_item)
 
     # Parse inventory section to get acquisition order
     parse_inventory_acquisition_order(data_type, end_offset)
@@ -1042,6 +1050,8 @@ def delete_relic(ga_index, item_id):
             globals.data = globals.data[:-0x1C] + b'\x00' * 72 + globals.data[-0x1C:]
             
             save_current_data()
+            if relic_checker:
+                relic_checker.remove_illegal(ga_index)
             return True
     return False
 
@@ -1077,6 +1087,10 @@ def modify_relic(ga_index, item_id, new_effects, new_item_id=None):
                 globals.data = globals.data[:pos] + eff_bytes + globals.data[pos+4:]
 
             save_current_data()
+            if relic_checker:
+                relic_checker.update_illegal(ga_index,
+                                             item_id if new_item_id is None else new_item_id,
+                                             new_effects)
             return True
     return False
 
@@ -1113,6 +1127,10 @@ def modify_relic_by_ga(ga_index, new_effects, new_item_id, sort_effects=True):
                 globals.data = globals.data[:pos] + eff_bytes + globals.data[pos+4:]
 
             save_current_data()
+            if relic_checker:
+                relic_checker.update_illegal(ga_index,
+                                             new_item_id,
+                                             new_effects)
             return True
     return False
 
@@ -1703,7 +1721,8 @@ class SaveEditorGUI:
                 self.root.after(0, lambda: finish_task(True))
             except Exception as e:
                 # Task failed: Close window and show error in main thread
-                self.root.after(0, lambda: finish_task(False, str(e)))
+                err_msg = str(e)
+                self.root.after(0, lambda: finish_task(False, err_msg))
 
         def finish_task(success, err_msg=None):
             # Release the GUI lock and close popup
@@ -2606,7 +2625,7 @@ class SaveEditorGUI:
 
             def refresh_after_edit():
                 # Refresh main inventory (this updates ga_relic)
-                self.refresh_inventory()
+                self.refresh_inventory_lightly()
                 # Rebuild relic info from updated ga_relic
                 for relic in ga_relic:
                     if len(relic) >= 8:
@@ -3275,8 +3294,7 @@ class SaveEditorGUI:
                 return
             # Create refresh callback that updates vessels
             def refresh_after_edit():
-                self.refresh_inventory()
-                self.refresh_vessels()
+                self.refresh_inventory_and_vessels()
                 # Refresh the dialog info if still open
                 if dialog.winfo_exists():
                     # Reload current relic info
@@ -3524,14 +3542,9 @@ class SaveEditorGUI:
             if ga == ga_handle:
                 real_id = id_val - 2147483648
 
-                # Create refresh callback that updates both inventory and vessels
-                def refresh_both():
-                    self.refresh_inventory()
-                    self.refresh_vessels()
-
                 # Open or update the modify dialog
                 if not self.modify_dialog or not self.modify_dialog.dialog.winfo_exists():
-                    self.modify_dialog = ModifyRelicDialog(self.root, ga_handle, real_id, refresh_both)
+                    self.modify_dialog = ModifyRelicDialog(self.root, ga_handle, real_id, self.refresh_inventory_and_vessels)
                 else:
                     self.modify_dialog.load_relic(ga_handle, real_id)
                     self.modify_dialog.dialog.lift()
@@ -3662,7 +3675,7 @@ class SaveEditorGUI:
         controls_frame = ttk.Frame(self.inventory_tab)
         controls_frame.pack(fill='x', padx=10, pady=5)
         
-        ttk.Button(controls_frame, text="🔄 Refresh Inventory", command=self.refresh_inventory).pack(side='left', padx=5)
+        ttk.Button(controls_frame, text="🔄 Refresh Inventory", command=self.reload_inventory).pack(side='left', padx=5)
         ttk.Button(controls_frame, text="📤 Export to Excel", command=self.export_relics).pack(side='left', padx=5)
         ttk.Button(controls_frame, text="📥 Import from Excel", command=self.import_relics).pack(side='left', padx=5)
         ttk.Button(controls_frame, text="🗑️ Delete All Illegal", command=self.delete_all_illegal,
@@ -3875,8 +3888,7 @@ class SaveEditorGUI:
         lang_code = next((code for code, name in LANGUAGE_MAP.items() if name == selected_name), "en_US")
         global data_source, items_json, effects_json
         if reload_language(lang_code):
-            self.refresh_inventory()
-            self.refresh_vessels()
+            self.refresh_inventory_and_vessels()
         else:
             messagebox.showerror("Error", "Can't change language.")
 
@@ -4001,18 +4013,18 @@ class SaveEditorGUI:
             loadout_handler = LoadoutHandler(data_source, ga_relic)
             loadout_handler.parse()
 
-            # Initialize Relic Checker (set_illegal_relics will be called by refresh_inventory)
+            # Initialize Relic Checker (set_illegal_relics will be called by reload_inventory)
             relic_checker = RelicChecker(ga_relic=ga_relic,
                                          data_source=data_source)
-            # NOTE: Don't call set_illegal_relics() here - refresh_inventory() will call it
+            # NOTE: Don't call set_illegal_relics() here - reload_inventory() will call it
 
             # Read stats
             read_murks_and_sigs(globals.data)
 
             steam_id = find_steam_id(globals.data)
 
-            # Refresh all tabs (refresh_inventory calls set_illegal_relics)
-            self.refresh_inventory()
+            # Refresh all tabs (reload_inventory calls set_illegal_relics)
+            self.reload_inventory()
             self.refresh_stats()
             self.refresh_vessels()
 
@@ -4076,149 +4088,165 @@ class SaveEditorGUI:
             write_murks_and_sigs(current_murks, new_value)
             self.refresh_stats()
             messagebox.showinfo("Success", "Sigs updated successfully")
-    
-    def refresh_inventory(self):
-        global ga_relic, relic_checker
+            
+    def reparse(self):
+        # Parse items - this updates ga_relic with current data
+        gaprint(globals.data)
+
+        # Re-parse vessel assignments
+        # parse_vessel_assignments(data)
+        loadout_handler.reload_ga_relics(ga_relic)
+        loadout_handler.parse()
         
+    def refresh_inventory_ui(self):
+        global ga_relic, relic_checker
         self.update_inventory_comboboxes()
-
-        if globals.data is None:
-            messagebox.showwarning("Warning", "No character loaded")
-            return
-
         # Clear treeview
         for item in self.tree.get_children():
             self.tree.delete(item)
         
+        # Check for illegal relics
+        illegal_gas = check_illegal_relics()
+
+        # Check for forbidden relics (unique relics that are technically invalid but allowed)
+        forbidden_relics = get_forbidden_relics()
+
+        # Count truly illegal relics (exclude forbidden/unique relics from count)
+        # Forbidden relics are marked orange and shouldn't count as "illegal"
+        truly_illegal_count = 0
+        for ga, id, *_ in ga_relic:
+            real_id = id - 2147483648
+            if ga in illegal_gas and real_id not in forbidden_relics:
+                truly_illegal_count += 1
+
+        # Update illegal count label (only count non-forbidden illegal relics)
+        if truly_illegal_count > 0:
+            self.illegal_count_label.config(text=f"⚠️ {truly_illegal_count} Illegal Relic(s) Found")
+        else:
+            self.illegal_count_label.config(text="✓ All Relics Valid")
+        
+        # Store all relic data for filtering
+        self.all_relics = []
+        
+        # Populate treeview
+        for idx, (ga, id, e1, e2, e3, se1, se2, se3, offset, size) in enumerate(ga_relic):
+            real_id = id - 2147483648
+            
+            # Get item name and color
+            item_name = "Unknown"
+            item_color = "Unknown"
+            if str(real_id) in items_json:
+                item_name = items_json[str(real_id)]["name"]
+                item_color = items_json[str(real_id)].get("color", "Unknown")
+            
+            # Get effect names
+            effects = [e1, e2, e3, se1, se2, se3]
+            effect_names = []
+            
+            for eff in effects:
+                if eff == 0:
+                    effect_names.append("None")
+                elif eff == 4294967295:
+                    effect_names.append("Empty")
+                elif str(eff) in effects_json:
+                    effect_names.append(
+                        "".join(effects_json[str(eff)]["name"].splitlines()))
+                else:
+                    effect_names.append(f"Unknown ({eff})")
+            
+            # Check if this relic is illegal or forbidden
+            is_illegal = ga in illegal_gas
+            is_forbidden = real_id in forbidden_relics
+            is_curse_illegal = relic_checker and ga in relic_checker.curse_illegal_gas
+            is_strict_invalid = relic_checker and ga in relic_checker.strict_invalid_gas
+
+            # Get character assignment (which characters have this relic equipped)
+            equipped_by_hero_type = loadout_handler.relic_ga_hero_map.get(ga, [])
+            equipped_by = [data_source.character_names[h_t-1] for h_t in equipped_by_hero_type]
+            equipped_by_str = ", ".join(equipped_by) if equipped_by else "-"
+
+            # Check if this is a deep relic (ID range 2000000-2019999)
+            is_deep = 2000000 <= real_id <= 2019999
+
+            # Determine tag
+            tag_list = [ga, real_id]
+            if is_forbidden and is_illegal:
+                tag_list.append('both')
+            elif is_forbidden:
+                tag_list.append('forbidden')
+            elif is_curse_illegal:
+                tag_list.append('curse_illegal')
+            elif is_illegal:
+                tag_list.append('illegal')
+            elif is_strict_invalid:
+                tag_list.append('strict_invalid')
+
+            # Get acquisition order from inventory section (matches in-game sorting)
+            # Lower number = acquired earlier (oldest)
+            acquisition_order = ga_acquisition_order.get(ga, 999999)
+
+            # Store relic data for filtering
+            self.all_relics.append({
+                'index': idx + 1,
+                'ga': ga,
+                'acquisition_index': acquisition_order,
+                'item_name': item_name,
+                'real_id': real_id,
+                'item_color': item_color,
+                'is_deep': is_deep,
+                'equipped_by': equipped_by,
+                'equipped_by_str': equipped_by_str,
+                'effect_names': effect_names,
+                'effect_ids': effects,  # Store raw effect IDs for searching
+                'tag_list': tuple(tag_list),
+                'is_forbidden': is_forbidden,
+                'is_illegal': is_illegal,
+                'is_curse_illegal': is_curse_illegal,
+                'is_strict_invalid': is_strict_invalid,
+                'both': is_forbidden and is_illegal
+            })
+
+        # Calculate acquisition rank (1, 2, 3...) based on acquisition_index
+        # Sort by acquisition_index and assign ranks
+        sorted_by_acq = sorted(self.all_relics, key=lambda r: r.get('acquisition_index', 999999))
+        for rank, relic in enumerate(sorted_by_acq, start=1):
+            relic['acquisition_rank'] = rank
+
+        # Apply current filter (if any)
+        self.filter_relics()
+            
+    def refresh_inventory_lightly(self):
+        """Refresh the inventory UI without heavy loading"""
+        global ga_relic, relic_checker
+
+        if globals.data is None:
+            messagebox.showwarning("Warning", "No character loaded")
+            return
+        self.reparse()
+        self.refresh_inventory_ui()
+        
+    def refresh_inventory_and_vessels(self):
+        self.refresh_inventory_lightly()
+        self.refresh_vessels()
+    
+    def reload_inventory(self):
+        """Reload inventory data from save file and refresh UI"""
+        global ga_relic, relic_checker
+
+        if globals.data is None:
+            messagebox.showwarning("Warning", "No character loaded")
+            return
+        
+        self.reparse()
+        
         def heavy_loading():
-
-            # Parse items - this updates ga_relic with current data
-            gaprint(globals.data)
-
-            # Re-parse vessel assignments
-            # parse_vessel_assignments(data)
-            loadout_handler.parse()
-            loadout_handler.reload_ga_relics(ga_relic)
-            # loadout_handler.display_results()
-
             # Update relic checker with new ga_relic and recalculate illegal relics
             if relic_checker:
                 relic_checker.ga_relic = ga_relic
                 relic_checker.set_illegal_relics()
             
-        def after_heavy_loading():
-
-            # Check for illegal relics
-            illegal_gas = check_illegal_relics()
-
-            # Check for forbidden relics (unique relics that are technically invalid but allowed)
-            forbidden_relics = get_forbidden_relics()
-
-            # Count truly illegal relics (exclude forbidden/unique relics from count)
-            # Forbidden relics are marked orange and shouldn't count as "illegal"
-            truly_illegal_count = 0
-            for ga, id, *_ in ga_relic:
-                real_id = id - 2147483648
-                if ga in illegal_gas and real_id not in forbidden_relics:
-                    truly_illegal_count += 1
-
-            # Update illegal count label (only count non-forbidden illegal relics)
-            if truly_illegal_count > 0:
-                self.illegal_count_label.config(text=f"⚠️ {truly_illegal_count} Illegal Relic(s) Found")
-            else:
-                self.illegal_count_label.config(text="✓ All Relics Valid")
-            
-            # Store all relic data for filtering
-            self.all_relics = []
-            
-            # Populate treeview
-            for idx, (ga, id, e1, e2, e3, se1, se2, se3, offset, size) in enumerate(ga_relic):
-                real_id = id - 2147483648
-                
-                # Get item name and color
-                item_name = "Unknown"
-                item_color = "Unknown"
-                if str(real_id) in items_json:
-                    item_name = items_json[str(real_id)]["name"]
-                    item_color = items_json[str(real_id)].get("color", "Unknown")
-                
-                # Get effect names
-                effects = [e1, e2, e3, se1, se2, se3]
-                effect_names = []
-                
-                for eff in effects:
-                    if eff == 0:
-                        effect_names.append("None")
-                    elif eff == 4294967295:
-                        effect_names.append("Empty")
-                    elif str(eff) in effects_json:
-                        effect_names.append(
-                            "".join(effects_json[str(eff)]["name"].splitlines()))
-                    else:
-                        effect_names.append(f"Unknown ({eff})")
-                
-                # Check if this relic is illegal or forbidden
-                is_illegal = ga in illegal_gas
-                is_forbidden = real_id in forbidden_relics
-                is_curse_illegal = relic_checker and ga in relic_checker.curse_illegal_gas
-                is_strict_invalid = relic_checker and ga in relic_checker.strict_invalid_gas
-
-                # Get character assignment (which characters have this relic equipped)
-                equipped_by_hero_type = loadout_handler.relic_ga_hero_map.get(ga, [])
-                equipped_by = [data_source.character_names[h_t-1] for h_t in equipped_by_hero_type]
-                equipped_by_str = ", ".join(equipped_by) if equipped_by else "-"
-
-                # Check if this is a deep relic (ID range 2000000-2019999)
-                is_deep = 2000000 <= real_id <= 2019999
-
-                # Determine tag
-                tag_list = [ga, real_id]
-                if is_forbidden and is_illegal:
-                    tag_list.append('both')
-                elif is_forbidden:
-                    tag_list.append('forbidden')
-                elif is_curse_illegal:
-                    tag_list.append('curse_illegal')
-                elif is_illegal:
-                    tag_list.append('illegal')
-                elif is_strict_invalid:
-                    tag_list.append('strict_invalid')
-
-                # Get acquisition order from inventory section (matches in-game sorting)
-                # Lower number = acquired earlier (oldest)
-                acquisition_order = ga_acquisition_order.get(ga, 999999)
-
-                # Store relic data for filtering
-                self.all_relics.append({
-                    'index': idx + 1,
-                    'ga': ga,
-                    'acquisition_index': acquisition_order,
-                    'item_name': item_name,
-                    'real_id': real_id,
-                    'item_color': item_color,
-                    'is_deep': is_deep,
-                    'equipped_by': equipped_by,
-                    'equipped_by_str': equipped_by_str,
-                    'effect_names': effect_names,
-                    'effect_ids': effects,  # Store raw effect IDs for searching
-                    'tag_list': tuple(tag_list),
-                    'is_forbidden': is_forbidden,
-                    'is_illegal': is_illegal,
-                    'is_curse_illegal': is_curse_illegal,
-                    'is_strict_invalid': is_strict_invalid,
-                    'both': is_forbidden and is_illegal
-                })
-
-            # Calculate acquisition rank (1, 2, 3...) based on acquisition_index
-            # Sort by acquisition_index and assign ranks
-            sorted_by_acq = sorted(self.all_relics, key=lambda r: r.get('acquisition_index', 999999))
-            for rank, relic in enumerate(sorted_by_acq, start=1):
-                relic['acquisition_rank'] = rank
-
-            # Apply current filter (if any)
-            self.filter_relics()
         self.run_task_async(heavy_loading, (), "Loading...",
-                            callback=after_heavy_loading)
+                            callback=self.refresh_inventory_ui)
     
     def filter_relics(self):
         """Filter relics based on search term and all filter criteria"""
@@ -4502,16 +4530,8 @@ class SaveEditorGUI:
 
         # Apply the effects
         if modify_relic(ga_handle, item_id, source_effects):
-            # Update illegal status
-            if relic_checker:
-                invalid_reason = relic_checker.check_invalidity(item_id, source_effects)
-                if invalid_reason and ga_handle not in relic_checker.illegal_gas:
-                    relic_checker.append_illegal(ga_handle, is_curse_invalid(invalid_reason))
-                elif not invalid_reason and ga_handle in relic_checker.illegal_gas:
-                    relic_checker.remove_illegal(ga_handle)
-
             messagebox.showinfo("Success", f"Effects pasted to {target_name}")
-            self.refresh_inventory()
+            self.refresh_inventory_and_vessels()
         else:
             messagebox.showerror("Error", "Failed to paste effects")
 
@@ -4540,7 +4560,7 @@ class SaveEditorGUI:
         
         # If dialog doesn't exist or was closed, create new one
         if not self.modify_dialog or not self.modify_dialog.dialog.winfo_exists():
-            self.modify_dialog = ModifyRelicDialog(self.root, ga_handle, item_id, self.refresh_inventory)
+            self.modify_dialog = ModifyRelicDialog(self.root, ga_handle, item_id, self.refresh_inventory_and_vessels)
         else:
             # Update existing dialog with new relic
             self.modify_dialog.load_relic(ga_handle, item_id)
@@ -4580,7 +4600,7 @@ class SaveEditorGUI:
             if deleted_count > 0:
                 messagebox.showinfo("Success", f"Deleted {deleted_count} relic(s) successfully" + 
                                   (f"\n{failed_count} failed" if failed_count > 0 else ""))
-                self.refresh_inventory()
+                self.refresh_inventory_lightly()
             else:
                 messagebox.showerror("Error", "Failed to delete relics")
     
@@ -4649,7 +4669,7 @@ class SaveEditorGUI:
             if failed_count > 0:
                 message += f"\n{failed_count} failed to delete"
             messagebox.showinfo("Mass Delete Complete", message)
-            self.refresh_inventory()
+            self.refresh_inventory_lightly()
         else:
             messagebox.showerror("Error", "Failed to delete any relics")
 
@@ -4788,7 +4808,7 @@ class SaveEditorGUI:
         # Reload data
         if userdata_path:
             with open(userdata_path, 'rb') as f:
-                globals.data = f.read()
+                globals.data = bytearray(f.read())
 
         # Show result
         message = f"Fixed {fixed_count} relic(s)"
@@ -4803,7 +4823,7 @@ class SaveEditorGUI:
             message += f"\n\n{failed_count} failed to fix"
 
         messagebox.showinfo("Mass Fix Complete", message)
-        self.refresh_inventory()
+        self.refresh_inventory_lightly()
 
     def _find_valid_relic_id_for_effects(self, current_id, effects):
         """Find a valid relic ID that can have the given effects (must be same color)"""
@@ -4950,7 +4970,7 @@ class SaveEditorGUI:
         
         if success:
             messagebox.showinfo("Success", message)
-            self.refresh_inventory()
+            self.reload_inventory()
         else:
             messagebox.showerror("Error", message)
     
@@ -4986,7 +5006,7 @@ class SaveEditorGUI:
         
         if count > 0:
             messagebox.showinfo("Success", message)
-            self.refresh_inventory()
+            self.refresh_inventory_lightly()
         else:
             messagebox.showerror("Error", message)
     def import_save_tk(self):
@@ -6349,11 +6369,7 @@ class ModifyRelicDialog:
             )
             if not messagebox.askyesno("Invalid Relic Warning", warning_msg, icon='warning'):
                 return
-
-        if invalid_reason and self.ga_handle not in relic_checker.illegal_gas:
-            relic_checker.append_illegal(self.ga_handle, is_curse_illegal)
-        elif not invalid_reason and self.ga_handle in relic_checker.illegal_gas:
-            relic_checker.remove_illegal(self.ga_handle)
+            
         # Apply modifications
         if modify_relic(self.ga_handle, self.item_id, new_effects, new_item_id):
             messagebox.showinfo("Success", "Relic modified successfully")
