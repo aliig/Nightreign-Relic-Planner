@@ -1077,15 +1077,27 @@ def add_relic():
     inventory_end = inventory_start + 0xA7AB
     inventory_data = globals.data[inventory_start : inventory_start + inventory_end]
 
-    # Find the maximum existing GA handle among all relics.
-    max_ga = 0
-    for ga, id, e1, e2, e3, e4, e5, e6, offset, size in ga_relic:
-        if ga > max_ga:
-            max_ga = ga
+    # Find the first existing GA handle among all relics.
+    gas = sorted([ga for ga, id, e1, e2, e3, e4, e5, e6, offset, size in ga_relic])
+    first_available_ga = -1
+    for i in range(0, len(gas) - 1):
+        if gas[i] + 1 != gas[i+1]:
+            first_available_ga = gas[i] + 1
+            break
 
-    # Generate a new unique GA handle by incrementing the max.
-    # If no relics exist, use a default starting value (ITEM_TYPE_RELIC | 0x85).
-    new_ga = max_ga + 1 if max_ga > 0 else (ITEM_TYPE_RELIC | 0x00000085)
+    # Find the new unique ga for the relic
+    if len(gas) == 0:
+        # If no relics exist, use a default starting value (ITEM_TYPE_RELIC | 0x85).
+        new_ga = (ITEM_TYPE_RELIC | 0x00000085)
+    if first_available_ga > 0:
+        # Use first available ga
+        new_ga = first_available_ga
+    else:
+        # Generate a new unique GA handle by incrementing the max.
+        new_ga = max(gas) + 1
+    if new_ga > (ITEM_TYPE_RELIC | 0xfffffff):
+        # Inventory full
+        return False
     new_ga_bytes = new_ga.to_bytes(4, byteorder="little")
 
     # Build the inventory entry (14 bytes) for the new relic.
