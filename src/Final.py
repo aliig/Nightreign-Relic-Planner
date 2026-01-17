@@ -1055,6 +1055,90 @@ def delete_relic(ga_index, item_id):
             return True
     return False
 
+def add_relic():
+    """
+    Adds a new relic item to the player's save file.
+
+    This function performs the following steps:
+    1. Parses the save data to find all existing items and relics
+    2. Generates a unique GA (Game Asset) handle for the new relic
+    3. Finds the last relic in the inventory section to determine insertion point
+    4. Locates an empty item slot that can be converted into a relic slot
+    5. Updates both the inventory reference and the item slot data
+    6. Adjusts file padding to maintain constant file size
+
+    Returns:
+        bool: True if the relic was successfully added, False otherwise
+    """
+
+    last_offset = gaprint(globals.data)
+
+    inventory_start = last_offset + 0x650
+    inventory_end = inventory_start + 0xA7AB
+    inventory_data = globals.data[inventory_start : inventory_start + inventory_end]
+
+    # Find the maximum existing GA handle among all relics.
+    max_ga = 0
+    for ga, id, e1, e2, e3, e4, e5, e6, offset, size in ga_relic:
+        if ga > max_ga:
+            max_ga = ga
+
+    # Generate a new unique GA handle by incrementing the max.
+    # If no relics exist, use a default starting value (ITEM_TYPE_RELIC | 0x85).
+    new_ga = max_ga + 1 if max_ga > 0 else (ITEM_TYPE_RELIC | 0x00000085)
+    new_ga_bytes = new_ga.to_bytes(4, byteorder="little")
+
+    # Build the inventory entry (14 bytes) for the new relic.
+    id_to_write = bytearray(new_ga_bytes + b"\x01\x00\x00\x00'|\x00\x00\x00\x00")
+
+    # Build the full relic item data (80 bytes) for the item slot section.
+    replacement = bytearray(
+        new_ga_bytes
+        + b"u\x00\x00\x80u\x00\x00\x80\xff\xff\xff\xff\xe4xk\x00 \xb4l\x00\x9e\xd5j\x00\xff\xff\xff\xff\xff\xff\xff\xff\x00\x00\x00\xff\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\x00\x00\x00\x00\x00\x00\x00\x00"
+    )
+
+    # Find the position of the last relic in the inventory section.
+    last_inventory = -1
+    for ga, id, e1, e2, e3, e4, e5, e6, offset, size in ga_relic:
+        gab = ga.to_bytes(4, byteorder="little")
+        last_inventory = max(last_inventory, inventory_data.find(gab))
+    if last_inventory == -1:
+        # No existing relics found in inventory - cannot determine insertion point
+        return False
+
+    # Find an empty slot in the item data section to convert into a relic slot.
+    empty_slot_offset = -1
+    for ga, id, e1, e2, e3, e4, e5, e6, offset, size in ga_items:
+        if ga == 0 and size == 8:
+            empty_slot_offset = offset
+            break
+
+    if empty_slot_offset == -1:
+        # No empty slot available to convert - inventory is full
+        return False
+
+    # Write the inventory entry at the calculated position.
+    match = last_inventory + inventory_start
+    globals.data = globals.data[:match] + id_to_write + globals.data[match + 14 :]
+
+    # Convert the empty 8-byte slot into an 80-byte relic slot.
+    globals.data = (
+        globals.data[:empty_slot_offset] + globals.data[empty_slot_offset + 8 :]
+    )
+    # Then, insert the 80-byte relic data at the same position.
+    globals.data = (
+        globals.data[:empty_slot_offset]
+        + replacement
+        + globals.data[empty_slot_offset:]
+    )
+
+    # Remove 72 bytes from the padding area at the end of the file.
+    # The save file must maintain a constant size for the game to load it.
+    globals.data = globals.data[: -0x1C - 72] + globals.data[-0x1C:]
+
+    save_current_data()
+    return True
+
 
 def modify_relic(ga_index, item_id, new_effects, new_item_id=None):
 
@@ -3683,7 +3767,8 @@ class SaveEditorGUI:
         ttk.Button(controls_frame, text="🗑️ Mass Delete Selected", command=self.mass_delete_relics,
                   style='Danger.TButton').pack(side='left', padx=5)
         ttk.Button(controls_frame, text="🔧 Mass Fix", command=self.mass_fix_incorrect_ids).pack(side='left', padx=5)
-        
+        ttk.Button(controls_frame, text="➕ Add Relic", command=self.add_relic_tk).pack(side="left", padx=5)
+
         # Info label
         self.illegal_count_label = ttk.Label(
             controls_frame,
@@ -4824,6 +4909,19 @@ class SaveEditorGUI:
 
         messagebox.showinfo("Mass Fix Complete", message)
         self.refresh_inventory_lightly()
+
+    def add_relic_tk(self):
+        if globals.data is None:
+            messagebox.showwarning(
+                "Warning", "No save file loaded. Please open a save file first."
+            )
+            return
+
+        if add_relic():
+            messagebox.showinfo("Success", "Dummy relic added. Refreshing inventory.")
+            self.refresh_inventory_and_vessels()
+        else:
+            messagebox.showerror("Error", f"Failed to add relic: {e}")
 
     def _find_valid_relic_id_for_effects(self, current_id, effects):
         """Find a valid relic ID that can have the given effects (must be same color)"""
