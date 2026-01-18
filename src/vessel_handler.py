@@ -448,6 +448,7 @@ class LoadoutHandler:
     def parse(self):
         self.parser.parse()
         self.all_presets = [p for h in self.heroes.values() for p in h.presets]
+        self.all_presets.sort(key=lambda x: x["index"])
 
     def display_results(self):
         self.parser.display_results()
