@@ -2692,6 +2692,16 @@ class SaveEditorGUI:
         search_entry = ttk.Entry(filter_frame, textvariable=search_var, width=20)
         search_entry.pack(side='right', padx=5)
         tk.Label(filter_frame, text="🔍", font=('Segoe UI', 10), fg=FG_DIM, bg=BG_DARK).pack(side='right')
+        
+        # Equippe by
+        equipped_by_frame = tk.Frame(right_panel, bg=BG_DARK)
+        equipped_by_frame.pack(fill='x', pady=(0, 10))
+        equipped_by_var = tk.StringVar(value='None')
+        equipped_by_cb = ttk.Combobox(equipped_by_frame, textvariable=equipped_by_var, state='readonly',
+                                      values=['None', 'Other Characters', 'This Character', 'All'])
+        equipped_by_cb.pack(side='right', padx=5)
+        tk.Label(equipped_by_frame, text="Equipped by:", font=('Segoe UI', 12, 'bold'),
+                 fg=FG_DIM, bg=BG_DARK).pack(side='right')
 
         # Relic list with columns
         list_container = tk.Frame(right_panel, bg=BG_DARK)
@@ -2777,6 +2787,7 @@ class SaveEditorGUI:
 
             search_text = search_var.get().lower()
             show_all = show_all_colors_var.get() or is_universal_slot
+            equipped_by_str = equipped_by_var.get()
 
             # Debug info - append to file
             with open('preset_debug.txt', 'a') as f:
@@ -2793,12 +2804,32 @@ class SaveEditorGUI:
                 relic_list_title.config(text=f"Available {slot_type} Relics (All Colors)")
 
             filtered = []
+            ga_hero_map = loadout_handler.relic_ga_hero_map
+            hero_type =self.vessel_char_combo.current()+1
             for relic in all_relics:
                 # Filter by deep/normal based on selected slot
                 if is_deep_slot and not relic['is_deep']:
                     continue  # Deep slots need deep relics
                 if not is_deep_slot and relic['is_deep']:
                     continue  # Normal slots need normal relics
+                
+                if relic['ga_handle'] in ga_handles:
+                    continue  # Ignore relic in this preset
+                # Filter by Equipped state
+                match equipped_by_str:
+                    case 'None':
+                        if len(ga_hero_map.get(relic['ga_handle'], [])) != 0:
+                            continue
+                    case 'Other Characters':
+                        if hero_type in ga_hero_map.get(relic['ga_handle'], []) or not ga_hero_map.get(relic['ga_handle'], []):
+                            continue
+                    case 'This Character':
+                        if hero_type not in ga_hero_map.get(relic['ga_handle'], []) or not ga_hero_map.get(relic['ga_handle'], []):
+                            continue
+                    case 'All':
+                        pass
+                    case _:
+                        pass
 
                 # Color filter (based on slot color from vessel data, unless "show all" or universal slot)
                 if not show_all and slot_color and slot_color != 'White' and relic['color'] != slot_color:
@@ -2882,6 +2913,7 @@ class SaveEditorGUI:
         # Bind filter events
         search_var.trace_add('write', lambda *args: populate_relic_list())
         show_all_colors_var.trace_add('write', lambda *args: populate_relic_list())
+        equipped_by_var.trace_add('write', lambda *args: populate_relic_list())
 
         # Assign button
         assign_btn_frame = tk.Frame(right_panel, bg=BG_DARK)
@@ -3164,6 +3196,14 @@ class SaveEditorGUI:
 
     def show_vessel_context_menu(self, event, vessel_slot):
         """Show context menu for vessel relic slot"""
+        def clear_relic(slot_index):
+            hero_type = self.vessel_char_combo.current()+1
+            vessel_id = loadout_handler.heroes[hero_type].vessels[vessel_slot]['vessel_id']
+            loadout_handler.replace_vessel_relic(hero_type, vessel_id,
+                                                 slot_index, 0)
+            self.refresh_inventory_and_vessels()
+
+        # Get vessel data
         tree = self.vessel_trees[vessel_slot]
 
         # Identify which row was clicked
@@ -3201,6 +3241,10 @@ class SaveEditorGUI:
             menu.add_command(
                 label="Edit Relic",
                 command=lambda: self.open_edit_relic_dialog(vessel_slot, slot_index)
+            )
+            menu.add_command(
+                label="Clear Relic",
+                command=lambda: clear_relic(slot_index)
             )
         else:
             # Empty slot - allow assigning a relic (we know slot color from vessel data)
@@ -3346,28 +3390,41 @@ class SaveEditorGUI:
         # For White/Universal slots, default to showing all colors
         is_universal_slot = (slot_color == 'White')
         any_color_var = tk.BooleanVar(value=is_universal_slot)
+        search_var = tk.StringVar()
+        equipped_by_var = tk.StringVar()
 
         # Checkbox to allow any color (pre-checked for White slots)
         any_color_cb = ttk.Checkbutton(
             options_frame,
             text="Show all colors" if is_universal_slot else "Show all colors (slot accepts any)",
             variable=any_color_var,
-            command=lambda: self.refresh_replacement_list(relic_tree, current_color, any_color_var.get(), is_deep_slot, "", relics)
+            command=lambda: self.refresh_replacement_list(relic_tree, current_color, any_color_var.get(), equipped_by_var.get(), is_deep_slot, search_var.get(), relics)
         )
         any_color_cb.pack(side='left', padx=5)
 
         # Add indicator if it's a universal slot
         if is_universal_slot:
             ttk.Label(options_frame, text="(Universal slot)", foreground='gray').pack(side='left', padx=5)
-
+        
+        # Equipped Option
+        ttk.Label(options_frame, text="Equipped by").pack(side='left', padx=(20, 5))
+        equipped_by_cb = ttk.Combobox(options_frame, values=['None', 'Other Characters', 'This Character', 'All'],
+                                      state='readonly', width=20, textvariable=equipped_by_var)
+        equipped_by_cb.pack(side='left', padx=5)
+        equipped_by_cb.current(0)
+        equipped_by_var.trace('w', lambda *args: self.refresh_replacement_list(
+            relic_tree, current_color, any_color_var.get(), equipped_by_var.get(), is_deep_slot, search_var.get(), relics))
+        
         # Search box
-        ttk.Label(options_frame, text="Search:").pack(side='left', padx=(20, 5))
-        search_var = tk.StringVar()
-        search_entry = ttk.Entry(options_frame, textvariable=search_var, width=30)
-        search_entry.pack(side='left', padx=5)
+        options_frame_2 = ttk.Frame(dialog)
+        options_frame_2.pack(fill='x', padx=10, pady=5)
+        
+        ttk.Label(options_frame_2, text="Search:").pack(side='left', padx=5)
+        search_entry = ttk.Entry(options_frame_2, textvariable=search_var, width=30)
+        search_entry.pack(side='left', padx=5, fill='x', expand=True)
         search_var.trace('w', lambda *args: self.refresh_replacement_list(
-            relic_tree, current_color, any_color_var.get(), is_deep_slot, search_var.get(), relics))
-
+            relic_tree, current_color, any_color_var.get(), equipped_by_var.get(), is_deep_slot, search_var.get(), relics))
+        
         # Buttons frame - pack FIRST with side='bottom' so it's always visible
         btn_frame = ttk.Frame(dialog)
         btn_frame.pack(side='bottom', fill='x', padx=10, pady=10)
@@ -3404,7 +3461,7 @@ class SaveEditorGUI:
         self._replace_list_frame = list_frame
 
         # Populate initial list - use is_universal_slot to show all colors for white slots
-        self.refresh_replacement_list(relic_tree, current_color, is_universal_slot, is_deep_slot, "", relics)
+        self.refresh_replacement_list(relic_tree, current_color, is_universal_slot, equipped_by_var.get(), is_deep_slot, "", relics)
 
         def do_replace():
             selection = relic_tree.selection()
@@ -3426,7 +3483,7 @@ class SaveEditorGUI:
         ttk.Button(btn_frame, text="Replace", command=do_replace).pack(side='left', padx=5)
         ttk.Button(btn_frame, text="Cancel", command=dialog.destroy).pack(side='left', padx=5)
 
-    def refresh_replacement_list(self, tree, current_color, allow_any_color, is_deep_slot, search_term="", vessel_relics=None):
+    def refresh_replacement_list(self, tree, current_color, allow_any_color, equipped_by, is_deep_slot, search_term="", vessel_relics=None):
         """Refresh the replacement relic list based on filters"""
         if vessel_relics is None:
             vessel_relics = []
@@ -3443,6 +3500,7 @@ class SaveEditorGUI:
         search_lower = search_term.lower()
 
         # Get relics from inventory that match criteria
+        ga_hero_map = loadout_handler.relic_ga_hero_map
         for relic in ga_relic:
             ga = relic[0]
             real_id = relic[1] - 2147483648
@@ -3453,7 +3511,7 @@ class SaveEditorGUI:
             item_name = item_data.get('name', f'Unknown ({real_id})')
             item_color = item_data.get('color', 'Unknown')
 
-            # Filter existing relics currently in the vessel
+            # Filter by existing relics currently in the vessel
             if ga in [i[0] for i in vessel_relics]:
                 continue
 
@@ -3467,6 +3525,22 @@ class SaveEditorGUI:
                 continue  # Deep slots need deep relics
             if not is_deep_slot and relic_is_deep:
                 continue  # Normal slots need normal relics
+            hero_type = self.vessel_char_combo.current() + 1
+            # Filter by Equipped state
+            match equipped_by:
+                case 'None':
+                    if len(ga_hero_map.get(ga, [])) != 0:
+                        continue
+                case 'Other Characters':
+                    if hero_type in ga_hero_map.get(ga, []) or not ga_hero_map.get(ga, []):
+                        continue
+                case 'This Character':
+                    if hero_type not in ga_hero_map.get(ga, []) or not ga_hero_map.get(ga, []):
+                        continue
+                case 'All':
+                    pass
+                case _:
+                    pass
 
             # Search filter
             if search_lower:
