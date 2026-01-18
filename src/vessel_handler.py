@@ -279,6 +279,9 @@ class VesselModifier:
         # 3. Update Custom Presets
         for p in hero_loadout.presets:
             p_off = p["offsets"]
+            # Make sure header is 0x01 and hero_type is correct
+            struct.pack_into("<B", globals.data, p_off["base"], 0x01)
+            struct.pack_into("<H", globals.data, p_off["hero_type"], p["hero_type"])
             # Update counter
             struct.pack_into("<B", globals.data, p_off["counter"], p["counter"])
 
@@ -292,6 +295,13 @@ class VesselModifier:
 
             # Update Timestamp
             struct.pack_into("<Q", globals.data, p_off["timestamp"], p["timestamp"])
+
+    def update_all_loadouts(self, heroes: dict):
+        """
+        Update all hero loadouts.
+        """
+        for hero_loadout in heroes.values():
+            self.update_hero_loadout(hero_loadout)
 
     def set_value(self, offset: int, fmt: str, value):
         """
@@ -407,12 +417,16 @@ class Validator:
 
     def validate_preset(self, heroes: dict[int, HeroLoadout], hero_type: int, new_preset: dict):
         _t_vessel = {"vessel_id": new_preset["vessel_id"], "relics": new_preset['relics']}
+        _relics_set = set(_t_vessel["relics"])
+        _relics_set.discard(0)
+        if len(_relics_set) == 0:
+            raise ValueError("Preset must contain at least one relic.")
         self.validate_vessel(heroes, hero_type, _t_vessel)
         for preset in heroes[hero_type].presets:
             if preset["index"] == new_preset["index"]:
                 raise ValueError("Preset index duplicated. This shouldn't happen.")
             if preset["vessel_id"] == new_preset["vessel_id"] and preset["relics"] == new_preset["relics"]:
-                raise ValueError("Preset relics combination exists.")
+                raise ValueError(f"Preset relics combination exists. Preset Name: {preset['name']}")
 
 
 class LoadoutHandler:
@@ -456,6 +470,9 @@ class LoadoutHandler:
     def update_hero_loadout(self, hero_index: int):
         self.modifier.update_hero_loadout(self.heroes[hero_index])
 
+    def update_all_loadouts(self):
+        self.modifier.update_all_loadouts(self.heroes)
+
     def reload_ga_relics(self, ga_relics: list[tuple]):
         self.validator.reload_ga_relics(ga_relics)
 
@@ -488,7 +505,7 @@ class LoadoutHandler:
             raise ValueError("Invalid hero type")
         if hero_type not in self.heroes:
             raise ValueError("Hero not found. This shouldn't happen. Save file may be corrupted.")
-        if preset_index < len(self.heroes[hero_type].presets):
+        if preset_index < len(self.all_presets):
             self.heroes[hero_type].cur_preset_idx = preset_index
             self.heroes[hero_type].cur_vessel_id = self.all_presets[preset_index]["vessel_id"]
             for vessel in self.heroes[hero_type].vessels:
@@ -551,12 +568,14 @@ class LoadoutHandler:
         }
         # Check preset, if invalid will raise Exception
         self.validator.validate_preset(self.heroes, hero_type, new_preset)
-        for preset in self.all_presets:
-            preset["counter"] += 1
+        for hero in self.heroes.values():
+            for preset in hero.presets:
+                preset["counter"] += 1
         self.heroes[hero_type].add_preset(**new_preset)
         self.all_presets = [p for h in self.heroes.values() for p in h.presets]
+        self.all_presets.sort(key=lambda x: x["index"])
         self.validator.auto_adjust_cur_equipment(self.heroes, hero_type)
-        self.update_hero_loadout(hero_type)
+        self.update_all_loadouts()
 
     def replace_vessel_relic(self, hero_type: int, vessel_id: int,
                              relic_index: int, new_relic_ga):
