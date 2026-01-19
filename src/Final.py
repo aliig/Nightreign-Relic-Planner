@@ -5989,7 +5989,7 @@ class ModifyRelicDialog:
             _items = data_source.cvrt_filtered_relic_origin_structure(_df)
         else:
             _items = items_json
-        SearchDialog(self.dialog, "relics", _items, "Select Relic", self.on_item_selected)
+        SearchDialog(self.dialog, self.item_id, "relics", _items, "Select Relic", self.on_item_selected)
 
     def find_valid_relic_ids(self, relic_id, effects, color):
         """Find all valid relics ID that matches the current effects configuration"""
@@ -6474,7 +6474,7 @@ class ModifyRelicDialog:
         else:
             dialog_title = f"Select Effect {effect_index + 1} — All Effects (Unsafe)"
 
-        SearchDialog(self.dialog, "effects", _items, dialog_title,
+        SearchDialog(self.dialog, self.item_id, "effects", _items, dialog_title,
                     lambda item_id: self.on_effect_selected(effect_index, item_id))
     
     def on_item_selected(self, item_id):
@@ -6564,10 +6564,11 @@ class ModifyRelicDialog:
 
 class SearchDialog:
     """Search dialog for JSON items"""
-    def __init__(self, parent, search_type, json_data, title, callback):
+    def __init__(self, parent, item_id, search_type, json_data, title, callback):
         self.json_data = json_data
         self.callback = callback
         self.search_type = search_type
+        self.item_id = item_id
         
         self.dialog = tk.Toplevel(parent)
         self.dialog.title(title)
@@ -6616,7 +6617,9 @@ class SearchDialog:
             self.lock_color_var = tk.BooleanVar(value=True)
             checkbox_lock_color = ttk.Checkbutton(color_row, variable=self.lock_color_var,
                                                 onvalue=True, offvalue=False, text="Lock color:")
-            self.color_var = tk.StringVar(value="Red")
+            cur_color = data_source.get_relic_color(self.item_id)
+            
+            self.color_var = tk.StringVar(value=cur_color)
             self.color_int_var = 0
             
             def color_map_to_int():
