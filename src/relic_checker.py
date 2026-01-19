@@ -1,4 +1,5 @@
 from source_data_handler import SourceDataHandler
+from globals import RELIC_GROUPS
 from enum import IntEnum, auto, unique
 from typing import Optional, Union
 
@@ -34,24 +35,6 @@ def is_curse_invalid(reason: int):
 
 class RelicChecker:
     RELIC_RANGE: tuple[int, int] = (100, 2013322)
-    RELIC_GROUPS: dict[str, tuple[int, int]] = {"store_102": (100, 199),
-                                                "store_103": (200, 299),
-                                                "unique_1": (1000, 2100),
-                                                "unique_2": (10000, 19999),
-                                                "illegal": (20000, 30035),
-                                                "reward_0": (1000000, 1000999),
-                                                "reward_1": (1001000, 1001999),
-                                                "reward_2": (1002000, 1002999),
-                                                "reward_3": (1003000, 1003999),
-                                                "reward_4": (1004000, 1004999),
-                                                "reward_5": (1005000, 1005999),
-                                                "reward_6": (1006000, 1006999),
-                                                "reward_7": (1007000, 1007999),
-                                                "reward_8": (1008000, 1008999),
-                                                "reward_9": (1009000, 1009999),
-                                                "deep_102": (2000000, 2009999),
-                                                "deep_103": (2010000, 2019999)
-                                                }
     UNIQUENESS_IDS: set[int] = \
         set(i for i in range(RELIC_GROUPS['unique_1'][0],
                              RELIC_GROUPS['unique_1'][1] + 1)) |\
@@ -213,8 +196,8 @@ class RelicChecker:
         """
 
         # Rule 1
-        if relic_id in range(self.RELIC_GROUPS['illegal'][0],
-                             self.RELIC_GROUPS['illegal'][1] + 1):
+        if relic_id in range(RELIC_GROUPS['illegal'][0],
+                             RELIC_GROUPS['illegal'][1] + 1):
             if return_1st_invalid_idx:
                 return InvalidReason.IN_ILLEGAL_RANGE, -1
             else:
@@ -759,29 +742,11 @@ class RelicChecker:
                 self.strict_invalid_gas.remove(ga_handle)
 
     def find_id_range(self, relic_id: int):
-        for group_name, group_range in self.RELIC_GROUPS.items():
+        for group_name, group_range in RELIC_GROUPS.items():
             if relic_id in range(group_range[0], group_range[1] + 1):
                 return group_name, group_range
         return None
 
-    def get_safe_relic_ids(self):
-        range_names = ["store_102", "store_103", "reward_0",
-                       "reward_1", "reward_2", "reward_3",
-                       "reward_4", "reward_5", "reward_6", "reward_7",
-                       "reward_8", "reward_9", "deep_102", "deep_103"]
-        safe_relic_ids = []
-        for group_name, group_range in self.RELIC_GROUPS.items():
-            if group_name in range_names:
-                safe_relic_ids.extend(range(group_range[0], group_range[1] + 1))
-        return safe_relic_ids
-
-    def is_relic_in_safe_range(self, relic_id: int):
-        return relic_id in self.get_safe_relic_ids()
-
     @staticmethod
     def is_deep_relic(relic_id: int):
-        deep_range_1 = range(RelicChecker.RELIC_GROUPS['deep_102'][0],
-                             RelicChecker.RELIC_GROUPS['deep_102'][1] + 1)
-        deep_range_2 = range(RelicChecker.RELIC_GROUPS['deep_103'][0],
-                             RelicChecker.RELIC_GROUPS['deep_103'][1] + 1)
-        return relic_id in deep_range_1 or relic_id in deep_range_2
+        return SourceDataHandler.is_deep_relic(relic_id)

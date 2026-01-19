@@ -1,9 +1,9 @@
 import pandas as pd
 import pathlib
-from typing import Optional
+from typing import Optional, Union
 import locale
 
-from globals import COLOR_MAP, LANGUAGE_MAP, CHARACTER_NAME_ID, CHARACTER_NAMES
+from globals import COLOR_MAP, LANGUAGE_MAP, CHARACTER_NAME_ID, CHARACTER_NAMES, RELIC_GROUPS
 
 
 def get_system_language():
@@ -101,7 +101,7 @@ class SourceDataHandler:
         self.relic_name: Optional[pd.DataFrame] = None
         self.effect_name: Optional[pd.DataFrame] = None
         self.npc_name: Optional[pd.DataFrame] = None
-        # Track which relic IDs are from 1.02 patch (Scene relics)
+        # Track which relic IDs are from 1.03 patch (Scene relics)
         self._scene_relic_ids: set = set()
         self.vessel_names: Optional[pd.DataFrame] = None
         self._load_text(language)
@@ -113,7 +113,7 @@ class SourceDataHandler:
             _lng = "en_US"
         # Deal with Relic text
         # Read all Relic xml from language subfolder
-        # Track which IDs come from _dlc01 file (1.02 patch / Scene relics)
+        # Track which IDs come from _dlc01 file (1.03 patch / Scene relics)
         _relic_names: Optional[pd.DataFrame] = None
         self._scene_relic_ids = set()
         for file_name in SourceDataHandler.RELIC_TEXT_FILE_NAME:
@@ -121,7 +121,7 @@ class SourceDataHandler:
                 SourceDataHandler.TEXT_DIR / _lng / file_name,
                 xpath="/fmg/entries/text"
             )
-            # Track IDs from dlc01 file as Scene relics (1.02 patch)
+            # Track IDs from dlc01 file as Scene relics (1.03 patch)
             if "_dlc01" in file_name:
                 valid_ids = _df[_df['text'] != '%null%']['id'].tolist()
                 self._scene_relic_ids.update(valid_ids)
@@ -343,14 +343,14 @@ class SourceDataHandler:
         return _pool_ids.values.tolist()
 
     def is_scene_relic(self, relic_id: int) -> bool:
-        """Check if a relic is a Scene relic (added in patch 1.02).
+        """Check if a relic is a Scene relic (added in patch 1.03).
 
         Scene relics have different effect pools than original relics,
         which is why certain effects can only be found on Scene relics
         and vice versa.
 
         Returns:
-            True if the relic is a Scene relic (1.02+), False otherwise
+            True if the relic is a Scene relic (1.03+), False otherwise
         """
         return relic_id in self._scene_relic_ids
 
@@ -365,7 +365,7 @@ class SourceDataHandler:
         """
         if self.is_scene_relic(relic_id):
             return (
-                "Scene Relic (1.02+)",
+                "Scene Relic (1.03+)",
                 "Has unique effect pools not found on original relics",
                 "#9966CC"  # Purple for Scene relics
             )
@@ -580,6 +580,54 @@ class SourceDataHandler:
                    "hero_type": _hero_type
                    }
         return _result
+
+    def get_filtered_relics_df(self, color: Union[int, str] = None,
+                               deep: Optional[bool] = None,
+                               effect_slot: Optional[int] = None,
+                               curse_slot: Optional[int] = None):
+        result_df: pd.DataFrame = self.relic_table.copy()
+        result_df.reset_index(inplace=True)
+        safe_range = self.get_safe_relic_ids()
+        result_df = result_df[result_df["ID"].isin(safe_range)]
+        if color is not None:
+            color_id = 0
+            if type(color) is str:
+                color_id = COLOR_MAP.index(color)
+            else:
+                color_id = color
+            result_df = result_df[result_df["relicColor"] == color_id]
+        if deep is not None:
+            if deep:
+                result_df = result_df[result_df["ID"].apply(self.is_deep_relic)]
+            else:
+                result_df = result_df[~result_df["ID"].apply(self.is_deep_relic)]
+        if effect_slot is not None:
+            result_df = result_df[result_df["ID"].apply(
+                lambda x: self.get_relic_slot_count(x)[0] == effect_slot)]
+        if curse_slot is not None:
+            result_df = result_df[result_df["ID"].apply(
+                lambda x: self.get_relic_slot_count(x)[1] == curse_slot)]
+        return result_df
+
+    @staticmethod
+    def get_safe_relic_ids():
+        range_names = ["store_102", "store_103", "reward_0",
+                       "reward_1", "reward_2", "reward_3",
+                       "reward_4", "reward_5", "reward_6", "reward_7",
+                       "reward_8", "reward_9", "deep_102", "deep_103"]
+        safe_relic_ids = []
+        for group_name, group_range in RELIC_GROUPS.items():
+            if group_name in range_names:
+                safe_relic_ids.extend(range(group_range[0], group_range[1] + 1))
+        return safe_relic_ids
+
+    @staticmethod
+    def is_deep_relic(relic_id: int):
+        deep_range_1 = range(RELIC_GROUPS['deep_102'][0],
+                             RELIC_GROUPS['deep_102'][1] + 1)
+        deep_range_2 = range(RELIC_GROUPS['deep_103'][0],
+                             RELIC_GROUPS['deep_103'][1] + 1)
+        return relic_id in deep_range_1 or relic_id in deep_range_2
 
 
 if __name__ == "__main__":
