@@ -1,7 +1,5 @@
 import struct
 import re
-import time
-from copy import deepcopy
 from source_data_handler import SourceDataHandler
 from relic_checker import RelicChecker
 from basic_class import Item
@@ -9,19 +7,12 @@ import globals
 from globals import ITEM_TYPE_RELIC, COLOR_MAP
 
 
-def get_now_timestamp():
-    EPOCH_OFFSET = 11644473600
-    now_unix = time.time()
-    filetime_long = int((now_unix + EPOCH_OFFSET) * 1000) * 10000
-    return filetime_long
-
-
 class HeroLoadout:
     def __init__(self, hero_type, cur_preset_idx, cur_vessel_id, vessels, offsets):
         self.hero_type = hero_type
         self.cur_preset_idx = cur_preset_idx
         self.cur_vessel_id = cur_vessel_id
-        # vessel list[dict]， keys: vessel_id, relics, offsets:dict
+        # vessel list[dict], keys: vessel_id, relics, offsets:dict
         #   offsets store offests for vessel_id and relics, keys: vessel_id, relics
         self.vessels = vessels
         self.presets = []
@@ -255,62 +246,6 @@ class VesselParser:
         print(f"\n{'='*80}")
 
 
-class VesselModifier:
-    def __init__(self):
-        """
-        Initialize the modifier with binary data.
-        :param data: The original binary data from the save file.
-        """
-        pass
-
-    def update_hero_loadout(self, hero_loadout: HeroLoadout):
-        """
-        Update all fields of a specific hero loadout based on its offsets.
-        """
-        # 1. Update Hero-level fields
-        struct.pack_into("<B", globals.data, hero_loadout.offsets["cur_preset_idx"], hero_loadout.cur_preset_idx)
-        struct.pack_into("<I", globals.data, hero_loadout.offsets["cur_vessel_id"], hero_loadout.cur_vessel_id)
-
-        # 2. Update Vessels (including Global sequences assigned to this hero)
-        for v in hero_loadout.vessels:
-            struct.pack_into("<I", globals.data, v["offsets"]["vessel_id"], v["vessel_id"])
-            struct.pack_into("<6I", globals.data, v["offsets"]["relics"], *v["relics"])
-
-        # 3. Update Custom Presets
-        for p in hero_loadout.presets:
-            p_off = p["offsets"]
-            # Make sure header is 0x01 and hero_type is correct
-            struct.pack_into("<B", globals.data, p_off["base"], 0x01)
-            struct.pack_into("<H", globals.data, p_off["hero_type"], p["hero_type"])
-            # Update counter
-            struct.pack_into("<B", globals.data, p_off["counter"], p["counter"])
-
-            # Update Vessel ID and Relics in preset
-            struct.pack_into("<I", globals.data, p_off["vessel_id"], p["vessel_id"])
-            struct.pack_into("<6I", globals.data, p_off["relics"], *p["relics"])
-
-            # Update Name (if modified, ensuring it's 36 bytes UTF-16)
-            name_bytes = p["name"].encode('utf-16le').ljust(36, b'\x00')[:36]
-            globals.data[p_off["name"]:p_off["name"] + 36] = name_bytes
-
-            # Update Timestamp
-            struct.pack_into("<Q", globals.data, p_off["timestamp"], p["timestamp"])
-
-    def update_all_loadouts(self, heroes: dict):
-        """
-        Update all hero loadouts.
-        """
-        for hero_loadout in heroes.values():
-            self.update_hero_loadout(hero_loadout)
-
-    def set_value(self, offset: int, fmt: str, value):
-        """
-        Generic method to set a value at a specific offset.
-        :param fmt: struct format string (e.g., '<I', '<B')
-        """
-        struct.pack_into(fmt, globals.data, offset, value)
-
-
 class Validator:
     def __init__(self, ga_relics: list[tuple], game_data: SourceDataHandler):
         self.cur_relics = {}
@@ -372,7 +307,6 @@ class Validator:
                     # Check color match
                     slot_color = _vessel_info['Colors'][relic_index]
                     new_relic_color = self.game_data.get_relic_color(real_id)
-                    # new_relic_color = self.game_data.get_relic_origin_structure()[str(real_id)]["color"]
                     if slot_color != new_relic_color and slot_color != COLOR_MAP[4]:
                         # Color mismatch
                         raise ValueError(f"Color mismatch in relic slot {relic_index+1}.")
@@ -386,60 +320,20 @@ class Validator:
                         for idx, relic_after in enumerate(vessel["relics"][relic_index + 1:]):
                             r_af_idx = relic_index + 1 + idx
                             if relic_after != 0 and relic == relic_after:
-                                raise ValueError(f"Relic is duplicated with slot: {r_af_idx+1}")  
+                                raise ValueError(f"Relic is duplicated with slot: {r_af_idx+1}")
                 else:
                     raise ValueError("Invalid item type")
         return True
 
-    def auto_adjust_cur_equipment(self, heroes: dict[int, HeroLoadout], hero_type: int):
-        """
-        Automatically adjust the current preset index based on the current vessel's relics.
-
-        Args:
-            heroes (dict[int, HeroLoadout]): heroes loadout that needs to be adjusted
-            hero_type (int): Specific hero type to adjust
-        """
-        cur_vessel_id = heroes[hero_type].cur_vessel_id
-        cur_vessel = None
-        for v in heroes[hero_type].vessels:
-            if v["vessel_id"] == cur_vessel_id:
-                cur_vessel = v
-                break
-        _new_preset_idx = 0xFF
-        for preset in heroes[hero_type].presets:
-            if preset["vessel_id"] == cur_vessel_id and preset['relics'] == cur_vessel["relics"]:
-                _new_preset_idx = preset["index"]
-                break
-        heroes[hero_type].cur_preset_idx = _new_preset_idx
-
-    def heroes_structure_check(self, heroes: dict[int, HeroLoadout]):
-        pass
-
-    def validate_preset(self, heroes: dict[int, HeroLoadout], hero_type: int, new_preset: dict):
-        _t_vessel = {"vessel_id": new_preset["vessel_id"], "relics": new_preset['relics']}
-        _relics_set = set(_t_vessel["relics"])
-        _relics_set.discard(0)
-        if len(_relics_set) == 0:
-            raise ValueError("Preset must contain at least one relic.")
-        self.validate_vessel(heroes, hero_type, _t_vessel)
-        for preset in heroes[hero_type].presets:
-            if preset["index"] == new_preset["index"]:
-                raise ValueError("Preset index duplicated. This shouldn't happen.")
-            if preset["vessel_id"] == new_preset["vessel_id"] and preset["relics"] == new_preset["relics"]:
-                raise ValueError(f"Preset relics combination exists. Preset Name: {preset['name']}")
-
 
 class LoadoutHandler:
     """
-    Hero Loadout Handler
-    Manage hero loadouts, including parsing, modifying, validating, and equipping presets.
+    Hero Loadout Handler (Read-Only)
+    Parses and queries hero loadouts from save data.
     """
-    class PresetsCapacityFullError(Exception):
-        pass
 
     def __init__(self, game_data: SourceDataHandler, ga_relics: list[tuple]):
         self.parser = VesselParser(game_data)
-        self.modifier = VesselModifier()
         self.validator = Validator(ga_relics, game_data)
         self.game_data = game_data
         self.all_presets = []
@@ -467,12 +361,6 @@ class LoadoutHandler:
     def display_results(self):
         self.parser.display_results()
 
-    def update_hero_loadout(self, hero_index: int):
-        self.modifier.update_hero_loadout(self.heroes[hero_index])
-
-    def update_all_loadouts(self):
-        self.modifier.update_all_loadouts(self.heroes)
-
     def reload_ga_relics(self, ga_relics: list[tuple]):
         self.validator.reload_ga_relics(ga_relics)
 
@@ -499,126 +387,3 @@ class LoadoutHandler:
                     return v["relics"][relic_index]
         else:
             raise ValueError("Invalid relic index")
-
-    def equip_preset(self, hero_type: int, preset_index: int):
-        if hero_type not in range(1, 11):
-            raise ValueError("Invalid hero type")
-        if hero_type not in self.heroes:
-            raise ValueError("Hero not found. This shouldn't happen. Save file may be corrupted.")
-        if preset_index < len(self.all_presets):
-            self.heroes[hero_type].cur_preset_idx = preset_index
-            self.heroes[hero_type].cur_vessel_id = self.all_presets[preset_index]["vessel_id"]
-            for vessel in self.heroes[hero_type].vessels:
-                if vessel["vessel_id"] == self.heroes[hero_type].cur_vessel_id:
-                    vessel["relics"] = deepcopy(self.all_presets[preset_index]["relics"])
-                    break
-            self.update_hero_loadout(hero_type)
-        else:
-            raise ValueError("Invalid preset index")
-
-    def push_preset(self, hero_type: int, vessel_id: int, relics: list[int], name: str):
-        """
-        Append a new preset to the specified hero's loadout.
-        
-        :param hero_type: 1-based\n
-            sequence: 1~10 for normal heroes, 11 for universal vessels\n
-            ['Wylder', 'Guardian', 'Ironeye', 'Duchess', 'Raider',\n
-             'Revenant', 'Recluse', 'Executor', 'Scholar', 'Undertaker', 'All']
-        :type hero_type: int
-        :param vessel_id: vessel ID Like 19001 etc.
-        :type vessel_id: int
-        :param relics: ga_handles
-        :type relics: list[int]
-        :param name: Perset Name, Max Chars 18
-        :type name: str
-
-        :returns: return the modified data as immutable bytes.
-        :rtype: bytes
-        """
-        # Check Preset Capacity
-        if len(self.all_presets) > 100:
-            raise LoadoutHandler.PresetsCapacityFullError("Maximum preset capacity reached.")
-
-        # Check Relics Validity
-
-        # All Valid
-        # Create a new preset
-        # new preset offsets are caculated by last preset
-        new_preset_offsets = {
-            "base": self.all_presets[-1]["offsets"]["base"] + 80 if self.all_presets else self.parser.base_offset + 120 * 10 + 28 * 70 + 4,  # Heuristic: 10 heroes * 120 bytes + 60 vessels * 28 bytes + 4 bytes padding
-            "hero_type": self.all_presets[-1]["offsets"]["base"] + 80 + 1 if self.all_presets else self.parser.base_offset + 120 * 10 + 28 * 70 + 4 + 1,
-            "counter": self.all_presets[-1]["offsets"]["base"] + 80 + 3 if self.all_presets else self.parser.base_offset + 120 * 10 + 28 * 70 + 4 + 3,
-            "name": self.all_presets[-1]["offsets"]["base"] + 80 + 4 if self.all_presets else self.parser.base_offset + 120 * 10 + 28 * 70 + 4 + 4,
-            "vessel_id": self.all_presets[-1]["offsets"]["base"] + 80 + 44 if self.all_presets else self.parser.base_offset + 120 * 10 + 28 * 70 + 4 + 44,
-            "relics": self.all_presets[-1]["offsets"]["base"] + 80 + 48 if self.all_presets else self.parser.base_offset + 120 * 10 + 28 * 70 + 4 + 48,
-            "timestamp": self.all_presets[-1]["offsets"]["base"] + 80 + 72 if self.all_presets else self.parser.base_offset + 120 * 10 + 28 * 70 + 4 + 72,
-        }
-
-        new_timestamp = get_now_timestamp()
-
-        new_preset = {
-            "hero_type": hero_type,
-            "index": len(self.all_presets),
-            "name": name,
-            "vessel_id": vessel_id,
-            "relics": relics,
-            "counter": 0,
-            "timestamp": new_timestamp,
-            "offsets": new_preset_offsets
-        }
-        # Check preset, if invalid will raise Exception
-        self.validator.validate_preset(self.heroes, hero_type, new_preset)
-        for hero in self.heroes.values():
-            for preset in hero.presets:
-                preset["counter"] += 1
-        self.heroes[hero_type].add_preset(**new_preset)
-        self.all_presets = [p for h in self.heroes.values() for p in h.presets]
-        self.all_presets.sort(key=lambda x: x["index"])
-        self.validator.auto_adjust_cur_equipment(self.heroes, hero_type)
-        self.update_all_loadouts()
-
-    def replace_vessel_relic(self, hero_type: int, vessel_id: int,
-                             relic_index: int, new_relic_ga):
-        _new_vessel = None
-        vessel_index = 0
-        for idx, vessel in enumerate(self.heroes[hero_type].vessels):
-            if vessel["vessel_id"] == vessel_id:
-                _new_vessel = deepcopy(vessel)
-                vessel_index = idx
-                break
-        if not _new_vessel:
-            raise ValueError("Vessel not found")
-        _new_vessel["relics"][relic_index] = new_relic_ga
-        if self.validator.validate_vessel(self.heroes, hero_type, _new_vessel):
-            self.heroes[hero_type].vessels[vessel_index] = _new_vessel
-            if self.heroes[hero_type].cur_vessel_id == vessel_id:
-                self.validator.auto_adjust_cur_equipment(self.heroes, hero_type)
-            self.update_hero_loadout(hero_type)
-
-    def replace_preset_relic(self, hero_type: int, relic_index: int, new_relic_ga,
-                             hero_preset_index: int = -1, preset_index: int = -1):
-        if hero_preset_index < 0 and preset_index < 0:
-            raise ValueError("hero_preset_index or preset_index should be provided")
-        if hero_preset_index >= 0 and preset_index >= 0:
-            raise ValueError("Only one of hero_preset_index or preset_index should be provided")
-        if hero_preset_index >= len(self.heroes[hero_type].presets):
-            raise ValueError("Invalid preset index")
-        if preset_index >= len(self.all_presets):
-            raise ValueError("Invalid preset index")
-        if relic_index < 0 or relic_index >= 6:
-            raise ValueError("Invalid relic index")
-
-        _new_preset = None
-        if preset_index >= 0:
-            _new_preset = deepcopy(self.all_presets[preset_index])
-        elif hero_preset_index >= 0:
-            _new_preset = deepcopy(self.heroes[hero_type].presets[hero_preset_index])
-        _new_preset["relics"][relic_index] = new_relic_ga
-        _t_vessel = {"vessel_id": _new_preset["vessel_id"], "relics": _new_preset['relics']}
-        self.validator.validate_vessel(self.heroes, hero_type, _t_vessel)
-        if preset_index >= 0:
-            self.all_presets[preset_index]['relics'][relic_index] = new_relic_ga
-        elif hero_preset_index >= 0:
-            self.heroes[hero_type].presets[hero_preset_index]['relics'][relic_index] = new_relic_ga
-        self.validator.auto_adjust_cur_equipment(self.heroes, hero_type)
-        self.update_hero_loadout(hero_type)

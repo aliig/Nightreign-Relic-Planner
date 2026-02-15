@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "builds": {
+    "f16d30fd": {
+      "name": "birdtank",
+      "character": "Guardian",
+      "tiers": {
+        "must_have": [
+          7033400
+        ],
+        "nice_to_have": [],
+        "low_priority": [],
+        "blacklist": []
+      },
+      "include_deep": true,
+      "curse_tolerance": 1
+    }
+  }
+}

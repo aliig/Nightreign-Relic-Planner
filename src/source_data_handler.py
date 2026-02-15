@@ -630,6 +630,89 @@ class SourceDataHandler:
         return relic_id in deep_range_1 or relic_id in deep_range_2
 
 
+    def get_all_effects_list(self) -> list[dict]:
+        """Get all effects with metadata for optimizer UI.
+
+        Returns list of dicts with keys:
+            id, name, compatibility_id, is_debuff, allow_per_character
+        """
+        # Read full effect param for additional columns
+        full_params = pd.read_csv(self.PARAM_DIR / "AttachEffectParam.csv")
+
+        character_allow_cols = [
+            "allowWylder", "allowGuardian", "allowIroneye", "allowDuchess",
+            "allowRaider", "allowRevenant", "allowRecluse", "allowExecutor",
+            "allowScholar", "allowUndertaker"
+        ]
+        character_keys = [
+            "Wylder", "Guardian", "Ironeye", "Duchess", "Raider",
+            "Revenant", "Recluse", "Executor", "Scholar", "Undertaker"
+        ]
+
+        results = []
+        for _, row in full_params.iterrows():
+            effect_id = int(row["ID"])
+            if effect_id == 0:
+                continue
+
+            name = self.get_effect_name(effect_id)
+            if name == "Empty" or name.startswith("Effect "):
+                continue
+
+            compat_id = int(row["compatibilityId"])
+            is_debuff = bool(row.get("isDebuff", 0))
+
+            allow = {}
+            for col, key in zip(character_allow_cols, character_keys):
+                allow[key] = bool(row.get(col, 1))
+
+            results.append({
+                "id": effect_id,
+                "name": name,
+                "compatibility_id": compat_id,
+                "is_debuff": is_debuff,
+                "allow_per_character": allow,
+            })
+
+        return results
+
+    def get_all_vessels_for_hero(self, hero_type: int) -> list[dict]:
+        """Get all vessels available for a specific hero.
+
+        Args:
+            hero_type: 1-10 for specific heroes
+
+        Returns list of dicts with keys:
+            vessel_id, Name, Character, Colors (6-tuple), unlockFlag, hero_type
+        """
+        if self.antique_stand_param is None:
+            return []
+
+        # Filter to hero-specific vessels + shared vessels (heroType=11)
+        df = self.antique_stand_param
+        matching = df[(df["heroType"] == hero_type) | (df["heroType"] == 11)]
+        # Exclude disabled vessels
+        matching = matching[matching["disableParam_NT"] == 0]
+
+        results = []
+        for _, row in matching.iterrows():
+            vessel_id = int(row["ID"])
+            try:
+                vessel_data = self.get_vessel_data(vessel_id)
+                results.append({
+                    "vessel_id": vessel_id,
+                    "Name": vessel_data["Name"],
+                    "Character": vessel_data["Character"],
+                    "Colors": vessel_data["Colors"],
+                    "unlockFlag": vessel_data["unlockFlag"],
+                    "hero_type": vessel_data["hero_type"],
+                })
+            except Exception:
+                continue
+
+        return results
+
+
 if __name__ == "__main__":
     source_data_handler = SourceDataHandler("zh_TW")
     t = source_data_handler.get_vessel_data(1000)
