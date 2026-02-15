@@ -23,16 +23,16 @@ RELIC_COLOR_HEX = {
 }
 
 TIER_DISPLAY = {
-    "must_have": "Must Have",
-    "nice_to_have": "Nice to Have",
-    "low_priority": "Low Priority",
-    "blacklist": "Blacklist",
+    "required": "Required Properties",
+    "preferred": "Preferred Properties",
+    "avoid": "Avoid Properties",
+    "blacklist": "Blacklist Properties",
 }
 
 TIER_COLORS = {
-    "must_have": "#FF4444",
-    "nice_to_have": "#4488FF",
-    "low_priority": "#888888",
+    "required": "#FF4444",
+    "preferred": "#4488FF",
+    "avoid": "#888888",
     "blacklist": "#FF8C00",
 }
 
@@ -224,14 +224,6 @@ class OptimizerTab:
                         variable=self.deep_var,
                         command=self._on_option_changed).pack(side='left', padx=2)
 
-        ttk.Label(row2, text="Curse Tolerance:").pack(side='left', padx=(8, 2))
-        self.curse_var = tk.IntVar(value=1)
-        curse_combo = ttk.Combobox(row2, textvariable=self.curse_var,
-                                   values=[0, 1, 2, 3],
-                                   state='readonly', width=3)
-        curse_combo.pack(side='left', padx=2)
-        curse_combo.bind('<<ComboboxSelected>>', lambda e: self._on_option_changed())
-
         # -- Tier sections (scrollable) --
         tier_canvas_frame = ttk.Frame(left_frame)
         tier_canvas_frame.pack(fill='both', expand=True, padx=5, pady=2)
@@ -257,7 +249,7 @@ class OptimizerTab:
 
         # Create tier sections
         self.tier_trees = {}
-        for tier_key in ["must_have", "nice_to_have", "low_priority", "blacklist"]:
+        for tier_key in ["required", "preferred", "avoid", "blacklist"]:
             self._create_tier_section(tier_key)
 
         # Optimize button
@@ -314,7 +306,13 @@ class OptimizerTab:
     def _create_tier_section(self, tier_key: str):
         """Create a labeled frame with a treeview for one tier."""
         display_name = TIER_DISPLAY[tier_key]
-        weight_str = f" ({TIER_WEIGHTS[tier_key]:+d} pts)"
+        # Only show points for scored tiers (preferred, avoid)
+        if tier_key in ("preferred", "avoid"):
+            weight_str = f" ({TIER_WEIGHTS[tier_key]:+d} pts)"
+        elif tier_key == "required":
+            weight_str = " (Absolute Requirement)"
+        else:  # blacklist
+            weight_str = " (Absolute Exclusion)"
         color = TIER_COLORS[tier_key]
 
         frame = ttk.LabelFrame(self.tier_inner, text=f"{display_name}{weight_str}")
@@ -373,7 +371,6 @@ class OptimizerTab:
             self.char_combo.set(build.character)
         # Options
         self.deep_var.set(build.include_deep)
-        self.curse_var.set(build.curse_tolerance)
         # Tiers
         effects_json = self.effects_json
         for tier_key, tree in self.tier_trees.items():
@@ -391,7 +388,6 @@ class OptimizerTab:
             return
         build.character = self.char_var.get() or build.character
         build.include_deep = self.deep_var.get()
-        build.curse_tolerance = self.curse_var.get()
 
         for tier_key, tree in self.tier_trees.items():
             effect_ids = []
@@ -526,9 +522,15 @@ class OptimizerTab:
         self._display_results(results[:3], build)
 
         if results:
-            self.status_label.config(
-                text=f"Done. Best score: {results[0].total_score}",
-                foreground='green')
+            # Check if best result meets requirements
+            if results[0].meets_requirements:
+                self.status_label.config(
+                    text=f"Done. Best score: {results[0].total_score}",
+                    foreground='green')
+            else:
+                self.status_label.config(
+                    text=f"Done. No vessels meet all requirements. Best score: {results[0].total_score}",
+                    foreground='orange')
         else:
             self.status_label.config(
                 text="No vessels found for this character.",
@@ -546,17 +548,38 @@ class OptimizerTab:
                       foreground='gray').pack(padx=20, pady=40)
             return
 
+        # Check if any results meet requirements
+        has_required = any(r.meets_requirements for r in results)
+        required_effects = build.tiers.get("required", [])
+
+        if required_effects and not has_required:
+            # Show warning if there are requirements but none are met
+            warning_frame = ttk.Frame(self.results_inner)
+            warning_frame.pack(fill='x', padx=10, pady=10)
+            ttk.Label(
+                warning_frame,
+                text="⚠ No vessels meet all required properties.",
+                foreground='#FF4444',
+                font=('TkDefaultFont', 10, 'bold')
+            ).pack(anchor='w')
+            ttk.Label(
+                warning_frame,
+                text="Showing best alternatives:",
+                foreground='gray'
+            ).pack(anchor='w', pady=(2, 0))
+
         for rank, result in enumerate(results, 1):
             self._create_vessel_card(rank, result, build)
 
     def _create_vessel_card(self, rank: int, result: VesselResult,
                             build: BuildDefinition):
         """Create a card displaying one vessel's optimization result."""
-        # Vessel header
-        card = ttk.LabelFrame(
-            self.results_inner,
-            text=f"#{rank}: {result.vessel_name} "
-                 f"(Score: {result.total_score})")
+        # Vessel header - add indicator if requirements not met
+        header_text = f"#{rank}: {result.vessel_name} (Score: {result.total_score})"
+        if not result.meets_requirements:
+            header_text += " ⚠ Missing Requirements"
+
+        card = ttk.LabelFrame(self.results_inner, text=header_text)
         card.pack(fill='x', padx=5, pady=5)
 
         # Vessel info row
@@ -571,6 +594,25 @@ class OptimizerTab:
             side='left', padx=(0, 15))
         ttk.Label(info_frame, text=lock_text,
                   foreground=lock_color).pack(side='left')
+
+        # Show missing requirements if any
+        if not result.meets_requirements and result.missing_requirements:
+            missing_frame = ttk.Frame(card)
+            missing_frame.pack(fill='x', padx=5, pady=(2, 5))
+            ttk.Label(
+                missing_frame,
+                text="Missing Required:",
+                foreground='#FF4444',
+                font=('TkDefaultFont', 8, 'bold')
+            ).pack(anchor='w')
+            for eff_id in result.missing_requirements:
+                eff_name = self.data_source.get_effect_name(eff_id)
+                ttk.Label(
+                    missing_frame,
+                    text=f"  • {eff_name}",
+                    foreground='#FF4444',
+                    font=('TkDefaultFont', 8)
+                ).pack(anchor='w')
 
         # Slot assignments
         for assignment in result.assignments:
@@ -621,8 +663,12 @@ class OptimizerTab:
                 tier = item.get("tier")
                 score = item.get("score", 0)
                 is_curse = item.get("is_curse", False)
+                redundant = item.get("redundant", False)
 
-                if tier:
+                if redundant:
+                    fg = '#999999'
+                    tier_label = f" [{TIER_DISPLAY.get(tier, '')} (redundant)]"
+                elif tier:
                     fg = TIER_COLORS.get(tier, '#888888')
                     tier_label = f" [{TIER_DISPLAY.get(tier, '')} {score:+d}]"
                 elif is_curse:

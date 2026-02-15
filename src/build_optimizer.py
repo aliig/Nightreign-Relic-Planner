@@ -15,12 +15,12 @@ from globals import COLOR_MAP, RELIC_GROUPS
 from source_data_handler import SourceDataHandler
 
 
-# Tier weights for scoring
+# Tier weights for scoring (required and blacklist are absolute, not scored)
 TIER_WEIGHTS = {
-    "must_have": 100,
-    "nice_to_have": 50,
-    "low_priority": 20,
-    "blacklist": -200,
+    "required": 0,      # Absolute requirement, not scored
+    "preferred": 50,    # Positive scoring
+    "avoid": -20,       # Negative scoring
+    "blacklist": 0,     # Absolute exclusion, not scored
 }
 
 # Small bonus for relics with more effect slots (tiebreaker)
@@ -116,9 +116,8 @@ class RelicInventory:
     def get_deep(self) -> list[OwnedRelic]:
         return [r for r in self.relics if r.is_deep]
 
-    def get_candidates(self, slot_color: str, is_deep_slot: bool,
-                       curse_tolerance: int = 3) -> list[OwnedRelic]:
-        """Get relics eligible for a specific slot."""
+    def get_candidates(self, slot_color: str, is_deep_slot: bool) -> list[OwnedRelic]:
+        """Get relics eligible for a specific slot (by color and type only)."""
         results = []
         for r in self.relics:
             # Standard/deep type must match
@@ -126,9 +125,6 @@ class RelicInventory:
                 continue
             # Color must match (White slots accept any)
             if slot_color != "White" and r.color != slot_color:
-                continue
-            # Curse tolerance for deep relics
-            if is_deep_slot and r.curse_count > curse_tolerance:
                 continue
             results.append(r)
         return results
@@ -144,13 +140,12 @@ class BuildDefinition:
     name: str
     character: str
     tiers: dict = field(default_factory=lambda: {
-        "must_have": [],
-        "nice_to_have": [],
-        "low_priority": [],
+        "required": [],
+        "preferred": [],
+        "avoid": [],
         "blacklist": [],
     })
     include_deep: bool = True
-    curse_tolerance: int = 1
 
     def all_prioritized_effects(self) -> set:
         """All effect IDs across all tiers."""
@@ -181,25 +176,27 @@ class BuildStore:
         try:
             data = orjson.loads(self.file_path.read_bytes())
             for build_id, b in data.get("builds", {}).items():
+                # Migrate old tier names to new ones
+                tiers = b.get("tiers", {})
+                migrated_tiers = {
+                    "required": tiers.get("required", tiers.get("must_have", [])),
+                    "preferred": tiers.get("preferred", tiers.get("nice_to_have", [])),
+                    "avoid": tiers.get("avoid", tiers.get("low_priority", [])),
+                    "blacklist": tiers.get("blacklist", []),
+                }
                 self.builds[build_id] = BuildDefinition(
                     id=build_id,
                     name=b["name"],
                     character=b["character"],
-                    tiers=b.get("tiers", {
-                        "must_have": [],
-                        "nice_to_have": [],
-                        "low_priority": [],
-                        "blacklist": [],
-                    }),
+                    tiers=migrated_tiers,
                     include_deep=b.get("include_deep", True),
-                    curse_tolerance=b.get("curse_tolerance", 1),
                 )
         except Exception as e:
             print(f"[BuildStore] Error loading builds: {e}")
 
     def save(self):
         data = {
-            "version": 1,
+            "version": 2,  # Version 2: new tier names, no curse_tolerance
             "builds": {}
         }
         for build_id, b in self.builds.items():
@@ -208,7 +205,6 @@ class BuildStore:
                 "character": b.character,
                 "tiers": b.tiers,
                 "include_deep": b.include_deep,
-                "curse_tolerance": b.curse_tolerance,
             }
         self.file_path.write_bytes(
             orjson.dumps(data, option=orjson.OPT_INDENT_2)
@@ -243,52 +239,124 @@ class BuildStore:
 
 
 class BuildScorer:
-    """Scores relics against a build definition."""
+    """Scores relics against a build definition with stacking awareness."""
 
     def __init__(self, data_source: SourceDataHandler):
         self.data_source = data_source
 
+    def has_blacklisted_effect(self, relic: OwnedRelic,
+                                build: BuildDefinition) -> bool:
+        """Check if relic has any blacklisted effects."""
+        blacklist_ids = set(build.tiers.get("blacklist", []))
+        if not blacklist_ids:
+            return False
+        for eff in relic.all_effects:
+            if eff in blacklist_ids:
+                return True
+        return False
+
     def score_relic(self, relic: OwnedRelic,
                     build: BuildDefinition) -> int:
-        """Score a single relic against the build's priorities."""
+        """Score a relic without stacking context (used for initial sorting)."""
         score = 0
-
-        # Score normal effects
         for eff in relic.effects:
             if eff == EMPTY_EFFECT or eff == 0:
                 continue
             tier = build.get_tier_for_effect(eff)
-            if tier:
+            if tier in ("preferred", "avoid"):
                 score += TIER_WEIGHTS[tier]
-
-        # Score curse effects (only blacklist applies as penalty)
         for curse in relic.curses:
             if curse == EMPTY_EFFECT or curse == 0:
                 continue
             tier = build.get_tier_for_effect(curse)
-            if tier:
+            if tier in ("preferred", "avoid"):
                 score += TIER_WEIGHTS[tier]
-
-        # Tier bonus (tiebreaker favoring relics with more effects)
         score += TIER_BONUS.get(relic.effect_count, 0)
+        return score
 
+    def _effect_stacking_score(self, eff_id: int, tier: str,
+                                vessel_effect_ids: set,
+                                vessel_compat_ids: set,
+                                vessel_no_stack_compat_ids: set) -> int:
+        """Score a single effect considering stacking context.
+
+        Returns the tier weight if the effect provides value, 0 if redundant.
+        """
+        stype = self.data_source.get_effect_stacking_type(eff_id)
+        compat_id = self.data_source.get_effect_conflict_id(eff_id)
+
+        if stype == "stack":
+            return TIER_WEIGHTS[tier]
+        elif stype == "unique":
+            if eff_id in vessel_effect_ids:
+                return 0  # Exact duplicate
+            if compat_id != -1 and compat_id in vessel_no_stack_compat_ids:
+                return 0  # Blocked by a no_stack in same group
+            return TIER_WEIGHTS[tier]
+        else:  # no_stack
+            if compat_id != -1 and compat_id in vessel_compat_ids:
+                return 0  # Any group member already present
+            if compat_id == -1 and eff_id in vessel_effect_ids:
+                return 0  # No group, same effect present
+            return TIER_WEIGHTS[tier]
+
+    def score_relic_in_context(self, relic: OwnedRelic,
+                                build: BuildDefinition,
+                                vessel_effect_ids: set,
+                                vessel_compat_ids: set,
+                                vessel_no_stack_compat_ids: set) -> int:
+        """Score a relic considering what's already assigned to the vessel."""
+        score = 0
+        for eff in relic.effects:
+            if eff == EMPTY_EFFECT or eff == 0:
+                continue
+            tier = build.get_tier_for_effect(eff)
+            if tier in ("preferred", "avoid"):
+                score += self._effect_stacking_score(
+                    eff, tier, vessel_effect_ids,
+                    vessel_compat_ids, vessel_no_stack_compat_ids)
+        for curse in relic.curses:
+            if curse == EMPTY_EFFECT or curse == 0:
+                continue
+            tier = build.get_tier_for_effect(curse)
+            if tier in ("preferred", "avoid"):
+                score += self._effect_stacking_score(
+                    curse, tier, vessel_effect_ids,
+                    vessel_compat_ids, vessel_no_stack_compat_ids)
+        score += TIER_BONUS.get(relic.effect_count, 0)
         return score
 
     def get_breakdown(self, relic: OwnedRelic,
-                      build: BuildDefinition) -> list[dict]:
-        """Detailed per-effect scoring for UI display."""
+                      build: BuildDefinition,
+                      other_effect_ids: set = None,
+                      other_compat_ids: set = None,
+                      other_no_stack_compat_ids: set = None) -> list[dict]:
+        """Detailed per-effect scoring for UI display.
+
+        If stacking context is provided (other_* params = effects from OTHER
+        relics in the vessel), marks redundant effects.
+        """
         breakdown = []
         for eff in relic.effects:
             if eff == EMPTY_EFFECT or eff == 0:
                 continue
             tier = build.get_tier_for_effect(eff)
             name = self.data_source.get_effect_name(eff)
+            base_score = TIER_WEIGHTS.get(tier, 0) if tier else 0
+            redundant = False
+            if other_effect_ids is not None and tier in ("preferred", "avoid"):
+                ctx_score = self._effect_stacking_score(
+                    eff, tier, other_effect_ids,
+                    other_compat_ids or set(),
+                    other_no_stack_compat_ids or set())
+                redundant = (ctx_score == 0 and base_score != 0)
             breakdown.append({
                 "effect_id": eff,
                 "name": name,
                 "tier": tier,
-                "score": TIER_WEIGHTS.get(tier, 0) if tier else 0,
+                "score": 0 if redundant else base_score,
                 "is_curse": False,
+                "redundant": redundant,
             })
 
         for curse in relic.curses:
@@ -296,12 +364,21 @@ class BuildScorer:
                 continue
             tier = build.get_tier_for_effect(curse)
             name = self.data_source.get_effect_name(curse)
+            base_score = TIER_WEIGHTS.get(tier, 0) if tier else 0
+            redundant = False
+            if other_effect_ids is not None and tier in ("preferred", "avoid"):
+                ctx_score = self._effect_stacking_score(
+                    curse, tier, other_effect_ids,
+                    other_compat_ids or set(),
+                    other_no_stack_compat_ids or set())
+                redundant = (ctx_score == 0 and base_score != 0)
             breakdown.append({
                 "effect_id": curse,
                 "name": name,
                 "tier": tier,
-                "score": TIER_WEIGHTS.get(tier, 0) if tier else 0,
+                "score": 0 if redundant else base_score,
                 "is_curse": True,
+                "redundant": redundant,
             })
 
         return breakdown
@@ -328,6 +405,8 @@ class VesselResult:
     slot_colors: tuple  # 6-tuple of color strings
     assignments: list   # list[SlotAssignment]
     total_score: int
+    meets_requirements: bool = True  # False if any required effects are missing
+    missing_requirements: list = field(default_factory=list)  # IDs of missing required effects
 
 
 class VesselOptimizer:
@@ -337,23 +416,23 @@ class VesselOptimizer:
         self.data_source = data_source
         self.scorer = scorer
 
-    def _get_conflict_ids(self, relic: OwnedRelic) -> set:
-        """Get all non-negative compatibilityIds for a relic's effects."""
-        conflicts = set()
-        for eff in relic.all_effects:
-            cid = self.data_source.get_effect_conflict_id(eff)
-            if cid != -1:
-                conflicts.add(cid)
-        return conflicts
+    def _get_relic_stacking_adds(self, relic: OwnedRelic) -> tuple:
+        """Get stacking state contributions for a relic.
 
-    def _has_conflict(self, relic: OwnedRelic,
-                      active_conflicts: set) -> bool:
-        """Check if a relic conflicts with already-assigned relics."""
+        Returns (effect_ids, compat_ids, no_stack_compat_ids) — the sets
+        that this relic adds to the vessel's stacking context.
+        """
+        effect_ids = set()
+        compat_ids = set()
+        no_stack_compat_ids = set()
         for eff in relic.all_effects:
-            cid = self.data_source.get_effect_conflict_id(eff)
-            if cid != -1 and cid in active_conflicts:
-                return True
-        return False
+            effect_ids.add(eff)
+            compat_id = self.data_source.get_effect_conflict_id(eff)
+            if compat_id != -1:
+                compat_ids.add(compat_id)
+                if self.data_source.get_effect_stacking_type(eff) == "no_stack":
+                    no_stack_compat_ids.add(compat_id)
+        return effect_ids, compat_ids, no_stack_compat_ids
 
     def optimize(self, build: BuildDefinition,
                  inventory: RelicInventory,
@@ -367,10 +446,15 @@ class VesselOptimizer:
         for i in range(num_slots):
             is_deep = i >= 3
             slot_color = slot_colors[i]
-            candidates = inventory.get_candidates(
-                slot_color, is_deep, build.curse_tolerance
-            )
-            # Score and sort descending
+            candidates = inventory.get_candidates(slot_color, is_deep)
+
+            # Filter out blacklisted relics
+            candidates = [
+                r for r in candidates
+                if not self.scorer.has_blacklisted_effect(r, build)
+            ]
+
+            # Pre-score (without stacking context) for sorting and pruning
             scored = []
             for relic in candidates:
                 score = self.scorer.score_relic(relic, build)
@@ -378,7 +462,7 @@ class VesselOptimizer:
             scored.sort(key=lambda x: x[0], reverse=True)
             candidates_per_slot.append(scored)
 
-        # Count total candidates for deciding algorithm
+        # Choose algorithm based on candidate count
         total_candidates = sum(len(c) for c in candidates_per_slot)
 
         if total_candidates <= 200 and num_slots <= 6:
@@ -390,16 +474,34 @@ class VesselOptimizer:
                 candidates_per_slot, num_slots, build
             )
 
-        # Build result
+        # Build result with incremental stacking context for breakdowns
         slot_assignments = []
         total_score = 0
+        assigned_effect_ids = set()
+        vessel_eff = set()
+        vessel_compat = set()
+        vessel_no_stack = set()
+
         for i in range(num_slots):
             is_deep = i >= 3
             slot_color = slot_colors[i]
-            relic, score = assignments[i]
-            breakdown = []
+            relic = assignments[i][0]
+
             if relic:
-                breakdown = self.scorer.get_breakdown(relic, build)
+                score = self.scorer.score_relic_in_context(
+                    relic, build, vessel_eff, vessel_compat, vessel_no_stack)
+                breakdown = self.scorer.get_breakdown(
+                    relic, build, vessel_eff, vessel_compat, vessel_no_stack)
+                assigned_effect_ids.update(relic.all_effects)
+                # Update stacking state for subsequent relics
+                e, c, ns = self._get_relic_stacking_adds(relic)
+                vessel_eff.update(e)
+                vessel_compat.update(c)
+                vessel_no_stack.update(ns)
+            else:
+                score = 0
+                breakdown = []
+
             slot_assignments.append(SlotAssignment(
                 slot_index=i,
                 slot_color=slot_color,
@@ -410,6 +512,11 @@ class VesselOptimizer:
             ))
             total_score += score
 
+        # Check if all required effects are present
+        required_ids = set(build.tiers.get("required", []))
+        missing_requirements = list(required_ids - assigned_effect_ids)
+        meets_requirements = len(missing_requirements) == 0
+
         return VesselResult(
             vessel_id=vessel_data.get("_id", 0),
             vessel_name=vessel_data["Name"],
@@ -418,33 +525,48 @@ class VesselOptimizer:
             slot_colors=slot_colors,
             assignments=slot_assignments,
             total_score=total_score,
+            meets_requirements=meets_requirements,
+            missing_requirements=missing_requirements,
         )
 
     def _greedy_solve(self, candidates_per_slot: list, num_slots: int,
                       build: BuildDefinition) -> list:
-        """Greedy assignment: pick best available relic per slot."""
-        # Merge all (score, slot_index, relic) and sort descending
-        all_options = []
-        for slot_idx, scored_list in enumerate(candidates_per_slot):
-            for score, relic in scored_list:
-                all_options.append((score, slot_idx, relic))
-        all_options.sort(key=lambda x: x[0], reverse=True)
+        """Greedy assignment with stacking-aware re-scoring.
 
+        Iteratively picks the best (slot, relic) pair considering current
+        vessel stacking state, then updates state and repeats.
+        """
         assigned = [None] * num_slots  # (relic, score) per slot
         used_handles = set()
-        active_conflicts = set()
+        vessel_eff = set()
+        vessel_compat = set()
+        vessel_no_stack = set()
 
-        for score, slot_idx, relic in all_options:
-            if assigned[slot_idx] is not None:
-                continue
-            if relic.ga_handle in used_handles:
-                continue
-            if self._has_conflict(relic, active_conflicts):
-                continue
+        for _ in range(num_slots):
+            best = None  # (score, slot_idx, relic)
 
+            for slot_idx in range(num_slots):
+                if assigned[slot_idx] is not None:
+                    continue
+                for _, relic in candidates_per_slot[slot_idx]:
+                    if relic.ga_handle in used_handles:
+                        continue
+                    score = self.scorer.score_relic_in_context(
+                        relic, build, vessel_eff,
+                        vessel_compat, vessel_no_stack)
+                    if best is None or score > best[0]:
+                        best = (score, slot_idx, relic)
+
+            if best is None:
+                break  # No candidates for any remaining slot
+
+            score, slot_idx, relic = best
             assigned[slot_idx] = (relic, score)
             used_handles.add(relic.ga_handle)
-            active_conflicts.update(self._get_conflict_ids(relic))
+            e, c, ns = self._get_relic_stacking_adds(relic)
+            vessel_eff.update(e)
+            vessel_compat.update(c)
+            vessel_no_stack.update(ns)
 
         # Fill empty slots
         for i in range(num_slots):
@@ -455,16 +577,17 @@ class VesselOptimizer:
 
     def _backtrack_solve(self, candidates_per_slot: list, num_slots: int,
                          build: BuildDefinition) -> list:
-        """Exhaustive search with pruning for small candidate sets."""
+        """Exhaustive search with stacking-aware scoring and pruning."""
         best_score = [-1]
         best_assignment = [None]
         start_time = time.time()
         timeout = 2.0  # seconds
 
         def backtrack(slot_idx, current_assignment, used_handles,
-                      active_conflicts, current_score):
+                      vessel_eff, vessel_compat, vessel_no_stack,
+                      current_score):
             if time.time() - start_time > timeout:
-                return  # Timeout, use best found so far
+                return
 
             if slot_idx == num_slots:
                 if current_score > best_score[0]:
@@ -475,40 +598,56 @@ class VesselOptimizer:
             # Try assigning no relic to this slot
             current_assignment[slot_idx] = (None, 0)
             backtrack(slot_idx + 1, current_assignment, used_handles,
-                      active_conflicts, current_score)
+                      vessel_eff, vessel_compat, vessel_no_stack,
+                      current_score)
 
             # Try each candidate
-            for score, relic in candidates_per_slot[slot_idx]:
+            for pre_score, relic in candidates_per_slot[slot_idx]:
                 if relic.ga_handle in used_handles:
                     continue
-                if self._has_conflict(relic, active_conflicts):
-                    continue
 
-                # Prune: even if remaining slots all scored max possible,
-                # can we beat best?
+                # Prune: pre-computed scores are upper bounds (stacking can
+                # only reduce scores), so use them for fast pruning
                 remaining_max = sum(
                     candidates_per_slot[s][0][0]
                     if candidates_per_slot[s] else 0
                     for s in range(slot_idx + 1, num_slots)
                 )
+                if current_score + pre_score + remaining_max <= best_score[0]:
+                    continue
+
+                # Score with stacking context
+                score = self.scorer.score_relic_in_context(
+                    relic, build, vessel_eff,
+                    vessel_compat, vessel_no_stack)
+
+                # Prune again with actual score
                 if current_score + score + remaining_max <= best_score[0]:
                     continue
 
+                # Compute stacking state additions
+                added_eff, added_compat, added_no_stack = \
+                    self._get_relic_stacking_adds(relic)
+
                 # Assign
-                new_conflicts = self._get_conflict_ids(relic)
                 current_assignment[slot_idx] = (relic, score)
                 used_handles.add(relic.ga_handle)
-                active_conflicts.update(new_conflicts)
+                vessel_eff.update(added_eff)
+                vessel_compat.update(added_compat)
+                vessel_no_stack.update(added_no_stack)
 
                 backtrack(slot_idx + 1, current_assignment, used_handles,
-                          active_conflicts, current_score + score)
+                          vessel_eff, vessel_compat, vessel_no_stack,
+                          current_score + score)
 
                 # Unassign
                 used_handles.discard(relic.ga_handle)
-                active_conflicts -= new_conflicts
+                vessel_eff -= added_eff
+                vessel_compat -= added_compat
+                vessel_no_stack -= added_no_stack
 
         initial = [(None, 0)] * num_slots
-        backtrack(0, initial, set(), set(), 0)
+        backtrack(0, initial, set(), set(), set(), set(), 0)
 
         if best_assignment[0] is None:
             return [(None, 0)] * num_slots
@@ -517,7 +656,11 @@ class VesselOptimizer:
     def optimize_all_vessels(self, build: BuildDefinition,
                              inventory: RelicInventory,
                              hero_type: int) -> list[VesselResult]:
-        """Try all vessels for a character, return top results sorted by score."""
+        """Try all vessels for a character, return top results sorted by score.
+
+        Results that meet requirements are sorted first, then by score.
+        Results that don't meet requirements are sorted last.
+        """
         vessels = self.data_source.get_all_vessels_for_hero(hero_type)
         results = []
 
@@ -528,5 +671,7 @@ class VesselOptimizer:
             result.vessel_id = v["vessel_id"]
             results.append(result)
 
-        results.sort(key=lambda r: r.total_score, reverse=True)
+        # Sort: vessels meeting requirements first (by score descending),
+        # then vessels not meeting requirements (by score descending)
+        results.sort(key=lambda r: (not r.meets_requirements, -r.total_score))
         return results

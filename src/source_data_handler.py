@@ -407,6 +407,56 @@ class SourceDataHandler:
             pass
         return f"Effect {effect_id}"
 
+    def _load_stacking_rules(self):
+        """Load stacking rules and build effect_id -> stacking_type cache."""
+        import orjson
+        rules_path = self.WORKING_DIR / "Resources" / "Json" / "stacking_rules.json"
+        self._stacking_cache: dict[int, str] = {}
+        if not rules_path.exists():
+            return
+        try:
+            rules = orjson.loads(rules_path.read_bytes())
+        except Exception:
+            return
+
+        # Build name -> stacking_type lookup (case-insensitive)
+        name_to_type: dict[str, str] = {}
+        for name, stype in rules.items():
+            if name.startswith("_"):
+                continue
+            name_to_type[name.lower()] = stype
+
+        # Resolve effect names to IDs
+        if self.effect_name is None:
+            self._load_text()
+        for _, row in self.effect_name.iterrows():
+            eff_id = int(row["id"])
+            eff_name = str(row["text"])
+            if eff_name == "%null%":
+                continue
+            # Try exact match (case-insensitive)
+            lower_name = eff_name.lower()
+            if lower_name in name_to_type:
+                self._stacking_cache[eff_id] = name_to_type[lower_name]
+                continue
+            # Strip parenthetical suffix and try again
+            # e.g. "Stamina recovers with each successful attack +1 (Night of the Beast)"
+            stripped = lower_name.rsplit("(", 1)[0].strip()
+            if stripped in name_to_type:
+                self._stacking_cache[eff_id] = name_to_type[stripped]
+
+    def get_effect_stacking_type(self, effect_id: int) -> str:
+        """Return stacking type for an effect: 'stack', 'unique', or 'no_stack'.
+
+        - 'stack': Fully additive, multiple copies all provide benefit.
+        - 'unique': Doesn't self-stack, but stacks with different variants.
+        - 'no_stack': Only one instance provides benefit, blocks group.
+        Default: 'stack' for unknown effects.
+        """
+        if not hasattr(self, '_stacking_cache'):
+            self._load_stacking_rules()
+        return self._stacking_cache.get(effect_id, "stack")
+
     def get_pool_effects(self, pool_id: int):
         if pool_id == -1:
             return []
