@@ -1,3 +1,5 @@
+import re
+
 import pandas as pd
 import pathlib
 from typing import Optional, Union
@@ -456,6 +458,163 @@ class SourceDataHandler:
         if not hasattr(self, '_stacking_cache'):
             self._load_stacking_rules()
         return self._stacking_cache.get(effect_id, "stack")
+
+    # ---- Effect Families (magnitude grouping) ----
+
+    _MAGNITUDE_RE = re.compile(r'^(.+?)\s+\+(\d+)%?$')
+
+    def _build_effect_families(self):
+        """Build effect family groupings from stacking_rules.json.
+
+        Groups effects like "Vigor +1/+2/+3" into a family "Vigor",
+        ordered by magnitude so higher variants score higher.
+        """
+        import orjson
+        self._effect_families: dict[str, dict] = {}
+        self._effect_id_to_family: dict[int, tuple] = {}
+
+        rules_path = self.WORKING_DIR / "Resources" / "Json" / "stacking_rules.json"
+        if not rules_path.exists():
+            return
+        try:
+            rules = orjson.loads(rules_path.read_bytes())
+        except Exception:
+            return
+
+        # Step 1: Parse effect names into (base_name, magnitude) groups
+        raw_groups: dict[str, list[tuple[str, int]]] = {}
+        for name in rules:
+            if name.startswith("_"):
+                continue
+            m = self._MAGNITUDE_RE.match(name)
+            if m:
+                base = m.group(1)
+                mag = int(m.group(2))
+            else:
+                base = name
+                mag = 0
+            raw_groups.setdefault(base, []).append((name, mag))
+
+        # Step 2: Keep only groups with 2+ members (real families)
+        # and where at least one member has magnitude > 0
+        for base, members in raw_groups.items():
+            if len(members) < 2:
+                continue
+            has_variant = any(mag > 0 for _, mag in members)
+            if not has_variant:
+                continue
+            # Sort by magnitude
+            members.sort(key=lambda x: x[1])
+            self._effect_families[base] = {
+                "members": [{"name": n, "magnitude": mag, "effect_ids": []}
+                            for n, mag in members],
+            }
+
+        # Step 3: Map effect names to IDs
+        if self.effect_name is None:
+            self._load_text()
+
+        # Build lowered name -> list of (family_base, member_index) lookups
+        # Also register variants with % stripped, since stacking_rules.json
+        # uses names like "Fire Attack Power Up +3%" but XML uses "+3"
+        family_name_lower: dict[str, list[tuple[str, int]]] = {}
+        for base, fam in self._effect_families.items():
+            for idx, member in enumerate(fam["members"]):
+                lower = member["name"].lower()
+                family_name_lower.setdefault(lower, []).append((base, idx))
+                # Also try without trailing %
+                if lower.endswith('%'):
+                    stripped = lower.rstrip('%')
+                    family_name_lower.setdefault(stripped, []).append((base, idx))
+
+        for _, row in self.effect_name.iterrows():
+            eff_id = int(row["id"])
+            eff_name = str(row["text"])
+            if eff_name == "%null%":
+                continue
+            lower = eff_name.lower()
+            # Try exact match
+            matches = family_name_lower.get(lower)
+            if not matches:
+                # Strip parenthetical suffix
+                stripped = lower.rsplit("(", 1)[0].strip()
+                matches = family_name_lower.get(stripped)
+            if matches:
+                for base, idx in matches:
+                    self._effect_families[base]["members"][idx]["effect_ids"].append(eff_id)
+
+        # Step 4: Build reverse lookup and clean up empty families
+        to_remove = []
+        for base, fam in self._effect_families.items():
+            total = len(fam["members"])
+            has_ids = False
+            for rank, member in enumerate(fam["members"], 1):
+                if member["effect_ids"]:
+                    has_ids = True
+                for eid in member["effect_ids"]:
+                    self._effect_id_to_family[eid] = (base, rank, total)
+            if not has_ids:
+                to_remove.append(base)
+        for base in to_remove:
+            del self._effect_families[base]
+
+    def _ensure_families(self):
+        if not hasattr(self, '_effect_families'):
+            self._build_effect_families()
+
+    def get_effect_family(self, effect_id: int) -> Optional[str]:
+        """Return the family base name for an effect, or None."""
+        self._ensure_families()
+        info = self._effect_id_to_family.get(effect_id)
+        return info[0] if info else None
+
+    def get_family_magnitude_weight(self, effect_id: int, base_weight: int) -> int:
+        """Return magnitude-scaled weight for an effect within its family.
+
+        Weight = base_weight * rank / total_members
+        (rank is 1-indexed position in ascending magnitude order)
+        """
+        self._ensure_families()
+        info = self._effect_id_to_family.get(effect_id)
+        if not info:
+            return base_weight
+        _, rank, total = info
+        return int(base_weight * rank / total)
+
+    def get_family_effect_ids(self, family_name: str) -> set:
+        """Get all effect IDs that belong to a family."""
+        self._ensure_families()
+        fam = self._effect_families.get(family_name)
+        if not fam:
+            return set()
+        ids = set()
+        for member in fam["members"]:
+            ids.update(member["effect_ids"])
+        return ids
+
+    def get_all_families_list(self) -> list[dict]:
+        """Get all effect families for the search dialog.
+
+        Returns list of dicts:
+            name: family base name (e.g. "Vigor")
+            member_names: list of member display names
+            member_ids: set of all effect IDs in family
+        """
+        self._ensure_families()
+        results = []
+        for base, fam in self._effect_families.items():
+            member_names = [m["name"] for m in fam["members"]]
+            member_ids = set()
+            for m in fam["members"]:
+                member_ids.update(m["effect_ids"])
+            if member_ids:
+                results.append({
+                    "name": base,
+                    "member_names": member_names,
+                    "member_ids": member_ids,
+                })
+        results.sort(key=lambda x: x["name"])
+        return results
 
     def get_pool_effects(self, pool_id: int):
         if pool_id == -1:

@@ -145,6 +145,12 @@ class BuildDefinition:
         "avoid": [],
         "blacklist": [],
     })
+    family_tiers: dict = field(default_factory=lambda: {
+        "required": [],
+        "preferred": [],
+        "avoid": [],
+        "blacklist": [],
+    })
     include_deep: bool = True
 
     def all_prioritized_effects(self) -> set:
@@ -158,6 +164,13 @@ class BuildDefinition:
         """Return the tier name an effect belongs to, or None."""
         for tier_name, effects in self.tiers.items():
             if effect_id in effects:
+                return tier_name
+        return None
+
+    def get_tier_for_family(self, family_name: str) -> Optional[str]:
+        """Return the tier name a family belongs to, or None."""
+        for tier_name, families in self.family_tiers.items():
+            if family_name in families:
                 return tier_name
         return None
 
@@ -184,11 +197,19 @@ class BuildStore:
                     "avoid": tiers.get("avoid", tiers.get("low_priority", [])),
                     "blacklist": tiers.get("blacklist", []),
                 }
+                family_tiers = b.get("family_tiers", {
+                    "required": [], "preferred": [],
+                    "avoid": [], "blacklist": [],
+                })
+                # Ensure all tier keys exist
+                for key in ("required", "preferred", "avoid", "blacklist"):
+                    family_tiers.setdefault(key, [])
                 self.builds[build_id] = BuildDefinition(
                     id=build_id,
                     name=b["name"],
                     character=b["character"],
                     tiers=migrated_tiers,
+                    family_tiers=family_tiers,
                     include_deep=b.get("include_deep", True),
                 )
         except Exception as e:
@@ -204,6 +225,7 @@ class BuildStore:
                 "name": b.name,
                 "character": b.character,
                 "tiers": b.tiers,
+                "family_tiers": b.family_tiers,
                 "include_deep": b.include_deep,
             }
         self.file_path.write_bytes(
@@ -244,15 +266,45 @@ class BuildScorer:
     def __init__(self, data_source: SourceDataHandler):
         self.data_source = data_source
 
+    def _resolve_tier_and_weight(self, eff_id: int,
+                                  build: BuildDefinition) -> tuple:
+        """Resolve tier and base weight for an effect.
+
+        Checks individual effect tiers first, then family tiers.
+        Returns (tier, weight) or (None, 0) if unmatched.
+        """
+        # Individual effect check
+        tier = build.get_tier_for_effect(eff_id)
+        if tier:
+            return tier, TIER_WEIGHTS.get(tier, 0)
+
+        # Family check
+        family_name = self.data_source.get_effect_family(eff_id)
+        if family_name:
+            ftier = build.get_tier_for_family(family_name)
+            if ftier:
+                if ftier == "preferred":
+                    weight = self.data_source.get_family_magnitude_weight(
+                        eff_id, TIER_WEIGHTS["preferred"])
+                    return ftier, weight
+                else:
+                    return ftier, TIER_WEIGHTS.get(ftier, 0)
+        return None, 0
+
     def has_blacklisted_effect(self, relic: OwnedRelic,
                                 build: BuildDefinition) -> bool:
         """Check if relic has any blacklisted effects."""
         blacklist_ids = set(build.tiers.get("blacklist", []))
-        if not blacklist_ids:
+        blacklist_families = build.family_tiers.get("blacklist", [])
+        if not blacklist_ids and not blacklist_families:
             return False
         for eff in relic.all_effects:
             if eff in blacklist_ids:
                 return True
+            if blacklist_families:
+                family = self.data_source.get_effect_family(eff)
+                if family and family in blacklist_families:
+                    return True
         return False
 
     def score_relic(self, relic: OwnedRelic,
@@ -262,43 +314,44 @@ class BuildScorer:
         for eff in relic.effects:
             if eff == EMPTY_EFFECT or eff == 0:
                 continue
-            tier = build.get_tier_for_effect(eff)
+            tier, weight = self._resolve_tier_and_weight(eff, build)
             if tier in ("preferred", "avoid"):
-                score += TIER_WEIGHTS[tier]
+                score += weight
         for curse in relic.curses:
             if curse == EMPTY_EFFECT or curse == 0:
                 continue
-            tier = build.get_tier_for_effect(curse)
+            tier, weight = self._resolve_tier_and_weight(curse, build)
             if tier in ("preferred", "avoid"):
-                score += TIER_WEIGHTS[tier]
+                score += weight
         score += TIER_BONUS.get(relic.effect_count, 0)
         return score
 
     def _effect_stacking_score(self, eff_id: int, tier: str,
+                                weight: int,
                                 vessel_effect_ids: set,
                                 vessel_compat_ids: set,
                                 vessel_no_stack_compat_ids: set) -> int:
         """Score a single effect considering stacking context.
 
-        Returns the tier weight if the effect provides value, 0 if redundant.
+        Returns the weight if the effect provides value, 0 if redundant.
         """
         stype = self.data_source.get_effect_stacking_type(eff_id)
         compat_id = self.data_source.get_effect_conflict_id(eff_id)
 
         if stype == "stack":
-            return TIER_WEIGHTS[tier]
+            return weight
         elif stype == "unique":
             if eff_id in vessel_effect_ids:
                 return 0  # Exact duplicate
             if compat_id != -1 and compat_id in vessel_no_stack_compat_ids:
                 return 0  # Blocked by a no_stack in same group
-            return TIER_WEIGHTS[tier]
+            return weight
         else:  # no_stack
             if compat_id != -1 and compat_id in vessel_compat_ids:
                 return 0  # Any group member already present
             if compat_id == -1 and eff_id in vessel_effect_ids:
                 return 0  # No group, same effect present
-            return TIER_WEIGHTS[tier]
+            return weight
 
     def score_relic_in_context(self, relic: OwnedRelic,
                                 build: BuildDefinition,
@@ -310,18 +363,18 @@ class BuildScorer:
         for eff in relic.effects:
             if eff == EMPTY_EFFECT or eff == 0:
                 continue
-            tier = build.get_tier_for_effect(eff)
+            tier, weight = self._resolve_tier_and_weight(eff, build)
             if tier in ("preferred", "avoid"):
                 score += self._effect_stacking_score(
-                    eff, tier, vessel_effect_ids,
+                    eff, tier, weight, vessel_effect_ids,
                     vessel_compat_ids, vessel_no_stack_compat_ids)
         for curse in relic.curses:
             if curse == EMPTY_EFFECT or curse == 0:
                 continue
-            tier = build.get_tier_for_effect(curse)
+            tier, weight = self._resolve_tier_and_weight(curse, build)
             if tier in ("preferred", "avoid"):
                 score += self._effect_stacking_score(
-                    curse, tier, vessel_effect_ids,
+                    curse, tier, weight, vessel_effect_ids,
                     vessel_compat_ids, vessel_no_stack_compat_ids)
         score += TIER_BONUS.get(relic.effect_count, 0)
         return score
@@ -340,13 +393,13 @@ class BuildScorer:
         for eff in relic.effects:
             if eff == EMPTY_EFFECT or eff == 0:
                 continue
-            tier = build.get_tier_for_effect(eff)
+            tier, weight = self._resolve_tier_and_weight(eff, build)
             name = self.data_source.get_effect_name(eff)
-            base_score = TIER_WEIGHTS.get(tier, 0) if tier else 0
+            base_score = weight if tier else 0
             redundant = False
             if other_effect_ids is not None and tier in ("preferred", "avoid"):
                 ctx_score = self._effect_stacking_score(
-                    eff, tier, other_effect_ids,
+                    eff, tier, weight, other_effect_ids,
                     other_compat_ids or set(),
                     other_no_stack_compat_ids or set())
                 redundant = (ctx_score == 0 and base_score != 0)
@@ -362,13 +415,13 @@ class BuildScorer:
         for curse in relic.curses:
             if curse == EMPTY_EFFECT or curse == 0:
                 continue
-            tier = build.get_tier_for_effect(curse)
+            tier, weight = self._resolve_tier_and_weight(curse, build)
             name = self.data_source.get_effect_name(curse)
-            base_score = TIER_WEIGHTS.get(tier, 0) if tier else 0
+            base_score = weight if tier else 0
             redundant = False
             if other_effect_ids is not None and tier in ("preferred", "avoid"):
                 ctx_score = self._effect_stacking_score(
-                    curse, tier, other_effect_ids,
+                    curse, tier, weight, other_effect_ids,
                     other_compat_ids or set(),
                     other_no_stack_compat_ids or set())
                 redundant = (ctx_score == 0 and base_score != 0)
@@ -513,8 +566,15 @@ class VesselOptimizer:
             total_score += score
 
         # Check if all required effects are present
+        missing_requirements = []
+        # Individual required effects
         required_ids = set(build.tiers.get("required", []))
-        missing_requirements = list(required_ids - assigned_effect_ids)
+        missing_requirements.extend(required_ids - assigned_effect_ids)
+        # Family required effects
+        for family_name in build.family_tiers.get("required", []):
+            family_ids = self.data_source.get_family_effect_ids(family_name)
+            if not (assigned_effect_ids & family_ids):
+                missing_requirements.append(family_name)
         meets_requirements = len(missing_requirements) == 0
 
         return VesselResult(

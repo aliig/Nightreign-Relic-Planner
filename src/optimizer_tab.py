@@ -57,14 +57,21 @@ def autosize_treeview_columns(tree, padding=20, min_width=50):
 
 
 class EffectSearchDialog:
-    """Dialog for searching and selecting effects to add to a tier."""
+    """Dialog for searching and selecting effects to add to a tier.
+
+    Supports both individual effects and effect families (groups).
+    Family items have a "family" key in the result dict.
+    """
 
     def __init__(self, parent, effects_list: list, character: str,
-                 exclude_ids: set, show_debuffs_first: bool = False):
+                 exclude_ids: set, show_debuffs_first: bool = False,
+                 families_list: list = None,
+                 exclude_families: set = None):
         self.result = None
         self.effects_list = effects_list
         self.character = character
         self.exclude_ids = exclude_ids
+        self.exclude_families = exclude_families or set()
 
         self.dialog = tk.Toplevel(parent)
         self.dialog.title("Add Effect")
@@ -108,11 +115,34 @@ class EffectSearchDialog:
         ttk.Button(btn_frame, text="Cancel",
                    command=self.dialog.destroy).pack(side='right', padx=5)
 
-        # Build filtered list
+        # Build family items
+        self._family_items = []
+        if families_list:
+            for fam in families_list:
+                if fam["name"] in self.exclude_families:
+                    continue
+                # Exclude families whose member IDs are all already excluded
+                remaining = fam["member_ids"] - exclude_ids
+                if not remaining:
+                    continue
+                self._family_items.append(fam)
+            self._family_items.sort(key=lambda f: f["name"])
+
+        # Build individual effect items
         self._all_items = []
+        # Collect IDs covered by non-excluded families for filtering
+        family_covered_ids = set()
+        if families_list:
+            for fam in families_list:
+                if fam["name"] not in self.exclude_families:
+                    family_covered_ids.update(fam["member_ids"])
+
         for eff in effects_list:
             eff_id = eff["id"]
             if eff_id in exclude_ids:
+                continue
+            # Skip individual effects that are covered by a family
+            if eff_id in family_covered_ids:
                 continue
             self._all_items.append(eff)
 
@@ -131,6 +161,18 @@ class EffectSearchDialog:
         char_only = self.char_filter_var.get()
         self._filtered = []
 
+        # Families first
+        for fam in self._family_items:
+            if search and search not in fam["name"].lower():
+                continue
+            members_str = ", ".join(fam["member_names"])
+            self.listbox.insert(
+                tk.END, f"[Group] {fam['name']} ({members_str})")
+            self._filtered.append({"family": fam["name"],
+                                   "name": fam["name"],
+                                   "member_names": fam["member_names"]})
+
+        # Individual effects
         for eff in self._all_items:
             if search and search not in eff["name"].lower():
                 continue
@@ -375,11 +417,26 @@ class OptimizerTab:
         effects_json = self.effects_json
         for tier_key, tree in self.tier_trees.items():
             tree.delete(*tree.get_children())
+            # Individual effects
             for eff_id in build.tiers.get(tier_key, []):
                 name = effects_json.get(str(eff_id), {}).get(
                     "name", f"Effect {eff_id}")
                 tree.insert('', 'end', values=(name,),
                             tags=('item', str(eff_id)))
+            # Family entries
+            for family_name in build.family_tiers.get(tier_key, []):
+                families = self.data_source.get_all_families_list()
+                member_names = []
+                for fam in families:
+                    if fam["name"] == family_name:
+                        member_names = fam["member_names"]
+                        break
+                if member_names:
+                    display = f"[Group] {family_name} ({', '.join(member_names)})"
+                else:
+                    display = f"[Group] {family_name}"
+                tree.insert('', 'end', values=(display,),
+                            tags=('item', f'family:{family_name}'))
 
     def _save_current_build(self):
         """Save UI state back to the current build."""
@@ -391,12 +448,16 @@ class OptimizerTab:
 
         for tier_key, tree in self.tier_trees.items():
             effect_ids = []
+            family_names = []
             for item in tree.get_children():
                 tags = tree.item(item, 'tags')
                 for tag in tags:
-                    if tag != 'item' and tag.isdigit():
+                    if tag.startswith('family:'):
+                        family_names.append(tag[7:])  # Strip "family:" prefix
+                    elif tag != 'item' and tag.isdigit():
                         effect_ids.append(int(tag))
             build.tiers[tier_key] = effect_ids
+            build.family_tiers[tier_key] = family_names
 
         self.store.update(build)
 
@@ -451,27 +512,49 @@ class OptimizerTab:
             messagebox.showinfo("Info", "Create a build first.")
             return
 
-        # Collect already-used effect IDs
+        # Collect already-used effect IDs and family names
         exclude = set()
+        exclude_families = set()
         for tk_key, tree in self.tier_trees.items():
             for item in tree.get_children():
                 for tag in tree.item(item, 'tags'):
-                    if tag != 'item' and tag.isdigit():
+                    if tag.startswith('family:'):
+                        fname = tag[7:]
+                        exclude_families.add(fname)
+                        # Also exclude all member IDs of selected families
+                        exclude.update(
+                            self.data_source.get_family_effect_ids(fname))
+                    elif tag != 'item' and tag.isdigit():
                         exclude.add(int(tag))
 
         character = self.char_var.get() or "Wylder"
         effects_list = self._get_effects_list()
+        families_list = self.data_source.get_all_families_list()
 
         dialog = EffectSearchDialog(
             self.parent, effects_list, character, exclude,
-            show_debuffs_first=show_debuffs_first)
+            show_debuffs_first=show_debuffs_first,
+            families_list=families_list,
+            exclude_families=exclude_families)
         self.parent.wait_window(dialog.dialog)
 
         if dialog.result:
             eff = dialog.result
             tree = self.tier_trees[tier_key]
-            tree.insert('', 'end', values=(eff['name'],),
-                        tags=('item', str(eff['id'])))
+            if "family" in eff:
+                # Family selection
+                family_name = eff["family"]
+                member_names = eff.get("member_names", [])
+                if member_names:
+                    display = f"[Group] {family_name} ({', '.join(member_names)})"
+                else:
+                    display = f"[Group] {family_name}"
+                tree.insert('', 'end', values=(display,),
+                            tags=('item', f'family:{family_name}'))
+            else:
+                # Individual effect selection
+                tree.insert('', 'end', values=(eff['name'],),
+                            tags=('item', str(eff['id'])))
             self._save_current_build()
 
     def _remove_effect(self, tier_key: str):
@@ -605,11 +688,15 @@ class OptimizerTab:
                 foreground='#FF4444',
                 font=('TkDefaultFont', 8, 'bold')
             ).pack(anchor='w')
-            for eff_id in result.missing_requirements:
-                eff_name = self.data_source.get_effect_name(eff_id)
+            for req in result.missing_requirements:
+                if isinstance(req, str):
+                    # Family requirement
+                    display_name = f"{req} (group)"
+                else:
+                    display_name = self.data_source.get_effect_name(req)
                 ttk.Label(
                     missing_frame,
-                    text=f"  • {eff_name}",
+                    text=f"  • {display_name}",
                     foreground='#FF4444',
                     font=('TkDefaultFont', 8)
                 ).pack(anchor='w')
