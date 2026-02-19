@@ -1,5 +1,5 @@
 {
-  "version": 3,
+  "version": 4,
   "builds": {
     "f16d30fd": {
       "name": "birdtank",
@@ -9,6 +9,7 @@
           7033400
         ],
         "preferred": [],
+        "nice_to_have": [],
         "avoid": [],
         "blacklist": []
       },
@@ -16,7 +17,8 @@
         "required": [],
         "preferred": [],
         "avoid": [],
-        "blacklist": []
+        "blacklist": [],
+        "nice_to_have": []
       },
       "include_deep": true,
       "curse_max": 1
@@ -26,17 +28,29 @@
       "character": "Raider",
       "tiers": {
         "required": [
-          7031300
+          7031300,
+          7035400,
+          7037700,
+          7035500
         ],
         "preferred": [],
+        "nice_to_have": [
+          8620100
+        ],
         "avoid": [],
         "blacklist": []
       },
       "family_tiers": {
-        "required": [],
-        "preferred": [],
+        "required": [
+          "Taking attacks improves attack power",
+          "Improved Damage Negation at Low HP"
+        ],
+        "preferred": [
+          "Physical Attack Up"
+        ],
         "avoid": [],
-        "blacklist": []
+        "blacklist": [],
+        "nice_to_have": []
       },
       "include_deep": true,
       "curse_max": 1

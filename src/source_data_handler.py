@@ -436,6 +436,9 @@ class SourceDataHandler:
             eff_name = str(row["text"])
             if eff_name == "%null%":
                 continue
+            # Only cache effects that actually exist as game params
+            if eff_id not in self.effect_params.index:
+                continue
             # Try exact match (case-insensitive)
             lower_name = eff_name.lower()
             if lower_name in name_to_type:
@@ -532,6 +535,10 @@ class SourceDataHandler:
             eff_name = str(row["text"])
             if eff_name == "%null%":
                 continue
+            # Only include effects that actually exist as game params
+            # (some FMG text entries are phantoms with no param backing)
+            if eff_id not in self.effect_params.index:
+                continue
             lower = eff_name.lower()
             # Try exact match
             matches = family_name_lower.get(lower)
@@ -542,6 +549,10 @@ class SourceDataHandler:
             if matches:
                 for base, idx in matches:
                     self._effect_families[base]["members"][idx]["effect_ids"].append(eff_id)
+
+        # Step 3.5: Remove members with no valid effect IDs
+        for base, fam in self._effect_families.items():
+            fam["members"] = [m for m in fam["members"] if m["effect_ids"]]
 
         # Step 4: Build reverse lookup and clean up empty families
         to_remove = []

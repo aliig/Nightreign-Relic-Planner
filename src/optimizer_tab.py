@@ -101,12 +101,14 @@ class EffectSearchDialog:
         ttk.Button(btn_frame, text="Cancel",
                    command=self.dialog.destroy).pack(side='right', padx=5)
 
-        # Build family items
+        # Build family items (only show families with 2+ valid members as groups)
         self._family_items = []
         if families_list:
             for fam in families_list:
                 if fam["name"] in self.exclude_families:
                     continue
+                if len(fam["member_names"]) < 2:
+                    continue  # Single-member families show as individual effects
                 # Exclude families whose member IDs are all already excluded
                 remaining = fam["member_ids"] - exclude_ids
                 if not remaining:
@@ -116,11 +118,11 @@ class EffectSearchDialog:
 
         # Build individual effect items
         self._all_items = []
-        # Collect IDs covered by non-excluded families for filtering
+        # Collect IDs covered by non-excluded multi-member families for filtering
         family_covered_ids = set()
         if families_list:
             for fam in families_list:
-                if fam["name"] not in self.exclude_families:
+                if fam["name"] not in self.exclude_families and len(fam["member_names"]) >= 2:
                     family_covered_ids.update(fam["member_ids"])
 
         for eff in effects_list:
