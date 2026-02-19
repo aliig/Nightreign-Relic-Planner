@@ -446,11 +446,16 @@ class SourceDataHandler:
             return
 
         # Build name -> stacking_type lookup (case-insensitive)
+        # Also register %-stripped variants since stacking_rules.json uses
+        # names like "Physical Attack Up +4%" but FMG text uses "+4" (no %)
         name_to_type: dict[str, str] = {}
         for name, stype in rules.items():
             if name.startswith("_"):
                 continue
-            name_to_type[name.lower()] = stype
+            lower = name.lower()
+            name_to_type[lower] = stype
+            if lower.endswith('%'):
+                name_to_type[lower.rstrip('%')] = stype
 
         # Resolve effect names to IDs
         if self.effect_name is None:

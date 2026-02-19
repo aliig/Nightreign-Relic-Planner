@@ -23,34 +23,64 @@
       "include_deep": true,
       "curse_max": 1
     },
-    "40db93b5": {
-      "name": "dregs",
+    "77ec510b": {
+      "name": "test2",
+      "character": "Wylder",
+      "tiers": {
+        "required": [],
+        "preferred": [],
+        "nice_to_have": [],
+        "avoid": [],
+        "blacklist": []
+      },
+      "family_tiers": {
+        "required": [],
+        "preferred": [],
+        "nice_to_have": [],
+        "avoid": [],
+        "blacklist": []
+      },
+      "include_deep": true,
+      "curse_max": 1
+    },
+    "6a73812f": {
+      "name": "dregs2",
       "character": "Raider",
       "tiers": {
         "required": [
-          7031300,
           7035400,
+          7032200,
           7037700,
+          7031300,
+          7170100,
           7035500
         ],
-        "preferred": [],
+        "preferred": [
+          8660101,
+          6820100
+        ],
         "nice_to_have": [
-          8620100
+          7040000
         ],
         "avoid": [],
         "blacklist": []
       },
       "family_tiers": {
         "required": [
-          "Taking attacks improves attack power",
-          "Improved Damage Negation at Low HP"
+          "Partial HP Restoration upon Post-Damage Attacks"
         ],
         "preferred": [
-          "Physical Attack Up"
+          "Physical Attack Up",
+          "Improved Physical Damage Negation"
+        ],
+        "nice_to_have": [
+          "Strength",
+          "Poise",
+          "Vigor",
+          "Improved Affinity Damage Negation"
         ],
         "avoid": [],
-        "blacklist": [],
-        "nice_to_have": []
+        "blacklist": []
       },
       "include_deep": true,
       "curse_max": 1
