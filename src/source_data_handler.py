@@ -402,9 +402,18 @@ class SourceDataHandler:
         if self.effect_name is None:
             self._load_text()
         try:
+            # Try direct ID match first (works when param ID == text ID)
             row = self.effect_name[self.effect_name["id"] == effect_id]
             if not row.empty:
                 return row["text"].values[0]
+            # Fall back to attachTextId lookup (some effects have a
+            # different param ID than their text ID)
+            if effect_id in self.effect_params.index:
+                text_id = int(self.effect_params.loc[effect_id, "attachTextId"])
+                if text_id != -1:
+                    row = self.effect_name[self.effect_name["id"] == text_id]
+                    if not row.empty:
+                        return row["text"].values[0]
         except Exception:
             pass
         return f"Effect {effect_id}"
