@@ -15,13 +15,19 @@ from globals import COLOR_MAP, RELIC_GROUPS
 from source_data_handler import SourceDataHandler
 
 
-# Tier weights for scoring (required and blacklist are absolute, not scored)
+# Tier weights for scoring
 TIER_WEIGHTS = {
-    "required": 0,      # Absolute requirement, not scored
+    "required": 100,    # High priority + absolute requirement check
     "preferred": 50,    # Positive scoring
     "avoid": -20,       # Negative scoring
     "blacklist": 0,     # Absolute exclusion, not scored
 }
+
+# Penalty applied per excess curse beyond the build's curse_max limit
+CURSE_EXCESS_PENALTY = -200
+
+# Tiers that contribute to numeric scoring (excludes blacklist which is absolute)
+SCORED_TIERS = ("required", "preferred", "avoid")
 
 # Small bonus for relics with more effect slots (tiebreaker)
 TIER_BONUS = {3: 5, 2: 2, 1: 0, 0: 0}
@@ -152,6 +158,7 @@ class BuildDefinition:
         "blacklist": [],
     })
     include_deep: bool = True
+    curse_max: int = 1  # Max times the same curse is tolerated (0=avoid all, 1=default)
 
     def all_prioritized_effects(self) -> set:
         """All effect IDs across all tiers."""
@@ -211,13 +218,14 @@ class BuildStore:
                     tiers=migrated_tiers,
                     family_tiers=family_tiers,
                     include_deep=b.get("include_deep", True),
+                    curse_max=b.get("curse_max", 1),
                 )
         except Exception as e:
             print(f"[BuildStore] Error loading builds: {e}")
 
     def save(self):
         data = {
-            "version": 2,  # Version 2: new tier names, no curse_tolerance
+            "version": 3,  # Version 3: adds curse_max, required tier scoring
             "builds": {}
         }
         for build_id, b in self.builds.items():
@@ -227,6 +235,7 @@ class BuildStore:
                 "tiers": b.tiers,
                 "family_tiers": b.family_tiers,
                 "include_deep": b.include_deep,
+                "curse_max": b.curse_max,
             }
         self.file_path.write_bytes(
             orjson.dumps(data, option=orjson.OPT_INDENT_2)
@@ -283,9 +292,9 @@ class BuildScorer:
         if family_name:
             ftier = build.get_tier_for_family(family_name)
             if ftier:
-                if ftier == "preferred":
+                if ftier in ("preferred", "required"):
                     weight = self.data_source.get_family_magnitude_weight(
-                        eff_id, TIER_WEIGHTS["preferred"])
+                        eff_id, TIER_WEIGHTS[ftier])
                     return ftier, weight
                 else:
                     return ftier, TIER_WEIGHTS.get(ftier, 0)
@@ -315,13 +324,13 @@ class BuildScorer:
             if eff == EMPTY_EFFECT or eff == 0:
                 continue
             tier, weight = self._resolve_tier_and_weight(eff, build)
-            if tier in ("preferred", "avoid"):
+            if tier in SCORED_TIERS:
                 score += weight
         for curse in relic.curses:
             if curse == EMPTY_EFFECT or curse == 0:
                 continue
             tier, weight = self._resolve_tier_and_weight(curse, build)
-            if tier in ("preferred", "avoid"):
+            if tier in SCORED_TIERS:
                 score += weight
         score += TIER_BONUS.get(relic.effect_count, 0)
         return score
@@ -357,14 +366,15 @@ class BuildScorer:
                                 build: BuildDefinition,
                                 vessel_effect_ids: set,
                                 vessel_compat_ids: set,
-                                vessel_no_stack_compat_ids: set) -> int:
+                                vessel_no_stack_compat_ids: set,
+                                vessel_curse_counts: dict = None) -> int:
         """Score a relic considering what's already assigned to the vessel."""
         score = 0
         for eff in relic.effects:
             if eff == EMPTY_EFFECT or eff == 0:
                 continue
             tier, weight = self._resolve_tier_and_weight(eff, build)
-            if tier in ("preferred", "avoid"):
+            if tier in SCORED_TIERS:
                 score += self._effect_stacking_score(
                     eff, tier, weight, vessel_effect_ids,
                     vessel_compat_ids, vessel_no_stack_compat_ids)
@@ -372,10 +382,19 @@ class BuildScorer:
             if curse == EMPTY_EFFECT or curse == 0:
                 continue
             tier, weight = self._resolve_tier_and_weight(curse, build)
-            if tier in ("preferred", "avoid"):
+            if tier in SCORED_TIERS:
                 score += self._effect_stacking_score(
                     curse, tier, weight, vessel_effect_ids,
                     vessel_compat_ids, vessel_no_stack_compat_ids)
+        # Penalize relics whose curses would exceed curse_max
+        if vessel_curse_counts is not None:
+            curse_max = build.curse_max
+            for curse in relic.curses:
+                if curse == EMPTY_EFFECT or curse == 0:
+                    continue
+                current_count = vessel_curse_counts.get(curse, 0)
+                if current_count >= curse_max:
+                    score += CURSE_EXCESS_PENALTY
         score += TIER_BONUS.get(relic.effect_count, 0)
         return score
 
@@ -397,7 +416,7 @@ class BuildScorer:
             name = self.data_source.get_effect_name(eff)
             base_score = weight if tier else 0
             redundant = False
-            if other_effect_ids is not None and tier in ("preferred", "avoid"):
+            if other_effect_ids is not None and tier in SCORED_TIERS:
                 ctx_score = self._effect_stacking_score(
                     eff, tier, weight, other_effect_ids,
                     other_compat_ids or set(),
@@ -419,7 +438,7 @@ class BuildScorer:
             name = self.data_source.get_effect_name(curse)
             base_score = weight if tier else 0
             redundant = False
-            if other_effect_ids is not None and tier in ("preferred", "avoid"):
+            if other_effect_ids is not None and tier in SCORED_TIERS:
                 ctx_score = self._effect_stacking_score(
                     curse, tier, weight, other_effect_ids,
                     other_compat_ids or set(),
@@ -487,6 +506,11 @@ class VesselOptimizer:
                     no_stack_compat_ids.add(compat_id)
         return effect_ids, compat_ids, no_stack_compat_ids
 
+    @staticmethod
+    def _get_relic_curse_ids(relic: OwnedRelic) -> list:
+        """Get non-empty curse IDs from a relic."""
+        return [c for c in relic.curses if c != EMPTY_EFFECT and c != 0]
+
     def optimize(self, build: BuildDefinition,
                  inventory: RelicInventory,
                  vessel_data: dict) -> VesselResult:
@@ -534,6 +558,7 @@ class VesselOptimizer:
         vessel_eff = set()
         vessel_compat = set()
         vessel_no_stack = set()
+        vessel_curse_counts: dict[int, int] = {}
 
         for i in range(num_slots):
             is_deep = i >= 3
@@ -542,7 +567,8 @@ class VesselOptimizer:
 
             if relic:
                 score = self.scorer.score_relic_in_context(
-                    relic, build, vessel_eff, vessel_compat, vessel_no_stack)
+                    relic, build, vessel_eff, vessel_compat, vessel_no_stack,
+                    vessel_curse_counts)
                 breakdown = self.scorer.get_breakdown(
                     relic, build, vessel_eff, vessel_compat, vessel_no_stack)
                 assigned_effect_ids.update(relic.all_effects)
@@ -551,6 +577,9 @@ class VesselOptimizer:
                 vessel_eff.update(e)
                 vessel_compat.update(c)
                 vessel_no_stack.update(ns)
+                for curse_id in self._get_relic_curse_ids(relic):
+                    vessel_curse_counts[curse_id] = \
+                        vessel_curse_counts.get(curse_id, 0) + 1
             else:
                 score = 0
                 breakdown = []
@@ -601,6 +630,7 @@ class VesselOptimizer:
         vessel_eff = set()
         vessel_compat = set()
         vessel_no_stack = set()
+        vessel_curse_counts: dict[int, int] = {}
 
         for _ in range(num_slots):
             best = None  # (score, slot_idx, relic)
@@ -613,7 +643,8 @@ class VesselOptimizer:
                         continue
                     score = self.scorer.score_relic_in_context(
                         relic, build, vessel_eff,
-                        vessel_compat, vessel_no_stack)
+                        vessel_compat, vessel_no_stack,
+                        vessel_curse_counts)
                     if best is None or score > best[0]:
                         best = (score, slot_idx, relic)
 
@@ -627,6 +658,9 @@ class VesselOptimizer:
             vessel_eff.update(e)
             vessel_compat.update(c)
             vessel_no_stack.update(ns)
+            for curse_id in self._get_relic_curse_ids(relic):
+                vessel_curse_counts[curse_id] = \
+                    vessel_curse_counts.get(curse_id, 0) + 1
 
         # Fill empty slots
         for i in range(num_slots):
@@ -645,7 +679,7 @@ class VesselOptimizer:
 
         def backtrack(slot_idx, current_assignment, used_handles,
                       vessel_eff, vessel_compat, vessel_no_stack,
-                      current_score):
+                      vessel_curse_counts, current_score):
             if time.time() - start_time > timeout:
                 return
 
@@ -659,7 +693,7 @@ class VesselOptimizer:
             current_assignment[slot_idx] = (None, 0)
             backtrack(slot_idx + 1, current_assignment, used_handles,
                       vessel_eff, vessel_compat, vessel_no_stack,
-                      current_score)
+                      vessel_curse_counts, current_score)
 
             # Try each candidate
             for pre_score, relic in candidates_per_slot[slot_idx]:
@@ -679,7 +713,8 @@ class VesselOptimizer:
                 # Score with stacking context
                 score = self.scorer.score_relic_in_context(
                     relic, build, vessel_eff,
-                    vessel_compat, vessel_no_stack)
+                    vessel_compat, vessel_no_stack,
+                    vessel_curse_counts)
 
                 # Prune again with actual score
                 if current_score + score + remaining_max <= best_score[0]:
@@ -688,6 +723,7 @@ class VesselOptimizer:
                 # Compute stacking state additions
                 added_eff, added_compat, added_no_stack = \
                     self._get_relic_stacking_adds(relic)
+                added_curses = self._get_relic_curse_ids(relic)
 
                 # Assign
                 current_assignment[slot_idx] = (relic, score)
@@ -695,19 +731,26 @@ class VesselOptimizer:
                 vessel_eff.update(added_eff)
                 vessel_compat.update(added_compat)
                 vessel_no_stack.update(added_no_stack)
+                for cid in added_curses:
+                    vessel_curse_counts[cid] = \
+                        vessel_curse_counts.get(cid, 0) + 1
 
                 backtrack(slot_idx + 1, current_assignment, used_handles,
                           vessel_eff, vessel_compat, vessel_no_stack,
-                          current_score + score)
+                          vessel_curse_counts, current_score + score)
 
                 # Unassign
                 used_handles.discard(relic.ga_handle)
                 vessel_eff -= added_eff
                 vessel_compat -= added_compat
                 vessel_no_stack -= added_no_stack
+                for cid in added_curses:
+                    vessel_curse_counts[cid] -= 1
+                    if vessel_curse_counts[cid] == 0:
+                        del vessel_curse_counts[cid]
 
         initial = [(None, 0)] * num_slots
-        backtrack(0, initial, set(), set(), set(), set(), 0)
+        backtrack(0, initial, set(), set(), set(), set(), {}, 0)
 
         if best_assignment[0] is None:
             return [(None, 0)] * num_slots

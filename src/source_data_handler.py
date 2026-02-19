@@ -453,11 +453,11 @@ class SourceDataHandler:
         - 'stack': Fully additive, multiple copies all provide benefit.
         - 'unique': Doesn't self-stack, but stacks with different variants.
         - 'no_stack': Only one instance provides benefit, blocks group.
-        Default: 'stack' for unknown effects.
+        Default: 'no_stack' for unknown effects (safe fallback).
         """
         if not hasattr(self, '_stacking_cache'):
             self._load_stacking_rules()
-        return self._stacking_cache.get(effect_id, "stack")
+        return self._stacking_cache.get(effect_id, "no_stack")
 
     # ---- Effect Families (magnitude grouping) ----
 

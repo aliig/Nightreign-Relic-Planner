@@ -23,10 +23,10 @@ RELIC_COLOR_HEX = {
 }
 
 TIER_DISPLAY = {
-    "required": "Required Properties",
+    "required": "Essential Properties",
     "preferred": "Preferred Properties",
     "avoid": "Avoid Properties",
-    "blacklist": "Blacklist Properties",
+    "blacklist": "Excluded Properties",
 }
 
 TIER_COLORS = {
@@ -266,6 +266,17 @@ class OptimizerTab:
                         variable=self.deep_var,
                         command=self._on_option_changed).pack(side='left', padx=2)
 
+        ttk.Separator(row2, orient='vertical').pack(
+            side='left', padx=8, fill='y')
+
+        ttk.Label(row2, text="Max same curse:").pack(side='left', padx=(0, 2))
+        self.curse_max_var = tk.IntVar(value=1)
+        self.curse_max_spin = ttk.Spinbox(
+            row2, from_=0, to=6, width=3,
+            textvariable=self.curse_max_var,
+            command=self._on_option_changed)
+        self.curse_max_spin.pack(side='left', padx=2)
+
         # -- Tier sections (scrollable) --
         tier_canvas_frame = ttk.Frame(left_frame)
         tier_canvas_frame.pack(fill='both', expand=True, padx=5, pady=2)
@@ -348,11 +359,10 @@ class OptimizerTab:
     def _create_tier_section(self, tier_key: str):
         """Create a labeled frame with a treeview for one tier."""
         display_name = TIER_DISPLAY[tier_key]
-        # Only show points for scored tiers (preferred, avoid)
-        if tier_key in ("preferred", "avoid"):
+        if tier_key == "required":
+            weight_str = f" ({TIER_WEIGHTS[tier_key]:+d} pts, Must Have)"
+        elif tier_key in ("preferred", "avoid"):
             weight_str = f" ({TIER_WEIGHTS[tier_key]:+d} pts)"
-        elif tier_key == "required":
-            weight_str = " (Absolute Requirement)"
         else:  # blacklist
             weight_str = " (Absolute Exclusion)"
         color = TIER_COLORS[tier_key]
@@ -413,6 +423,7 @@ class OptimizerTab:
             self.char_combo.set(build.character)
         # Options
         self.deep_var.set(build.include_deep)
+        self.curse_max_var.set(build.curse_max)
         # Tiers
         effects_json = self.effects_json
         for tier_key, tree in self.tier_trees.items():
@@ -445,6 +456,7 @@ class OptimizerTab:
             return
         build.character = self.char_var.get() or build.character
         build.include_deep = self.deep_var.get()
+        build.curse_max = self.curse_max_var.get()
 
         for tier_key, tree in self.tier_trees.items():
             effect_ids = []
@@ -612,7 +624,7 @@ class OptimizerTab:
                     foreground='green')
             else:
                 self.status_label.config(
-                    text=f"Done. No vessels meet all requirements. Best score: {results[0].total_score}",
+                    text=f"Done. No vessels meet all essential properties. Best score: {results[0].total_score}",
                     foreground='orange')
         else:
             self.status_label.config(
@@ -641,7 +653,7 @@ class OptimizerTab:
             warning_frame.pack(fill='x', padx=10, pady=10)
             ttk.Label(
                 warning_frame,
-                text="⚠ No vessels meet all required properties.",
+                text="⚠ No vessels meet all essential properties.",
                 foreground='#FF4444',
                 font=('TkDefaultFont', 10, 'bold')
             ).pack(anchor='w')
@@ -660,7 +672,7 @@ class OptimizerTab:
         # Vessel header - add indicator if requirements not met
         header_text = f"#{rank}: {result.vessel_name} (Score: {result.total_score})"
         if not result.meets_requirements:
-            header_text += " ⚠ Missing Requirements"
+            header_text += " ⚠ Missing Essentials"
 
         card = ttk.LabelFrame(self.results_inner, text=header_text)
         card.pack(fill='x', padx=5, pady=5)
@@ -684,7 +696,7 @@ class OptimizerTab:
             missing_frame.pack(fill='x', padx=5, pady=(2, 5))
             ttk.Label(
                 missing_frame,
-                text="Missing Required:",
+                text="Missing Essential:",
                 foreground='#FF4444',
                 font=('TkDefaultFont', 8, 'bold')
             ).pack(anchor='w')
