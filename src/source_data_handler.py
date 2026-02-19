@@ -920,6 +920,7 @@ class SourceDataHandler:
         ]
 
         results = []
+        seen_names: dict[str, int] = {}  # display_name -> index in results
         for _, row in full_params.iterrows():
             effect_id = int(row["ID"])
             if effect_id == 0:
@@ -928,6 +929,15 @@ class SourceDataHandler:
             name = self.get_effect_name(effect_id)
             if name == "Empty" or name.startswith("Effect "):
                 continue
+
+            # Deduplicate by resolved display name — many variant param IDs
+            # share the same name. Prefer the entry where param_id == text_id.
+            if name in seen_names:
+                text_id = int(row["attachTextId"])
+                if effect_id == text_id:
+                    results[seen_names[name]]["id"] = effect_id
+                continue
+            seen_names[name] = len(results)
 
             compat_id = int(row["compatibilityId"])
             is_debuff = bool(row.get("isDebuff", 0))

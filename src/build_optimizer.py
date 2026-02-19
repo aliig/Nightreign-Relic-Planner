@@ -301,23 +301,48 @@ class BuildScorer:
 
     def __init__(self, data_source: SourceDataHandler):
         self.data_source = data_source
+        self._name_cache: dict[str, str] = {}
+        self._name_cache_tiers = None
+
+    def _get_name_cache(self, build: BuildDefinition) -> dict[str, str]:
+        """Lazy-build a display_name -> tier cache for name-based matching.
+
+        Handles cases where multiple param IDs share the same display name
+        (e.g., different contexts for "Improved Damage Negation at Low HP").
+        """
+        if self._name_cache_tiers is build.tiers:
+            return self._name_cache
+        cache: dict[str, str] = {}
+        for tier_name, effect_ids in build.tiers.items():
+            for eid in effect_ids:
+                name = self.data_source.get_effect_name(eid)
+                if name and name != "Empty" and not name.startswith("Effect "):
+                    cache.setdefault(name, tier_name)
+        self._name_cache = cache
+        self._name_cache_tiers = build.tiers
+        return cache
 
     def _resolve_tier_and_weight(self, eff_id: int,
                                   build: BuildDefinition) -> tuple:
         """Resolve tier and base weight for an effect.
 
         Checks individual effect tiers first, then family tiers.
-        Falls back to attachTextId for variant effects (different param ID
-        but same canonical text ID as the base effect).
+        Falls back to attachTextId and display name for variant effects.
         Returns (tier, weight) or (None, 0) if unmatched.
         """
-        # Individual effect check
+        # Individual effect check (direct ID)
         tier = build.get_tier_for_effect(eff_id)
         if not tier:
             # Variant effects: try canonical text ID
             text_id = self.data_source.get_effect_text_id(eff_id)
             if text_id != -1 and text_id != eff_id:
                 tier = build.get_tier_for_effect(text_id)
+        if not tier:
+            # Name-based fallback: different param IDs, same display name
+            name_cache = self._get_name_cache(build)
+            eff_name = self.data_source.get_effect_name(eff_id)
+            if eff_name in name_cache:
+                tier = name_cache[eff_name]
         if tier:
             return tier, TIER_WEIGHTS.get(tier, 0)
 
@@ -341,6 +366,12 @@ class BuildScorer:
         blacklist_families = build.family_tiers.get("blacklist", [])
         if not blacklist_ids and not blacklist_families:
             return False
+        # Build name set for blacklisted effects (name-based matching)
+        blacklist_names = set()
+        for eid in blacklist_ids:
+            name = self.data_source.get_effect_name(eid)
+            if name and name != "Empty":
+                blacklist_names.add(name)
         for eff in relic.all_effects:
             if eff in blacklist_ids:
                 return True
@@ -348,6 +379,11 @@ class BuildScorer:
             text_id = self.data_source.get_effect_text_id(eff)
             if text_id != -1 and text_id != eff and text_id in blacklist_ids:
                 return True
+            # Name-based check for same-name variants
+            if blacklist_names:
+                eff_name = self.data_source.get_effect_name(eff)
+                if eff_name in blacklist_names:
+                    return True
             if blacklist_families:
                 family = self.data_source.get_effect_family(eff)
                 if family and family in blacklist_families:
