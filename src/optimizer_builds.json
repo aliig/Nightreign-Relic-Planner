@@ -71,6 +71,44 @@
       },
       "include_deep": true,
       "curse_max": 1
+    },
+    "b5553286": {
+      "name": "tenkbird",
+      "character": "Guardian",
+      "tiers": {
+        "required": [
+          7033400,
+          6641000,
+          8650000
+        ],
+        "preferred": [
+          7012000,
+          8660101,
+          7150000
+        ],
+        "nice_to_have": [
+          8000000,
+          6500100,
+          7011000
+        ],
+        "avoid": [],
+        "blacklist": []
+      },
+      "family_tiers": {
+        "required": [],
+        "preferred": [
+          "Improved Guard Counters"
+        ],
+        "nice_to_have": [
+          "Improved Affinity Damage Negation",
+          "Improved Physical Damage Negation",
+          "Physical Attack Up"
+        ],
+        "avoid": [],
+        "blacklist": []
+      },
+      "include_deep": true,
+      "curse_max": 1
     }
   }
 }

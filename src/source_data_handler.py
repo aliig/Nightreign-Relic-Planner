@@ -525,10 +525,12 @@ class SourceDataHandler:
     _MAGNITUDE_RE = re.compile(r'^(.+?)\s+\+(\d+)%?$')
 
     def _build_effect_families(self):
-        """Build effect family groupings from stacking_rules.json.
+        """Build effect family groupings from stacking_rules and game data.
 
         Groups effects like "Vigor +1/+2/+3" into a family "Vigor",
         ordered by magnitude so higher variants score higher.
+        Families are discovered from stacking_rules.json first, then
+        supplemented by scanning FMG effect names for +N patterns.
         """
         import orjson
         self._effect_families: dict[str, dict] = {}
@@ -543,18 +545,20 @@ class SourceDataHandler:
             return
 
         # Step 1: Parse effect names into (base_name, magnitude) groups
+        # Strip trailing % before parsing (formatting artifact in rules file).
         raw_groups: dict[str, list[tuple[str, int]]] = {}
         for name in rules:
             if name.startswith("_"):
                 continue
-            m = self._MAGNITUDE_RE.match(name)
+            clean = name.rstrip('%').rstrip()
+            m = self._MAGNITUDE_RE.match(clean)
             if m:
                 base = m.group(1)
                 mag = int(m.group(2))
             else:
-                base = name
+                base = clean
                 mag = 0
-            raw_groups.setdefault(base, []).append((name, mag))
+            raw_groups.setdefault(base, []).append((clean, mag))
 
         # Step 2: Keep only groups with 2+ members (real families)
         # and where at least one member has magnitude > 0
@@ -571,15 +575,54 @@ class SourceDataHandler:
                             for n, mag in members],
             }
 
-        # Step 3: Map effect names to IDs
+        # Ensure FMG text is loaded for all subsequent steps
         if self.effect_name is None:
             self._load_text()
 
-        # Build normalized name -> list of (family_base, member_index) lookups
-        # Normalization collapses whitespace/% to single space, strips, lowers.
         def _norm(s: str) -> str:
             return re.sub(r'[\s%]+', ' ', s).strip().lower()
 
+        # Step 2.5: Discover additional families from FMG effect names
+        # (catches effects with +N variants not covered by stacking_rules.json)
+        existing_norms = {_norm(b) for b in self._effect_families}
+        fmg_groups: dict[str, list[tuple[str, int]]] = {}
+        for _, row in self.effect_name.iterrows():
+            eff_name = re.sub(r'\s+', ' ', str(row["text"])).strip()
+            if eff_name == "%null%" or not eff_name:
+                continue
+            eff_id = int(row["id"])
+            if eff_id not in self.effect_params.index:
+                continue
+            m = self._MAGNITUDE_RE.match(eff_name)
+            if m:
+                base = m.group(1)
+                mag = int(m.group(2))
+            else:
+                base = eff_name
+                mag = 0
+            fmg_groups.setdefault(base, []).append((eff_name, mag))
+
+        for base, members in fmg_groups.items():
+            if _norm(base) in existing_norms:
+                continue
+            # Deduplicate (same FMG text may appear for multiple param IDs)
+            seen_names: set[str] = set()
+            unique: list[tuple[str, int]] = []
+            for name, mag in members:
+                if name not in seen_names:
+                    seen_names.add(name)
+                    unique.append((name, mag))
+            if len(unique) < 2:
+                continue
+            if not any(mag > 0 for _, mag in unique):
+                continue
+            unique.sort(key=lambda x: x[1])
+            self._effect_families[base] = {
+                "members": [{"name": n, "magnitude": mag, "effect_ids": []}
+                            for n, mag in unique],
+            }
+
+        # Step 3: Build normalized name -> family member lookup
         family_name_norm: dict[str, list[tuple[str, int]]] = {}
         for base, fam in self._effect_families.items():
             for idx, member in enumerate(fam["members"]):
