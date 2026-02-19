@@ -638,18 +638,32 @@ class VesselOptimizer:
                 candidates_per_slot, num_slots, build
             )
 
-        # Build result with incremental stacking context for breakdowns
-        slot_assignments = []
-        total_score = 0
+        # Build result with incremental stacking context for breakdowns.
+        # Process slots in value order (highest pre-score first) so that
+        # the most valuable relics get stacking credit.  This makes the
+        # breakdown more intuitive: a relic with 3 essentials shows them
+        # all as active, while a lower-value relic sharing one of those
+        # effects shows it as "redundant" rather than the other way around.
+        slot_results: list[tuple] = [(None, 0, [])] * num_slots  # (relic, score, breakdown)
         assigned_effect_ids = set()
         vessel_eff = set()
         vessel_compat = set()
         vessel_no_stack = set()
         vessel_curse_counts: dict[int, int] = {}
 
+        # Determine credit order: highest pre-score first
+        pre_scores = []
         for i in range(num_slots):
-            is_deep = i >= 3
-            slot_color = slot_colors[i]
+            relic = assignments[i][0]
+            if relic:
+                pre_scores.append(
+                    (self.scorer.score_relic(relic, build), i))
+            else:
+                pre_scores.append((0, i))
+        credit_order = sorted(pre_scores, key=lambda x: x[0], reverse=True)
+
+        total_score = 0
+        for _, i in credit_order:
             relic = assignments[i][0]
 
             if relic:
@@ -676,15 +690,21 @@ class VesselOptimizer:
                 score = 0
                 breakdown = []
 
+            slot_results[i] = (relic, score, breakdown)
+            total_score += score
+
+        # Build SlotAssignment list in slot order for display
+        slot_assignments = []
+        for i in range(num_slots):
+            relic, score, breakdown = slot_results[i]
             slot_assignments.append(SlotAssignment(
                 slot_index=i,
-                slot_color=slot_color,
-                is_deep=is_deep,
+                slot_color=slot_colors[i],
+                is_deep=i >= 3,
                 relic=relic,
                 score=score,
                 breakdown=breakdown,
             ))
-            total_score += score
 
         # Check if all required effects are present
         missing_requirements = []

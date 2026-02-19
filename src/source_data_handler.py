@@ -420,7 +420,9 @@ class SourceDataHandler:
             # Try direct ID match first (works when param ID == text ID)
             row = self.effect_name[self.effect_name["id"] == effect_id]
             if not row.empty:
-                return row["text"].values[0]
+                text = row["text"].values[0]
+                if text != "%null%":
+                    return text
             # Fall back to attachTextId lookup (some effects have a
             # different param ID than their text ID)
             if effect_id in self.effect_params.index:

@@ -1,28 +1,6 @@
 {
   "version": 4,
   "builds": {
-    "f16d30fd": {
-      "name": "birdtank",
-      "character": "Guardian",
-      "tiers": {
-        "required": [
-          7033400
-        ],
-        "preferred": [],
-        "nice_to_have": [],
-        "avoid": [],
-        "blacklist": []
-      },
-      "family_tiers": {
-        "required": [],
-        "preferred": [],
-        "avoid": [],
-        "blacklist": [],
-        "nice_to_have": []
-      },
-      "include_deep": true,
-      "curse_max": 1
-    },
     "77ec510b": {
       "name": "test2",
       "character": "Wylder",
@@ -43,35 +21,33 @@
       "include_deep": true,
       "curse_max": 1
     },
-    "6a73812f": {
-      "name": "dregs2",
+    "42a3da1e": {
+      "name": "dregs",
       "character": "Raider",
       "tiers": {
         "required": [
           7035400,
+          7035500,
           7032200,
-          7037700,
-          7031300,
           7170100,
-          7035500
+          7260900,
+          7037700
         ],
         "preferred": [
+          7031300,
           8660101,
-          8810300,
-          7060200
+          8000000,
+          8810300
         ],
         "nice_to_have": [
-          7040000,
-          7100100,
-          8000000,
-          7060000
+          7310000
         ],
         "avoid": [
-          6820300,
-          8831200
+          6820300
         ],
         "blacklist": [
-          6820600
+          6820600,
+          8831200
         ]
       },
       "family_tiers": {
@@ -79,14 +55,15 @@
           "Partial HP Restoration upon Post-Damage Attacks"
         ],
         "preferred": [
-          "Physical Attack Up",
-          "Improved Physical Damage Negation"
+          "Physical Attack Up"
         ],
         "nice_to_have": [
+          "Attack power up when facing scarlet rot-afflicted%enemy",
+          "Improved Affinity Damage Negation",
+          "Improved Physical Damage Negation",
+          "Stamina Recovery upon Landing Attacks",
           "Strength",
-          "Poise",
-          "Vigor",
-          "Improved Affinity Damage Negation"
+          "Vigor"
         ],
         "avoid": [],
         "blacklist": []
