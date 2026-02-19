@@ -445,21 +445,24 @@ class SourceDataHandler:
         except Exception:
             return
 
-        # Build name -> stacking_type lookup (case-insensitive)
-        # Also register %-stripped variants since stacking_rules.json uses
-        # names like "Physical Attack Up +4%" but FMG text uses "+4" (no %)
+        # Normalize helper: collapse all whitespace (newlines, tabs, multiple
+        # spaces) to single space, strip, lowercase.  Also strip trailing %
+        # since stacking_rules.json uses "Physical Attack Up +4%" but FMG
+        # uses "+4", and some rules use % as a line-break substitute.
+        def _norm(s: str) -> str:
+            return re.sub(r'[\s%]+', ' ', s).strip().lower()
+
+        # Build name -> stacking_type lookup (normalized)
         name_to_type: dict[str, str] = {}
         for name, stype in rules.items():
             if name.startswith("_"):
                 continue
-            lower = name.lower()
-            name_to_type[lower] = stype
-            if lower.endswith('%'):
-                name_to_type[lower.rstrip('%')] = stype
+            name_to_type[_norm(name)] = stype
 
         # Resolve effect names to IDs
         if self.effect_name is None:
             self._load_text()
+        # Pass 1: Match via direct FMG entries
         for _, row in self.effect_name.iterrows():
             eff_id = int(row["id"])
             eff_name = str(row["text"])
@@ -468,14 +471,28 @@ class SourceDataHandler:
             # Only cache effects that actually exist as game params
             if eff_id not in self.effect_params.index:
                 continue
-            # Try exact match (case-insensitive)
-            lower_name = eff_name.lower()
-            if lower_name in name_to_type:
-                self._stacking_cache[eff_id] = name_to_type[lower_name]
+            # Try normalized match
+            normed = _norm(eff_name)
+            if normed in name_to_type:
+                self._stacking_cache[eff_id] = name_to_type[normed]
                 continue
             # Strip parenthetical suffix and try again
-            # e.g. "Stamina recovers with each successful attack +1 (Night of the Beast)"
-            stripped = lower_name.rsplit("(", 1)[0].strip()
+            stripped = normed.rsplit("(", 1)[0].strip()
+            if stripped in name_to_type:
+                self._stacking_cache[eff_id] = name_to_type[stripped]
+
+        # Pass 2: Catch params whose names resolve via attachTextId
+        for eff_id in self.effect_params.index:
+            if eff_id in self._stacking_cache or eff_id in (0, -1):
+                continue
+            eff_name = self.get_effect_name(eff_id)
+            if not eff_name or eff_name == "Empty" or eff_name.startswith("Effect "):
+                continue
+            normed = _norm(eff_name)
+            if normed in name_to_type:
+                self._stacking_cache[eff_id] = name_to_type[normed]
+                continue
+            stripped = normed.rsplit("(", 1)[0].strip()
             if stripped in name_to_type:
                 self._stacking_cache[eff_id] = name_to_type[stripped]
 
@@ -556,19 +573,19 @@ class SourceDataHandler:
         if self.effect_name is None:
             self._load_text()
 
-        # Build lowered name -> list of (family_base, member_index) lookups
-        # Also register variants with % stripped, since stacking_rules.json
-        # uses names like "Fire Attack Power Up +3%" but XML uses "+3"
-        family_name_lower: dict[str, list[tuple[str, int]]] = {}
+        # Build normalized name -> list of (family_base, member_index) lookups
+        # Normalization collapses whitespace/% to single space, strips, lowers.
+        def _norm(s: str) -> str:
+            return re.sub(r'[\s%]+', ' ', s).strip().lower()
+
+        family_name_norm: dict[str, list[tuple[str, int]]] = {}
         for base, fam in self._effect_families.items():
             for idx, member in enumerate(fam["members"]):
-                lower = member["name"].lower()
-                family_name_lower.setdefault(lower, []).append((base, idx))
-                # Also try without trailing %
-                if lower.endswith('%'):
-                    stripped = lower.rstrip('%')
-                    family_name_lower.setdefault(stripped, []).append((base, idx))
+                normed = _norm(member["name"])
+                family_name_norm.setdefault(normed, []).append((base, idx))
 
+        # Pass 1: Match via direct FMG entries (covers most effects)
+        matched_param_ids: set[int] = set()
         for _, row in self.effect_name.iterrows():
             eff_id = int(row["id"])
             eff_name = str(row["text"])
@@ -578,13 +595,31 @@ class SourceDataHandler:
             # (some FMG text entries are phantoms with no param backing)
             if eff_id not in self.effect_params.index:
                 continue
-            lower = eff_name.lower()
-            # Try exact match
-            matches = family_name_lower.get(lower)
+            normed = _norm(eff_name)
+            # Try normalized match
+            matches = family_name_norm.get(normed)
             if not matches:
                 # Strip parenthetical suffix
-                stripped = lower.rsplit("(", 1)[0].strip()
-                matches = family_name_lower.get(stripped)
+                stripped = normed.rsplit("(", 1)[0].strip()
+                matches = family_name_norm.get(stripped)
+            if matches:
+                matched_param_ids.add(eff_id)
+                for base, idx in matches:
+                    self._effect_families[base]["members"][idx]["effect_ids"].append(eff_id)
+
+        # Pass 2: Catch param entries whose names resolve via attachTextId
+        # (their FMG text_id may be a phantom, so Pass 1 skips them)
+        for eff_id in self.effect_params.index:
+            if eff_id in matched_param_ids or eff_id in (0, -1):
+                continue
+            eff_name = self.get_effect_name(eff_id)
+            if not eff_name or eff_name == "Empty" or eff_name.startswith("Effect "):
+                continue
+            normed = _norm(eff_name)
+            matches = family_name_norm.get(normed)
+            if not matches:
+                stripped = normed.rsplit("(", 1)[0].strip()
+                matches = family_name_norm.get(stripped)
             if matches:
                 for base, idx in matches:
                     self._effect_families[base]["members"][idx]["effect_ids"].append(eff_id)
@@ -931,7 +966,7 @@ class SourceDataHandler:
             if effect_id == 0:
                 continue
 
-            name = self.get_effect_name(effect_id)
+            name = self.get_effect_name(effect_id).strip()
             if name == "Empty" or name.startswith("Effect "):
                 continue
 
