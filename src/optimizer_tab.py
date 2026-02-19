@@ -588,7 +588,7 @@ class OptimizerTab:
         results = self.optimizer.optimize_all_vessels(
             build, self.inventory, hero_type)
 
-        self._display_results(results[:3], build)
+        self._display_results(results, build)
 
         if results:
             # Check if best result meets requirements

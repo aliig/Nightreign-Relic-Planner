@@ -31,7 +31,8 @@
           7032200,
           7170100,
           7260900,
-          7037700
+          7037700,
+          6005601
         ],
         "preferred": [
           7031300,
@@ -42,7 +43,8 @@
         ],
         "nice_to_have": [
           7310000,
-          7060000
+          7060000,
+          7006000
         ],
         "avoid": [
           6820300,
@@ -54,9 +56,7 @@
         ]
       },
       "family_tiers": {
-        "required": [
-          "Partial HP Restoration upon Post-Damage Attacks"
-        ],
+        "required": [],
         "preferred": [
           "Physical Attack Up"
         ],

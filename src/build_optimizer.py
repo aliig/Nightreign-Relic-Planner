@@ -600,8 +600,12 @@ class VesselOptimizer:
 
     def optimize(self, build: BuildDefinition,
                  inventory: RelicInventory,
-                 vessel_data: dict) -> VesselResult:
-        """Find best relic assignment for a single vessel."""
+                 vessel_data: dict,
+                 top_n: int = 3) -> list[VesselResult]:
+        """Find best relic assignments for a single vessel.
+
+        Returns up to top_n distinct arrangements, sorted by score descending.
+        """
         slot_colors = vessel_data["Colors"]  # 6-tuple
         num_slots = 6 if build.include_deep else 3
 
@@ -630,21 +634,33 @@ class VesselOptimizer:
         total_candidates = sum(len(c) for c in candidates_per_slot)
 
         if total_candidates <= 200 and num_slots <= 6:
-            assignments = self._backtrack_solve(
-                candidates_per_slot, num_slots, build
+            all_assignments = self._backtrack_solve(
+                candidates_per_slot, num_slots, build, top_n
             )
         else:
-            assignments = self._greedy_solve(
-                candidates_per_slot, num_slots, build
+            all_assignments = self._greedy_solve(
+                candidates_per_slot, num_slots, build, top_n
             )
 
-        # Build result with incremental stacking context for breakdowns.
-        # Process slots in value order (highest pre-score first) so that
-        # the most valuable relics get stacking credit.  This makes the
-        # breakdown more intuitive: a relic with 3 essentials shows them
-        # all as active, while a lower-value relic sharing one of those
-        # effects shows it as "redundant" rather than the other way around.
-        slot_results: list[tuple] = [(None, 0, [])] * num_slots  # (relic, score, breakdown)
+        # Build VesselResult for each distinct assignment
+        results = []
+        for assignments in all_assignments:
+            result = self._build_vessel_result(
+                assignments, num_slots, slot_colors, vessel_data, build)
+            results.append(result)
+
+        return results
+
+    def _build_vessel_result(self, assignments: list, num_slots: int,
+                             slot_colors: tuple, vessel_data: dict,
+                             build: BuildDefinition) -> VesselResult:
+        """Build a VesselResult from raw slot assignments.
+
+        Processes relics in value order (highest pre-score first) so that
+        the most valuable relics get stacking credit, making the breakdown
+        more intuitive.
+        """
+        slot_results: list[tuple] = [(None, 0, [])] * num_slots
         assigned_effect_ids = set()
         vessel_eff = set()
         vessel_compat = set()
@@ -673,12 +689,10 @@ class VesselOptimizer:
                 breakdown = self.scorer.get_breakdown(
                     relic, build, vessel_eff, vessel_compat, vessel_no_stack)
                 assigned_effect_ids.update(relic.all_effects)
-                # Also track canonical text IDs for requirement matching
                 for eff in relic.all_effects:
                     text_id = self.data_source.get_effect_text_id(eff)
                     if text_id != -1:
                         assigned_effect_ids.add(text_id)
-                # Update stacking state for subsequent relics
                 e, c, ns = self._get_relic_stacking_adds(relic)
                 vessel_eff.update(e)
                 vessel_compat.update(c)
@@ -708,10 +722,8 @@ class VesselOptimizer:
 
         # Check if all required effects are present
         missing_requirements = []
-        # Individual required effects
         required_ids = set(build.tiers.get("required", []))
         missing_requirements.extend(required_ids - assigned_effect_ids)
-        # Family required effects
         for family_name in build.family_tiers.get("required", []):
             family_ids = self.data_source.get_family_effect_ids(family_name)
             if not (assigned_effect_ids & family_ids):
@@ -731,14 +743,50 @@ class VesselOptimizer:
         )
 
     def _greedy_solve(self, candidates_per_slot: list, num_slots: int,
-                      build: BuildDefinition) -> list:
-        """Greedy assignment with stacking-aware re-scoring.
+                      build: BuildDefinition,
+                      top_n: int = 3) -> list[list]:
+        """Greedy solver returning up to top_n distinct assignments.
+
+        Generates alternatives by excluding the highest-scoring relic from
+        each previous solution, forcing the algorithm down a different path.
+        """
+        results = []
+        excluded = set()
+        seen = set()
+
+        for _ in range(top_n):
+            assignment = self._greedy_solve_once(
+                candidates_per_slot, num_slots, build, excluded)
+            handles = frozenset(
+                r.ga_handle for r, _ in assignment if r is not None)
+            if not handles or handles in seen:
+                break
+            seen.add(handles)
+            results.append(assignment)
+            # Exclude the highest-scoring relic to force diversity
+            best_handle = None
+            best_score = -1
+            for relic, score in assignment:
+                if relic and score > best_score:
+                    best_score = score
+                    best_handle = relic.ga_handle
+            if best_handle:
+                excluded.add(best_handle)
+
+        if not results:
+            return [[(None, 0)] * num_slots]
+        return results
+
+    def _greedy_solve_once(self, candidates_per_slot: list, num_slots: int,
+                           build: BuildDefinition,
+                           excluded_handles: set = None) -> list:
+        """Single greedy assignment pass.
 
         Iteratively picks the best (slot, relic) pair considering current
-        vessel stacking state, then updates state and repeats.
+        vessel stacking state, skipping any relics in excluded_handles.
         """
-        assigned = [None] * num_slots  # (relic, score) per slot
-        used_handles = set()
+        assigned = [None] * num_slots
+        used_handles = set(excluded_handles or ())
         vessel_eff = set()
         vessel_compat = set()
         vessel_no_stack = set()
@@ -761,7 +809,7 @@ class VesselOptimizer:
                         best = (score, slot_idx, relic)
 
             if best is None:
-                break  # No candidates for any remaining slot
+                break
 
             score, slot_idx, relic = best
             assigned[slot_idx] = (relic, score)
@@ -774,7 +822,6 @@ class VesselOptimizer:
                 vessel_curse_counts[curse_id] = \
                     vessel_curse_counts.get(curse_id, 0) + 1
 
-        # Fill empty slots
         for i in range(num_slots):
             if assigned[i] is None:
                 assigned[i] = (None, 0)
@@ -782,23 +829,40 @@ class VesselOptimizer:
         return assigned
 
     def _backtrack_solve(self, candidates_per_slot: list, num_slots: int,
-                         build: BuildDefinition) -> list:
-        """Exhaustive search with stacking-aware scoring and pruning."""
-        best_score = [-1]
-        best_assignment = [None]
+                         build: BuildDefinition,
+                         top_n: int = 3) -> list[list]:
+        """Exhaustive search returning up to top_n distinct assignments."""
+        top_solutions: list[tuple] = []  # [(score, assignment)]
+        seen_keys: set = set()           # frozensets of ga_handles
+        min_threshold = -1
         start_time = time.time()
         timeout = 2.0  # seconds
 
         def backtrack(slot_idx, current_assignment, used_handles,
                       vessel_eff, vessel_compat, vessel_no_stack,
                       vessel_curse_counts, current_score):
+            nonlocal min_threshold
             if time.time() - start_time > timeout:
                 return
 
             if slot_idx == num_slots:
-                if current_score > best_score[0]:
-                    best_score[0] = current_score
-                    best_assignment[0] = list(current_assignment)
+                if current_score > min_threshold or len(top_solutions) < top_n:
+                    key = frozenset(used_handles)
+                    if key not in seen_keys:
+                        seen_keys.add(key)
+                        top_solutions.append(
+                            (current_score, list(current_assignment)))
+                        top_solutions.sort(
+                            key=lambda x: x[0], reverse=True)
+                        if len(top_solutions) > top_n:
+                            removed = top_solutions.pop()
+                            removed_key = frozenset(
+                                r.ga_handle for r, _ in removed[1]
+                                if r is not None)
+                            seen_keys.discard(removed_key)
+                        min_threshold = (top_solutions[-1][0]
+                                         if len(top_solutions) == top_n
+                                         else -1)
                 return
 
             # Try assigning no relic to this slot
@@ -819,7 +883,7 @@ class VesselOptimizer:
                     if candidates_per_slot[s] else 0
                     for s in range(slot_idx + 1, num_slots)
                 )
-                if current_score + pre_score + remaining_max <= best_score[0]:
+                if current_score + pre_score + remaining_max <= min_threshold:
                     continue
 
                 # Score with stacking context
@@ -829,7 +893,7 @@ class VesselOptimizer:
                     vessel_curse_counts)
 
                 # Prune again with actual score
-                if current_score + score + remaining_max <= best_score[0]:
+                if current_score + score + remaining_max <= min_threshold:
                     continue
 
                 # Compute stacking state additions
@@ -864,29 +928,34 @@ class VesselOptimizer:
         initial = [(None, 0)] * num_slots
         backtrack(0, initial, set(), set(), set(), set(), {}, 0)
 
-        if best_assignment[0] is None:
-            return [(None, 0)] * num_slots
-        return best_assignment[0]
+        if not top_solutions:
+            return [[(None, 0)] * num_slots]
+        return [assignment for _, assignment in top_solutions]
 
     def optimize_all_vessels(self, build: BuildDefinition,
                              inventory: RelicInventory,
-                             hero_type: int) -> list[VesselResult]:
-        """Try all vessels for a character, return top results sorted by score.
+                             hero_type: int,
+                             top_n: int = 10,
+                             max_per_vessel: int = 3) -> list[VesselResult]:
+        """Try all vessels for a character, return top arrangements globally.
 
-        Results that meet requirements are sorted first, then by score.
-        Results that don't meet requirements are sorted last.
+        Each vessel may contribute up to max_per_vessel arrangements.
+        Results are ranked globally: those meeting requirements first,
+        then by score descending. Returns at most top_n results.
         """
         vessels = self.data_source.get_all_vessels_for_hero(hero_type)
-        results = []
+        all_results = []
 
         for v in vessels:
             vessel_data = v.copy()
             vessel_data["_id"] = v["vessel_id"]
-            result = self.optimize(build, inventory, vessel_data)
-            result.vessel_id = v["vessel_id"]
-            results.append(result)
+            results = self.optimize(
+                build, inventory, vessel_data, max_per_vessel)
+            for result in results:
+                result.vessel_id = v["vessel_id"]
+            all_results.extend(results)
 
-        # Sort: vessels meeting requirements first (by score descending),
-        # then vessels not meeting requirements (by score descending)
-        results.sort(key=lambda r: (not r.meets_requirements, -r.total_score))
-        return results
+        # Sort: arrangements meeting requirements first (by score descending),
+        # then arrangements not meeting requirements (by score descending)
+        all_results.sort(key=lambda r: (not r.meets_requirements, -r.total_score))
+        return all_results[:top_n]
