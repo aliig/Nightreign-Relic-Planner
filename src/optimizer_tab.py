@@ -10,7 +10,7 @@ from globals import CHARACTER_NAMES, COLOR_MAP
 from source_data_handler import SourceDataHandler
 from build_optimizer import (
     BuildStore, BuildDefinition, BuildScorer, VesselOptimizer,
-    RelicInventory, VesselResult, TIER_WEIGHTS,
+    RelicInventory, VesselResult, TIERS, TIER_MAP, ALL_TIER_KEYS,
 )
 
 RELIC_COLOR_HEX = {
@@ -20,20 +20,6 @@ RELIC_COLOR_HEX = {
     'Green': '#44BB44',
     'White': '#AAAAAA',
     None: '#888888',
-}
-
-TIER_DISPLAY = {
-    "required": "Essential Properties",
-    "preferred": "Preferred Properties",
-    "avoid": "Avoid Properties",
-    "blacklist": "Excluded Properties",
-}
-
-TIER_COLORS = {
-    "required": "#FF4444",
-    "preferred": "#4488FF",
-    "avoid": "#888888",
-    "blacklist": "#FF8C00",
 }
 
 
@@ -302,7 +288,7 @@ class OptimizerTab:
 
         # Create tier sections
         self.tier_trees = {}
-        for tier_key in ["required", "preferred", "avoid", "blacklist"]:
+        for tier_key in ALL_TIER_KEYS:
             self._create_tier_section(tier_key)
 
         # Optimize button
@@ -358,16 +344,11 @@ class OptimizerTab:
 
     def _create_tier_section(self, tier_key: str):
         """Create a labeled frame with a treeview for one tier."""
-        display_name = TIER_DISPLAY[tier_key]
-        if tier_key == "required":
-            weight_str = f" ({TIER_WEIGHTS[tier_key]:+d} pts, Must Have)"
-        elif tier_key in ("preferred", "avoid"):
-            weight_str = f" ({TIER_WEIGHTS[tier_key]:+d} pts)"
-        else:  # blacklist
-            weight_str = " (Absolute Exclusion)"
-        color = TIER_COLORS[tier_key]
+        tc = TIER_MAP[tier_key]
 
-        frame = ttk.LabelFrame(self.tier_inner, text=f"{display_name}{weight_str}")
+        frame = ttk.LabelFrame(
+            self.tier_inner,
+            text=f"{tc.display_name} Properties{tc.label_suffix}")
         frame.pack(fill='x', padx=5, pady=3)
 
         # Treeview
@@ -378,15 +359,15 @@ class OptimizerTab:
         tree.pack(fill='x', padx=5, pady=(2, 0))
 
         # Tag for coloring
-        tree.tag_configure('item', foreground=color)
+        tree.tag_configure('item', foreground=tc.color)
 
         # Buttons
         btn_row = ttk.Frame(frame)
         btn_row.pack(fill='x', padx=5, pady=(2, 5))
 
-        is_blacklist = tier_key == "blacklist"
         ttk.Button(btn_row, text="+ Add", width=8,
-                   command=lambda t=tier_key: self._add_effect(t, is_blacklist)
+                   command=lambda t=tier_key, df=tc.show_debuffs_first:
+                       self._add_effect(t, df)
                    ).pack(side='left', padx=2)
         ttk.Button(btn_row, text="Remove", width=8,
                    command=lambda t=tier_key: self._remove_effect(t)
@@ -766,10 +747,12 @@ class OptimizerTab:
 
                 if redundant:
                     fg = '#999999'
-                    tier_label = f" [{TIER_DISPLAY.get(tier, '')} (redundant)]"
+                    tc = TIER_MAP.get(tier)
+                    tier_label = f" [{tc.display_name if tc else ''} (redundant)]"
                 elif tier:
-                    fg = TIER_COLORS.get(tier, '#888888')
-                    tier_label = f" [{TIER_DISPLAY.get(tier, '')} {score:+d}]"
+                    tc = TIER_MAP.get(tier)
+                    fg = tc.color if tc else '#888888'
+                    tier_label = f" [{tc.display_name if tc else ''} {score:+d}]"
                 elif is_curse:
                     fg = '#CC6600'
                     tier_label = " [Curse]"

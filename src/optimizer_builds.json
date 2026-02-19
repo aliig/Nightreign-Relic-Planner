@@ -1,19 +1,45 @@
 {
-  "version": 1,
+  "version": 3,
   "builds": {
     "f16d30fd": {
       "name": "birdtank",
       "character": "Guardian",
       "tiers": {
-        "must_have": [
+        "required": [
           7033400
         ],
-        "nice_to_have": [],
-        "low_priority": [],
+        "preferred": [],
+        "avoid": [],
+        "blacklist": []
+      },
+      "family_tiers": {
+        "required": [],
+        "preferred": [],
+        "avoid": [],
         "blacklist": []
       },
       "include_deep": true,
-      "curse_tolerance": 1
+      "curse_max": 1
+    },
+    "40db93b5": {
+      "name": "dregs",
+      "character": "Raider",
+      "tiers": {
+        "required": [
+          7031300
+        ],
+        "preferred": [],
+        "avoid": [],
+        "blacklist": []
+      },
+      "family_tiers": {
+        "required": [],
+        "preferred": [],
+        "avoid": [],
+        "blacklist": []
+      },
+      "include_deep": true,
+      "curse_max": 1
     }
   }
 }

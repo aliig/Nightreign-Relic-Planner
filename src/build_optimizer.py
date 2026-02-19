@@ -15,19 +15,53 @@ from globals import COLOR_MAP, RELIC_GROUPS
 from source_data_handler import SourceDataHandler
 
 
-# Tier weights for scoring
-TIER_WEIGHTS = {
-    "required": 100,    # High priority + absolute requirement check
-    "preferred": 50,    # Positive scoring
-    "avoid": -20,       # Negative scoring
-    "blacklist": 0,     # Absolute exclusion, not scored
-}
+# ---------------------------------------------------------------------------
+# Tier configuration — single source of truth for all tier metadata
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class TierConfig:
+    """Immutable definition of a single build tier."""
+    key: str                    # Internal key used in storage / logic
+    display_name: str           # User-facing label
+    color: str                  # Hex color for UI
+    weight: int                 # Scoring weight (0 = not scored)
+    scored: bool                # Contributes to numeric scoring
+    magnitude_weighted: bool    # Family magnitude weighting applies
+    is_must_have: bool          # Hard constraint — at least one member required
+    is_exclusion: bool          # Absolute filter — relics with this are removed
+    show_debuffs_first: bool = False  # UI: surface curses at top of search
+
+    @property
+    def label_suffix(self) -> str:
+        """Parenthetical suffix shown next to the display name in the UI."""
+        if self.is_must_have:
+            return f" ({self.weight:+d} pts, Must Have)"
+        if self.scored:
+            return f" ({self.weight:+d} pts)"
+        if self.is_exclusion:
+            return " (Absolute Exclusion)"
+        return ""
+
+
+# Ordered list — UI renders tiers in this order
+TIERS: list[TierConfig] = [
+    TierConfig("required",    "Essential",    "#FF4444", 100, True,  True,  True,  False),
+    TierConfig("preferred",   "Preferred",    "#4488FF",  50, True,  True,  False, False),
+    TierConfig("nice_to_have","Nice-to-Have", "#44BB88",  25, True,  True,  False, False),
+    TierConfig("avoid",       "Avoid",        "#888888", -20, True,  False, False, False),
+    TierConfig("blacklist",   "Excluded",     "#FF8C00",   0, False, False, False, True, True),
+]
+
+# Derived lookups — used throughout optimizer and UI
+TIER_MAP: dict[str, TierConfig] = {t.key: t for t in TIERS}
+ALL_TIER_KEYS: list[str] = [t.key for t in TIERS]
+TIER_WEIGHTS: dict[str, int] = {t.key: t.weight for t in TIERS}
+SCORED_TIERS: tuple[str, ...] = tuple(t.key for t in TIERS if t.scored)
+MAGNITUDE_TIERS: tuple[str, ...] = tuple(t.key for t in TIERS if t.magnitude_weighted)
 
 # Penalty applied per excess curse beyond the build's curse_max limit
 CURSE_EXCESS_PENALTY = -200
-
-# Tiers that contribute to numeric scoring (excludes blacklist which is absolute)
-SCORED_TIERS = ("required", "preferred", "avoid")
 
 # Small bonus for relics with more effect slots (tiebreaker)
 TIER_BONUS = {3: 5, 2: 2, 1: 0, 0: 0}
@@ -145,18 +179,8 @@ class BuildDefinition:
     id: str
     name: str
     character: str
-    tiers: dict = field(default_factory=lambda: {
-        "required": [],
-        "preferred": [],
-        "avoid": [],
-        "blacklist": [],
-    })
-    family_tiers: dict = field(default_factory=lambda: {
-        "required": [],
-        "preferred": [],
-        "avoid": [],
-        "blacklist": [],
-    })
+    tiers: dict = field(default_factory=lambda: {k: [] for k in ALL_TIER_KEYS})
+    family_tiers: dict = field(default_factory=lambda: {k: [] for k in ALL_TIER_KEYS})
     include_deep: bool = True
     curse_max: int = 1  # Max times the same curse is tolerated (0=avoid all, 1=default)
 
@@ -198,18 +222,21 @@ class BuildStore:
             for build_id, b in data.get("builds", {}).items():
                 # Migrate old tier names to new ones
                 tiers = b.get("tiers", {})
+                version = data.get("version", 1)
                 migrated_tiers = {
                     "required": tiers.get("required", tiers.get("must_have", [])),
-                    "preferred": tiers.get("preferred", tiers.get("nice_to_have", [])),
+                    # v1 "nice_to_have" mapped to preferred (different from v4's nice_to_have)
+                    "preferred": tiers.get("preferred", tiers.get("nice_to_have", [])
+                                          if version < 4 else []),
+                    "nice_to_have": tiers.get("nice_to_have", [])
+                                    if version >= 4 else [],
                     "avoid": tiers.get("avoid", tiers.get("low_priority", [])),
                     "blacklist": tiers.get("blacklist", []),
                 }
-                family_tiers = b.get("family_tiers", {
-                    "required": [], "preferred": [],
-                    "avoid": [], "blacklist": [],
-                })
-                # Ensure all tier keys exist
-                for key in ("required", "preferred", "avoid", "blacklist"):
+                family_tiers = b.get("family_tiers",
+                                     {k: [] for k in ALL_TIER_KEYS})
+                # Ensure all tier keys exist (handles older saves)
+                for key in ALL_TIER_KEYS:
                     family_tiers.setdefault(key, [])
                 self.builds[build_id] = BuildDefinition(
                     id=build_id,
@@ -225,7 +252,7 @@ class BuildStore:
 
     def save(self):
         data = {
-            "version": 3,  # Version 3: adds curse_max, required tier scoring
+            "version": 4,  # Version 4: adds nice_to_have tier, curse_max
             "builds": {}
         }
         for build_id, b in self.builds.items():
@@ -292,7 +319,7 @@ class BuildScorer:
         if family_name:
             ftier = build.get_tier_for_family(family_name)
             if ftier:
-                if ftier in ("preferred", "required"):
+                if ftier in MAGNITUDE_TIERS:
                     weight = self.data_source.get_family_magnitude_weight(
                         eff_id, TIER_WEIGHTS[ftier])
                     return ftier, weight
