@@ -89,7 +89,8 @@
         "nice_to_have": [
           8000000,
           6500100,
-          7011000
+          7011000,
+          7030700
         ],
         "avoid": [],
         "blacklist": []
@@ -97,12 +98,15 @@
       "family_tiers": {
         "required": [],
         "preferred": [
-          "Improved Guard Counters"
+          "Improved Guard Counters",
+          "Successful guarding fills more of the Art gauge",
+          "Partial HP Restoration upon Post-Damage Attacks"
         ],
         "nice_to_have": [
           "Improved Affinity Damage Negation",
           "Improved Physical Damage Negation",
-          "Physical Attack Up"
+          "Physical Attack Up",
+          "Ultimate Art Auto Charge"
         ],
         "avoid": [],
         "blacklist": []

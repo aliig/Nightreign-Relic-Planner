@@ -510,15 +510,21 @@ class SourceDataHandler:
         if not hasattr(self, '_stacking_cache'):
             self._load_stacking_rules()
         result = self._stacking_cache.get(effect_id)
-        if result:
-            return result
-        # Variant effects share attachTextId with the base — use its rules
-        text_id = self.get_effect_text_id(effect_id)
-        if text_id != -1 and text_id != effect_id:
-            result = self._stacking_cache.get(text_id)
-            if result:
-                return result
-        return "no_stack"
+        if not result:
+            # Variant effects share attachTextId with the base — use its rules
+            text_id = self.get_effect_text_id(effect_id)
+            if text_id != -1 and text_id != effect_id:
+                result = self._stacking_cache.get(text_id)
+        if not result:
+            result = "no_stack"
+        # Class-specific effects (conflictId=900) don't stack with themselves
+        # but ARE compatible with other class effects — use "unique" so only
+        # exact duplicates are blocked, not the whole conflict group.
+        if result == "no_stack":
+            conflict_id = self.get_effect_conflict_id(effect_id)
+            if conflict_id == 900:
+                result = "unique"
+        return result
 
     # ---- Effect Families (magnitude grouping) ----
 
