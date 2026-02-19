@@ -378,6 +378,21 @@ class SourceDataHandler:
                 "#666666"  # Gray for original relics
             )
 
+    def get_effect_text_id(self, effect_id: int) -> int:
+        """Return the attachTextId (canonical text ID) for an effect.
+
+        Many variant effects share the same attachTextId as the base effect,
+        meaning they are functionally identical. Returns -1 if not found.
+        """
+        try:
+            if effect_id in [-1, 0, 4294967295]:
+                return -1
+            if effect_id in self.effect_params.index:
+                return int(self.effect_params.loc[effect_id, "attachTextId"])
+        except (KeyError, ValueError):
+            pass
+        return -1
+
     def get_effect_conflict_id(self, effect_id: int):
         try:
             if effect_id == -1 or effect_id == 4294967295:
@@ -465,11 +480,21 @@ class SourceDataHandler:
         - 'stack': Fully additive, multiple copies all provide benefit.
         - 'unique': Doesn't self-stack, but stacks with different variants.
         - 'no_stack': Only one instance provides benefit, blocks group.
+        Falls back to attachTextId for variant effects.
         Default: 'no_stack' for unknown effects (safe fallback).
         """
         if not hasattr(self, '_stacking_cache'):
             self._load_stacking_rules()
-        return self._stacking_cache.get(effect_id, "no_stack")
+        result = self._stacking_cache.get(effect_id)
+        if result:
+            return result
+        # Variant effects share attachTextId with the base — use its rules
+        text_id = self.get_effect_text_id(effect_id)
+        if text_id != -1 and text_id != effect_id:
+            result = self._stacking_cache.get(text_id)
+            if result:
+                return result
+        return "no_stack"
 
     # ---- Effect Families (magnitude grouping) ----
 
@@ -583,19 +608,35 @@ class SourceDataHandler:
             self._build_effect_families()
 
     def get_effect_family(self, effect_id: int) -> Optional[str]:
-        """Return the family base name for an effect, or None."""
+        """Return the family base name for an effect, or None.
+
+        Falls back to attachTextId for variant effects.
+        """
         self._ensure_families()
         info = self._effect_id_to_family.get(effect_id)
-        return info[0] if info else None
+        if info:
+            return info[0]
+        # Variant effects: try canonical text ID
+        text_id = self.get_effect_text_id(effect_id)
+        if text_id != -1 and text_id != effect_id:
+            info = self._effect_id_to_family.get(text_id)
+            return info[0] if info else None
+        return None
 
     def get_family_magnitude_weight(self, effect_id: int, base_weight: int) -> int:
         """Return magnitude-scaled weight for an effect within its family.
 
         Weight = base_weight * rank / total_members
         (rank is 1-indexed position in ascending magnitude order)
+        Falls back to attachTextId for variant effects.
         """
         self._ensure_families()
         info = self._effect_id_to_family.get(effect_id)
+        if not info:
+            # Variant effects: try canonical text ID
+            text_id = self.get_effect_text_id(effect_id)
+            if text_id != -1 and text_id != effect_id:
+                info = self._effect_id_to_family.get(text_id)
         if not info:
             return base_weight
         _, rank, total = info

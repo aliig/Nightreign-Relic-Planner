@@ -307,14 +307,21 @@ class BuildScorer:
         """Resolve tier and base weight for an effect.
 
         Checks individual effect tiers first, then family tiers.
+        Falls back to attachTextId for variant effects (different param ID
+        but same canonical text ID as the base effect).
         Returns (tier, weight) or (None, 0) if unmatched.
         """
         # Individual effect check
         tier = build.get_tier_for_effect(eff_id)
+        if not tier:
+            # Variant effects: try canonical text ID
+            text_id = self.data_source.get_effect_text_id(eff_id)
+            if text_id != -1 and text_id != eff_id:
+                tier = build.get_tier_for_effect(text_id)
         if tier:
             return tier, TIER_WEIGHTS.get(tier, 0)
 
-        # Family check
+        # Family check (get_effect_family already has text_id fallback)
         family_name = self.data_source.get_effect_family(eff_id)
         if family_name:
             ftier = build.get_tier_for_family(family_name)
@@ -336,6 +343,10 @@ class BuildScorer:
             return False
         for eff in relic.all_effects:
             if eff in blacklist_ids:
+                return True
+            # Also check variant effects via text_id
+            text_id = self.data_source.get_effect_text_id(eff)
+            if text_id != -1 and text_id != eff and text_id in blacklist_ids:
                 return True
             if blacklist_families:
                 family = self.data_source.get_effect_family(eff)
@@ -370,21 +381,28 @@ class BuildScorer:
         """Score a single effect considering stacking context.
 
         Returns the weight if the effect provides value, 0 if redundant.
+        Uses attachTextId to detect variant effects (different param ID
+        but functionally identical to the base effect).
         """
         stype = self.data_source.get_effect_stacking_type(eff_id)
         compat_id = self.data_source.get_effect_conflict_id(eff_id)
+        text_id = self.data_source.get_effect_text_id(eff_id)
 
         if stype == "stack":
             return weight
         elif stype == "unique":
             if eff_id in vessel_effect_ids:
                 return 0  # Exact duplicate
+            if text_id != -1 and text_id in vessel_effect_ids:
+                return 0  # Variant of existing effect
             if compat_id != -1 and compat_id in vessel_no_stack_compat_ids:
                 return 0  # Blocked by a no_stack in same group
             return weight
         else:  # no_stack
             if compat_id != -1 and compat_id in vessel_compat_ids:
                 return 0  # Any group member already present
+            if text_id != -1 and text_id in vessel_effect_ids:
+                return 0  # Variant of existing effect
             if compat_id == -1 and eff_id in vessel_effect_ids:
                 return 0  # No group, same effect present
             return weight
@@ -520,12 +538,18 @@ class VesselOptimizer:
 
         Returns (effect_ids, compat_ids, no_stack_compat_ids) — the sets
         that this relic adds to the vessel's stacking context.
+        Also includes attachTextId values so variant effects are recognized
+        as duplicates of the base effect.
         """
         effect_ids = set()
         compat_ids = set()
         no_stack_compat_ids = set()
         for eff in relic.all_effects:
             effect_ids.add(eff)
+            # Also track canonical text ID for variant dedup
+            text_id = self.data_source.get_effect_text_id(eff)
+            if text_id != -1 and text_id != eff:
+                effect_ids.add(text_id)
             compat_id = self.data_source.get_effect_conflict_id(eff)
             if compat_id != -1:
                 compat_ids.add(compat_id)
@@ -599,6 +623,11 @@ class VesselOptimizer:
                 breakdown = self.scorer.get_breakdown(
                     relic, build, vessel_eff, vessel_compat, vessel_no_stack)
                 assigned_effect_ids.update(relic.all_effects)
+                # Also track canonical text IDs for requirement matching
+                for eff in relic.all_effects:
+                    text_id = self.data_source.get_effect_text_id(eff)
+                    if text_id != -1:
+                        assigned_effect_ids.add(text_id)
                 # Update stacking state for subsequent relics
                 e, c, ns = self._get_relic_stacking_adds(relic)
                 vessel_eff.update(e)
