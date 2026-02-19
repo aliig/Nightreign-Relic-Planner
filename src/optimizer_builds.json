@@ -37,13 +37,16 @@
           7031300,
           8660101,
           8000000,
-          8810300
+          8810300,
+          7060200
         ],
         "nice_to_have": [
-          7310000
+          7310000,
+          7060000
         ],
         "avoid": [
-          6820300
+          6820300,
+          8762000
         ],
         "blacklist": [
           6820600,
@@ -61,9 +64,7 @@
           "Attack power up when facing scarlet rot-afflicted%enemy",
           "Improved Affinity Damage Negation",
           "Improved Physical Damage Negation",
-          "Stamina Recovery upon Landing Attacks",
-          "Strength",
-          "Vigor"
+          "Stamina Recovery upon Landing Attacks"
         ],
         "avoid": [],
         "blacklist": []

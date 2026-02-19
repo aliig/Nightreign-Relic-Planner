@@ -116,21 +116,12 @@ class EffectSearchDialog:
                 self._family_items.append(fam)
             self._family_items.sort(key=lambda f: f["name"])
 
-        # Build individual effect items
+        # Build individual effect items (including family members, so
+        # users can add specific variants to different tiers)
         self._all_items = []
-        # Collect IDs covered by non-excluded multi-member families for filtering
-        family_covered_ids = set()
-        if families_list:
-            for fam in families_list:
-                if fam["name"] not in self.exclude_families and len(fam["member_names"]) >= 2:
-                    family_covered_ids.update(fam["member_ids"])
-
         for eff in effects_list:
             eff_id = eff["id"]
             if eff_id in exclude_ids:
-                continue
-            # Skip individual effects that are covered by a family
-            if eff_id in family_covered_ids:
                 continue
             self._all_items.append(eff)
 
