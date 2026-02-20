@@ -69,6 +69,38 @@ Then:
 
 ---
 
+# ARCHITECTURE
+
+## Package: `nrplanner/`
+
+```
+nrplanner/
+    constants.py   Immutable constants (item type flags, character names, color maps)
+    save.py        BND4 decryption, binary item/relic parsing, character discovery
+    data.py        SourceDataHandler — CSV/XML game data loader (50+ query methods)
+    checker.py     RelicChecker — pure relic validity checking
+    vessel.py      VesselParser / LoadoutHandler — hero loadout binary parsing
+    models.py      Pydantic models: TierConfig, OwnedRelic, BuildDefinition, VesselResult, etc.
+    scoring.py     BuildScorer — effect scoring with stacking awareness
+    optimizer.py   VesselOptimizer — backtrack + greedy slot assignment solvers
+    builds.py      BuildStore — JSON CRUD for build definitions
+    resources/     Game data: CSV params, XML FMG text, JSON stacking rules
+```
+
+## Data flow
+
+1. `decrypt_sl2()` / `split_memory_dat()` → decrypted USERDATA files
+2. `parse_relics(data)` → `list[RawRelic]`
+3. `RelicInventory(raw_relics, items_json, ds)` → queryable `list[OwnedRelic]`
+4. `VesselOptimizer.optimize_all_vessels(build, inventory, hero_type)` → `list[VesselResult]`
+
+## DO NOT TOUCH
+
+- Binary struct offsets in `save.py` — verbatim from the original, tested against real saves
+- CSV column mappings in `data.py` — any rename breaks all downstream queries
+
+---
+
 # WORKFLOW & STATE MANAGEMENT
 
 ## 1. Plan Before Typing
@@ -89,21 +121,7 @@ Ask for sign-off before implementing.
 
 ## 2. External Memory (Context Preservation)
 
-Because context degrades as the session grows, rely on external markdown files:
-
-### `tasks/todo.md` (or `SCRATCHPAD.md`)
-
-* Track multi-step plans.
-* Mark items complete as you go.
-* If restarting a session, read this first.
-
-### `tasks/lessons.md`
-
-* After any major correction from the human, update this file with:
-
-  * The mistake
-  * The rule to prevent it
-* Review this file at the start of new tasks.
+Claude Code's `TodoWrite` tool tracks task progress within a session. For cross-session context use the auto memory directory (`~/.claude/projects/.../memory/`).
 
 ---
 
