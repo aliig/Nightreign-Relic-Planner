@@ -85,7 +85,8 @@
         "preferred": [
           8660101,
           7150000,
-          8000000
+          8000000,
+          6005601
         ],
         "nice_to_have": [
           6500100,
@@ -93,7 +94,8 @@
           7030700,
           7012200,
           7331800,
-          6632900
+          6632900,
+          6631700
         ],
         "avoid": [
           8762000,
@@ -108,8 +110,7 @@
         "required": [],
         "preferred": [
           "Improved Guard Counters",
-          "Successful guarding fills more of the Art gauge",
-          "Partial HP Restoration upon Post-Damage Attacks"
+          "Successful guarding fills more of the Art gauge"
         ],
         "nice_to_have": [
           "Improved Affinity Damage Negation",

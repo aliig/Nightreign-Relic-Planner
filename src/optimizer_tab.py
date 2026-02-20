@@ -696,15 +696,16 @@ class OptimizerTab:
         slot_frame = ttk.Frame(parent)
         slot_frame.pack(fill='x', padx=5, pady=1)
 
-        # Slot label
+        # Slot label with priority indicator
         slot_type = "Deep " if assignment.is_deep else ""
         slot_num = assignment.slot_index + 1
+        priority = assignment.slot_index % 3 + 1  # 1, 2, 3 within group
         color_hex = RELIC_COLOR_HEX.get(assignment.slot_color, '#888888')
 
         slot_label = tk.Label(
             slot_frame,
-            text=f"  Slot {slot_num} ({slot_type}{assignment.slot_color})",
-            fg=color_hex, width=22, anchor='w')
+            text=f"  P{priority} Slot {slot_num} ({slot_type}{assignment.slot_color})",
+            fg=color_hex, width=25, anchor='w')
         slot_label.pack(side='left')
 
         if assignment.relic is None:
@@ -741,7 +742,14 @@ class OptimizerTab:
                 if redundant:
                     fg = '#999999'
                     tc = TIER_MAP.get(tier)
-                    tier_label = f" [{tc.display_name if tc else ''} (redundant)]"
+                    override_status = item.get("override_status", "redundant")
+                    if override_status == "overridden":
+                        status_text = "overridden by higher slot"
+                    elif override_status == "duplicate":
+                        status_text = "duplicate"
+                    else:
+                        status_text = "redundant"
+                    tier_label = f" [{tc.display_name if tc else ''} ({status_text})]"
                 elif tier:
                     tc = TIER_MAP.get(tier)
                     fg = tc.color if tc else '#888888'

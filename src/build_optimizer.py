@@ -479,6 +479,23 @@ class BuildScorer:
         score += TIER_BONUS.get(relic.effect_count, 0)
         return score
 
+    def _classify_override(self, eff_id: int,
+                           vessel_effect_ids: set,
+                           vessel_compat_ids: set,
+                           vessel_no_stack_compat_ids: set) -> str:
+        """Classify why an effect was suppressed by slot priority.
+
+        Returns 'duplicate' if the exact effect (or its text variant) is
+        already present in a higher-priority slot, 'overridden' if a
+        different effect in the same conflict group blocks it.
+        """
+        text_id = self.data_source.get_effect_text_id(eff_id)
+        if eff_id in vessel_effect_ids:
+            return "duplicate"
+        if text_id != -1 and text_id in vessel_effect_ids:
+            return "duplicate"
+        return "overridden"
+
     def get_breakdown(self, relic: OwnedRelic,
                       build: BuildDefinition,
                       other_effect_ids: set = None,
@@ -486,8 +503,9 @@ class BuildScorer:
                       other_no_stack_compat_ids: set = None) -> list[dict]:
         """Detailed per-effect scoring for UI display.
 
-        If stacking context is provided (other_* params = effects from OTHER
-        relics in the vessel), marks redundant effects.
+        If stacking context is provided (other_* params = effects from
+        higher-priority slots in the vessel), marks suppressed effects
+        with override_status ('overridden' or 'duplicate').
         """
         breakdown = []
         for eff in relic.effects:
@@ -496,20 +514,25 @@ class BuildScorer:
             tier, weight = self._resolve_tier_and_weight(eff, build)
             name = self.data_source.get_effect_name(eff)
             base_score = weight if tier else 0
-            redundant = False
+            override_status = None
             if other_effect_ids is not None and tier in SCORED_TIERS:
                 ctx_score = self._effect_stacking_score(
                     eff, tier, weight, other_effect_ids,
                     other_compat_ids or set(),
                     other_no_stack_compat_ids or set())
-                redundant = (ctx_score == 0 and base_score != 0)
+                if ctx_score == 0 and base_score != 0:
+                    override_status = self._classify_override(
+                        eff, other_effect_ids,
+                        other_compat_ids or set(),
+                        other_no_stack_compat_ids or set())
             breakdown.append({
                 "effect_id": eff,
                 "name": name,
                 "tier": tier,
-                "score": 0 if redundant else base_score,
+                "score": 0 if override_status else base_score,
                 "is_curse": False,
-                "redundant": redundant,
+                "redundant": override_status is not None,
+                "override_status": override_status,
             })
 
         for curse in relic.curses:
@@ -518,20 +541,25 @@ class BuildScorer:
             tier, weight = self._resolve_tier_and_weight(curse, build)
             name = self.data_source.get_effect_name(curse)
             base_score = weight if tier else 0
-            redundant = False
+            override_status = None
             if other_effect_ids is not None and tier in SCORED_TIERS:
                 ctx_score = self._effect_stacking_score(
                     curse, tier, weight, other_effect_ids,
                     other_compat_ids or set(),
                     other_no_stack_compat_ids or set())
-                redundant = (ctx_score == 0 and base_score != 0)
+                if ctx_score == 0 and base_score != 0:
+                    override_status = self._classify_override(
+                        curse, other_effect_ids,
+                        other_compat_ids or set(),
+                        other_no_stack_compat_ids or set())
             breakdown.append({
                 "effect_id": curse,
                 "name": name,
                 "tier": tier,
-                "score": 0 if redundant else base_score,
+                "score": 0 if override_status else base_score,
                 "is_curse": True,
-                "redundant": redundant,
+                "redundant": override_status is not None,
+                "override_status": override_status,
             })
 
         return breakdown
@@ -656,9 +684,9 @@ class VesselOptimizer:
                              build: BuildDefinition) -> VesselResult:
         """Build a VesselResult from raw slot assignments.
 
-        Processes relics in value order (highest pre-score first) so that
-        the most valuable relics get stacking credit, making the breakdown
-        more intuitive.
+        Processes relics in left-to-right slot order so that leftmost
+        slots get stacking credit first, matching the game's override
+        priority (Slot 1 > Slot 2 > Slot 3).
         """
         slot_results: list[tuple] = [(None, 0, [])] * num_slots
         assigned_effect_ids = set()
@@ -667,16 +695,8 @@ class VesselOptimizer:
         vessel_no_stack = set()
         vessel_curse_counts: dict[int, int] = {}
 
-        # Determine credit order: highest pre-score first
-        pre_scores = []
-        for i in range(num_slots):
-            relic = assignments[i][0]
-            if relic:
-                pre_scores.append(
-                    (self.scorer.score_relic(relic, build), i))
-            else:
-                pre_scores.append((0, i))
-        credit_order = sorted(pre_scores, key=lambda x: x[0], reverse=True)
+        # Credit order: left-to-right slot order (matches game priority)
+        credit_order = [(0, i) for i in range(num_slots)]
 
         total_score = 0
         for _, i in credit_order:
@@ -780,10 +800,12 @@ class VesselOptimizer:
     def _greedy_solve_once(self, candidates_per_slot: list, num_slots: int,
                            build: BuildDefinition,
                            excluded_handles: set = None) -> list:
-        """Single greedy assignment pass.
+        """Single greedy assignment pass — fills slots left-to-right.
 
-        Iteratively picks the best (slot, relic) pair considering current
-        vessel stacking state, skipping any relics in excluded_handles.
+        For each slot in order, picks the best relic considering current
+        vessel stacking state. This ensures stacking credit is awarded
+        in the same left-to-right priority order as the game
+        (Slot 1 > Slot 2 > Slot 3).
         """
         assigned = [None] * num_slots
         used_handles = set(excluded_handles or ())
@@ -792,26 +814,24 @@ class VesselOptimizer:
         vessel_no_stack = set()
         vessel_curse_counts: dict[int, int] = {}
 
-        for _ in range(num_slots):
-            best = None  # (score, slot_idx, relic)
+        for slot_idx in range(num_slots):
+            best = None  # (score, relic)
 
-            for slot_idx in range(num_slots):
-                if assigned[slot_idx] is not None:
+            for _, relic in candidates_per_slot[slot_idx]:
+                if relic.ga_handle in used_handles:
                     continue
-                for _, relic in candidates_per_slot[slot_idx]:
-                    if relic.ga_handle in used_handles:
-                        continue
-                    score = self.scorer.score_relic_in_context(
-                        relic, build, vessel_eff,
-                        vessel_compat, vessel_no_stack,
-                        vessel_curse_counts)
-                    if best is None or score > best[0]:
-                        best = (score, slot_idx, relic)
+                score = self.scorer.score_relic_in_context(
+                    relic, build, vessel_eff,
+                    vessel_compat, vessel_no_stack,
+                    vessel_curse_counts)
+                if best is None or score > best[0]:
+                    best = (score, relic)
 
             if best is None:
-                break
+                assigned[slot_idx] = (None, 0)
+                continue
 
-            score, slot_idx, relic = best
+            score, relic = best
             assigned[slot_idx] = (relic, score)
             used_handles.add(relic.ga_handle)
             e, c, ns = self._get_relic_stacking_adds(relic)
@@ -821,10 +841,6 @@ class VesselOptimizer:
             for curse_id in self._get_relic_curse_ids(relic):
                 vessel_curse_counts[curse_id] = \
                     vessel_curse_counts.get(curse_id, 0) + 1
-
-        for i in range(num_slots):
-            if assigned[i] is None:
-                assigned[i] = (None, 0)
 
         return assigned
 

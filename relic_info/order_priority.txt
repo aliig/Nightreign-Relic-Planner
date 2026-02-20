@@ -1,0 +1,45 @@
+Gemini said
+In Elden Ring: Nightreign, the "Left-to-Right" priority system (Slot 1 > Slot 2 > Slot 3) is a critical mechanic for high-level build optimization. While most stat-based properties stack regardless of position, any property that fundamentally changes an aspect of your character or weapon will be subject to the priority rule.
+
+Here is the comprehensive list of relic property types impacted by their order in your Vessel:
+
+1. Starting Armament Affinities (Status/Elemental)
+This is the most frequent conflict. If you equip multiple relics that add a "starting affinity" to your default weapon, only the leftmost relic's effect is applied.
+
+Impacted Properties: "Starting armament deals Poison/Rot/Frost/Bleed damage," or "Starting armament is infused with Magic/Holy/Fire/Lightning."
+
+The Result: If Slot 1 is Poison and Slot 2 is Fire, your weapon will only deal Poison damage. The Fire property is effectively "muted."
+
+2. Starting Weapon Skills (Ashes of War)
+Some relics grant your starting weapon a specific Ash of War (like Quickstep, Seppuku, or Golden Vow). Since a weapon can only have one active skill:
+
+Impacted Properties: Any relic that states "Changes starting armament skill to [X]."
+
+The Result: The skill from the leftmost relic overrides all others. This is why players often hunt for "Flipped Vessels" (e.g., switching a Red-Yellow-Blue order to Blue-Yellow-Red) to ensure their preferred skill is in the priority slot.
+
+3. Ultimate Art & Character Skill "Morphs"
+Nightreign features character-specific relics that don't just buff a skill, but transform it. If these transformations are mutually exclusive (changing the fundamental behavior or element), order determines the outcome.
+
+Impacted Properties: "Ultimate Art now creates a [Element] explosion," or "Character Skill now leaves a [Status] trail."
+
+The Result: If you have one relic morphing Wylder's Claw Shot into a Fire-tether and another morphing it into a Magic-tether, only the Slot 1 version will activate.
+
+4. Non-Stacking Aura Effects
+Certain high-tier relics provide a constant aura to your character or teammates. Many of these are coded to not stack with themselves or similar effects to prevent "buff-looping."
+
+Impacted Properties: "Provides an aura that increases Poise/Defense for nearby allies."
+
+The Result: If two relics provide the same type of aura, the potency and priority are dictated by the leftmost slot (usually the one with the higher value +1/+2/+3, though Slot 1 is the safety net).
+
+What is NOT Impacted? (Stacking Properties)
+You do not need to worry about the order for the following, as they simply add together:
+
+Base Stat Increases: +5 Vigor, +3 Strength, etc.
+
+Percentage Buffs: +10% Attack Power, +15% Stamina Recovery.
+
+Gauge Reductions: Ultimate Arts Gauge +1 and Character Skill Cooldown −1. These are additive and work regardless of placement.
+
+Rune/Drop Rates: Increased Rune acquisition or Item Discovery.
+
+Pro Tip: If you find a "God Roll" relic that has incredible stats but a Starting Skill you hate, place it in Slot 2 or 3. Then, put a relic with a Skill you actually like in Slot 1. Slot 1 will overwrite the "bad" skill, but you’ll still get all the passive stat boosts from the other slots.
