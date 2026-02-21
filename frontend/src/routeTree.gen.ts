@@ -15,13 +15,13 @@ import { Route as RecoverPasswordRouteImport } from './routes/recover-password'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as LayoutRouteImport } from './routes/_layout'
 import { Route as LayoutIndexRouteImport } from './routes/_layout/index'
-import { Route as LayoutSettingsRouteImport } from './routes/_layout/settings'
-import { Route as LayoutAdminRouteImport } from './routes/_layout/admin'
 import { Route as LayoutUploadRouteImport } from './routes/_layout/upload'
+import { Route as LayoutSettingsRouteImport } from './routes/_layout/settings'
+import { Route as LayoutOptimizeRouteImport } from './routes/_layout/optimize'
 import { Route as LayoutInventoryRouteImport } from './routes/_layout/inventory'
 import { Route as LayoutBuildsRouteImport } from './routes/_layout/builds'
+import { Route as LayoutAdminRouteImport } from './routes/_layout/admin'
 import { Route as LayoutBuildsBuildIdRouteImport } from './routes/_layout/builds.$buildId'
-import { Route as LayoutOptimizeRouteImport } from './routes/_layout/optimize'
 
 const SignupRoute = SignupRouteImport.update({
   id: '/signup',
@@ -52,19 +52,19 @@ const LayoutIndexRoute = LayoutIndexRouteImport.update({
   path: '/',
   getParentRoute: () => LayoutRoute,
 } as any)
+const LayoutUploadRoute = LayoutUploadRouteImport.update({
+  id: '/upload',
+  path: '/upload',
+  getParentRoute: () => LayoutRoute,
+} as any)
 const LayoutSettingsRoute = LayoutSettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
   getParentRoute: () => LayoutRoute,
 } as any)
-const LayoutAdminRoute = LayoutAdminRouteImport.update({
-  id: '/admin',
-  path: '/admin',
-  getParentRoute: () => LayoutRoute,
-} as any)
-const LayoutUploadRoute = LayoutUploadRouteImport.update({
-  id: '/upload',
-  path: '/upload',
+const LayoutOptimizeRoute = LayoutOptimizeRouteImport.update({
+  id: '/optimize',
+  path: '/optimize',
   getParentRoute: () => LayoutRoute,
 } as any)
 const LayoutInventoryRoute = LayoutInventoryRouteImport.update({
@@ -77,30 +77,30 @@ const LayoutBuildsRoute = LayoutBuildsRouteImport.update({
   path: '/builds',
   getParentRoute: () => LayoutRoute,
 } as any)
-const LayoutBuildsBuildIdRoute = LayoutBuildsBuildIdRouteImport.update({
-  id: '/builds/$buildId',
-  path: '/builds/$buildId',
+const LayoutAdminRoute = LayoutAdminRouteImport.update({
+  id: '/admin',
+  path: '/admin',
   getParentRoute: () => LayoutRoute,
 } as any)
-const LayoutOptimizeRoute = LayoutOptimizeRouteImport.update({
-  id: '/optimize',
-  path: '/optimize',
-  getParentRoute: () => LayoutRoute,
+const LayoutBuildsBuildIdRoute = LayoutBuildsBuildIdRouteImport.update({
+  id: '/$buildId',
+  path: '/$buildId',
+  getParentRoute: () => LayoutBuildsRoute,
 } as any)
 
 export interface FileRoutesByFullPath {
+  '/': typeof LayoutIndexRoute
   '/login': typeof LoginRoute
   '/recover-password': typeof RecoverPasswordRoute
   '/reset-password': typeof ResetPasswordRoute
   '/signup': typeof SignupRoute
   '/admin': typeof LayoutAdminRoute
+  '/builds': typeof LayoutBuildsRouteWithChildren
+  '/inventory': typeof LayoutInventoryRoute
+  '/optimize': typeof LayoutOptimizeRoute
   '/settings': typeof LayoutSettingsRoute
   '/upload': typeof LayoutUploadRoute
-  '/inventory': typeof LayoutInventoryRoute
-  '/builds': typeof LayoutBuildsRoute
   '/builds/$buildId': typeof LayoutBuildsBuildIdRoute
-  '/optimize': typeof LayoutOptimizeRoute
-  '/': typeof LayoutIndexRoute
 }
 export interface FileRoutesByTo {
   '/login': typeof LoginRoute
@@ -108,13 +108,13 @@ export interface FileRoutesByTo {
   '/reset-password': typeof ResetPasswordRoute
   '/signup': typeof SignupRoute
   '/admin': typeof LayoutAdminRoute
+  '/builds': typeof LayoutBuildsRouteWithChildren
+  '/inventory': typeof LayoutInventoryRoute
+  '/optimize': typeof LayoutOptimizeRoute
   '/settings': typeof LayoutSettingsRoute
   '/upload': typeof LayoutUploadRoute
-  '/inventory': typeof LayoutInventoryRoute
-  '/builds': typeof LayoutBuildsRoute
-  '/builds/$buildId': typeof LayoutBuildsBuildIdRoute
-  '/optimize': typeof LayoutOptimizeRoute
   '/': typeof LayoutIndexRoute
+  '/builds/$buildId': typeof LayoutBuildsBuildIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -124,29 +124,29 @@ export interface FileRoutesById {
   '/reset-password': typeof ResetPasswordRoute
   '/signup': typeof SignupRoute
   '/_layout/admin': typeof LayoutAdminRoute
+  '/_layout/builds': typeof LayoutBuildsRouteWithChildren
+  '/_layout/inventory': typeof LayoutInventoryRoute
+  '/_layout/optimize': typeof LayoutOptimizeRoute
   '/_layout/settings': typeof LayoutSettingsRoute
   '/_layout/upload': typeof LayoutUploadRoute
-  '/_layout/inventory': typeof LayoutInventoryRoute
-  '/_layout/builds': typeof LayoutBuildsRoute
-  '/_layout/builds/$buildId': typeof LayoutBuildsBuildIdRoute
-  '/_layout/optimize': typeof LayoutOptimizeRoute
   '/_layout/': typeof LayoutIndexRoute
+  '/_layout/builds/$buildId': typeof LayoutBuildsBuildIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
+    | '/'
     | '/login'
     | '/recover-password'
     | '/reset-password'
     | '/signup'
     | '/admin'
+    | '/builds'
+    | '/inventory'
+    | '/optimize'
     | '/settings'
     | '/upload'
-    | '/inventory'
-    | '/builds'
     | '/builds/$buildId'
-    | '/optimize'
-    | '/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/login'
@@ -154,13 +154,13 @@ export interface FileRouteTypes {
     | '/reset-password'
     | '/signup'
     | '/admin'
+    | '/builds'
+    | '/inventory'
+    | '/optimize'
     | '/settings'
     | '/upload'
-    | '/inventory'
-    | '/builds'
-    | '/builds/$buildId'
-    | '/optimize'
     | '/'
+    | '/builds/$buildId'
   id:
     | '__root__'
     | '/_layout'
@@ -169,13 +169,13 @@ export interface FileRouteTypes {
     | '/reset-password'
     | '/signup'
     | '/_layout/admin'
+    | '/_layout/builds'
+    | '/_layout/inventory'
+    | '/_layout/optimize'
     | '/_layout/settings'
     | '/_layout/upload'
-    | '/_layout/inventory'
-    | '/_layout/builds'
-    | '/_layout/builds/$buildId'
-    | '/_layout/optimize'
     | '/_layout/'
+    | '/_layout/builds/$buildId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -219,7 +219,7 @@ declare module '@tanstack/react-router' {
     '/_layout': {
       id: '/_layout'
       path: ''
-      fullPath: ''
+      fullPath: '/'
       preLoaderRoute: typeof LayoutRouteImport
       parentRoute: typeof rootRouteImport
     }
@@ -230,6 +230,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LayoutIndexRouteImport
       parentRoute: typeof LayoutRoute
     }
+    '/_layout/upload': {
+      id: '/_layout/upload'
+      path: '/upload'
+      fullPath: '/upload'
+      preLoaderRoute: typeof LayoutUploadRouteImport
+      parentRoute: typeof LayoutRoute
+    }
     '/_layout/settings': {
       id: '/_layout/settings'
       path: '/settings'
@@ -237,18 +244,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LayoutSettingsRouteImport
       parentRoute: typeof LayoutRoute
     }
-    '/_layout/admin': {
-      id: '/_layout/admin'
-      path: '/admin'
-      fullPath: '/admin'
-      preLoaderRoute: typeof LayoutAdminRouteImport
-      parentRoute: typeof LayoutRoute
-    }
-    '/_layout/upload': {
-      id: '/_layout/upload'
-      path: '/upload'
-      fullPath: '/upload'
-      preLoaderRoute: typeof LayoutUploadRouteImport
+    '/_layout/optimize': {
+      id: '/_layout/optimize'
+      path: '/optimize'
+      fullPath: '/optimize'
+      preLoaderRoute: typeof LayoutOptimizeRouteImport
       parentRoute: typeof LayoutRoute
     }
     '/_layout/inventory': {
@@ -265,42 +265,52 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LayoutBuildsRouteImport
       parentRoute: typeof LayoutRoute
     }
-    '/_layout/builds/$buildId': {
-      id: '/_layout/builds/$buildId'
-      path: '/builds/$buildId'
-      fullPath: '/builds/$buildId'
-      preLoaderRoute: typeof LayoutBuildsBuildIdRouteImport
+    '/_layout/admin': {
+      id: '/_layout/admin'
+      path: '/admin'
+      fullPath: '/admin'
+      preLoaderRoute: typeof LayoutAdminRouteImport
       parentRoute: typeof LayoutRoute
     }
-    '/_layout/optimize': {
-      id: '/_layout/optimize'
-      path: '/optimize'
-      fullPath: '/optimize'
-      preLoaderRoute: typeof LayoutOptimizeRouteImport
-      parentRoute: typeof LayoutRoute
+    '/_layout/builds/$buildId': {
+      id: '/_layout/builds/$buildId'
+      path: '/$buildId'
+      fullPath: '/builds/$buildId'
+      preLoaderRoute: typeof LayoutBuildsBuildIdRouteImport
+      parentRoute: typeof LayoutBuildsRoute
     }
   }
 }
 
+interface LayoutBuildsRouteChildren {
+  LayoutBuildsBuildIdRoute: typeof LayoutBuildsBuildIdRoute
+}
+
+const LayoutBuildsRouteChildren: LayoutBuildsRouteChildren = {
+  LayoutBuildsBuildIdRoute: LayoutBuildsBuildIdRoute,
+}
+
+const LayoutBuildsRouteWithChildren = LayoutBuildsRoute._addFileChildren(
+  LayoutBuildsRouteChildren,
+)
+
 interface LayoutRouteChildren {
   LayoutAdminRoute: typeof LayoutAdminRoute
+  LayoutBuildsRoute: typeof LayoutBuildsRouteWithChildren
+  LayoutInventoryRoute: typeof LayoutInventoryRoute
+  LayoutOptimizeRoute: typeof LayoutOptimizeRoute
   LayoutSettingsRoute: typeof LayoutSettingsRoute
   LayoutUploadRoute: typeof LayoutUploadRoute
-  LayoutInventoryRoute: typeof LayoutInventoryRoute
-  LayoutBuildsRoute: typeof LayoutBuildsRoute
-  LayoutBuildsBuildIdRoute: typeof LayoutBuildsBuildIdRoute
-  LayoutOptimizeRoute: typeof LayoutOptimizeRoute
   LayoutIndexRoute: typeof LayoutIndexRoute
 }
 
 const LayoutRouteChildren: LayoutRouteChildren = {
   LayoutAdminRoute: LayoutAdminRoute,
+  LayoutBuildsRoute: LayoutBuildsRouteWithChildren,
+  LayoutInventoryRoute: LayoutInventoryRoute,
+  LayoutOptimizeRoute: LayoutOptimizeRoute,
   LayoutSettingsRoute: LayoutSettingsRoute,
   LayoutUploadRoute: LayoutUploadRoute,
-  LayoutInventoryRoute: LayoutInventoryRoute,
-  LayoutBuildsRoute: LayoutBuildsRoute,
-  LayoutBuildsBuildIdRoute: LayoutBuildsBuildIdRoute,
-  LayoutOptimizeRoute: LayoutOptimizeRoute,
   LayoutIndexRoute: LayoutIndexRoute,
 }
 

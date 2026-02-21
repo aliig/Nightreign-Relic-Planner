@@ -12,7 +12,10 @@
       "Bash(uv pip list:*)",
       "Bash(uv sync:*)",
       "Bash(python3:*)",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)"
     ]
   }
 }
