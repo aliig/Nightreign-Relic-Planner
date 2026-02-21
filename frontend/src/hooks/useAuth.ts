@@ -10,6 +10,7 @@ import {
 } from "@/client"
 import { handleError } from "@/utils"
 import useCustomToast from "./useCustomToast"
+import { MIGRATION_FLAG, migrateLocalBuildsToDb } from "./useLocalBuilds"
 
 const isLoggedIn = () => {
   return localStorage.getItem("access_token") !== null
@@ -18,7 +19,7 @@ const isLoggedIn = () => {
 const useAuth = () => {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
-  const { showErrorToast } = useCustomToast()
+  const { showErrorToast, showSuccessToast } = useCustomToast()
 
   const { data: user } = useQuery<UserPublic | null, Error>({
     queryKey: ["currentUser"],
@@ -30,6 +31,10 @@ const useAuth = () => {
     mutationFn: (data: UserRegister) =>
       UsersService.registerUser({ requestBody: data }),
     onSuccess: () => {
+      // If the user had anonymous builds, flag them for migration after login.
+      if (localStorage.getItem("anon_builds")) {
+        sessionStorage.setItem(MIGRATION_FLAG, "1")
+      }
       navigate({ to: "/login" })
     },
     onError: handleError.bind(showErrorToast),
@@ -47,15 +52,26 @@ const useAuth = () => {
 
   const loginMutation = useMutation({
     mutationFn: login,
-    onSuccess: () => {
-      navigate({ to: "/" })
+    onSuccess: async () => {
+      const search = new URLSearchParams(window.location.search)
+      const redirectTo = search.get("redirect") || "/"
+
+      if (sessionStorage.getItem(MIGRATION_FLAG)) {
+        sessionStorage.removeItem(MIGRATION_FLAG)
+        const count = await migrateLocalBuildsToDb()
+        if (count > 0) {
+          showSuccessToast(`${count} build${count !== 1 ? "s" : ""} synced to your account.`)
+        }
+      }
+
+      navigate({ to: redirectTo as any })
     },
     onError: handleError.bind(showErrorToast),
   })
 
   const logout = () => {
     localStorage.removeItem("access_token")
-    navigate({ to: "/login" })
+    navigate({ to: "/" })
   }
 
   return {

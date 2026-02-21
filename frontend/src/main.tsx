@@ -20,8 +20,11 @@ OpenAPI.TOKEN = async () => {
 
 const handleApiError = (error: Error) => {
   if (error instanceof ApiError && [401, 403].includes(error.status)) {
+    const hadToken = localStorage.getItem("access_token") !== null
     localStorage.removeItem("access_token")
-    window.location.href = "/login"
+    if (hadToken) {
+      window.location.href = "/login"
+    }
   }
 }
 const queryClient = new QueryClient({

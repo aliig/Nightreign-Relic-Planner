@@ -1,8 +1,9 @@
-import { createFileRoute } from "@tanstack/react-router"
+import { createFileRoute, Link } from "@tanstack/react-router"
 
 import ChangePassword from "@/components/UserSettings/ChangePassword"
 import DeleteAccount from "@/components/UserSettings/DeleteAccount"
 import UserInformation from "@/components/UserSettings/UserInformation"
+import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import useAuth from "@/hooks/useAuth"
 
@@ -30,7 +31,14 @@ function UserSettings() {
     : tabsConfig
 
   if (!currentUser) {
-    return null
+    return (
+      <div className="py-16 text-center space-y-3">
+        <p className="text-muted-foreground">Sign in to manage your account settings.</p>
+        <Button asChild variant="outline">
+          <Link to="/login" search={{ redirect: "/settings" }}>Sign In</Link>
+        </Button>
+      </div>
+    )
   }
 
   return (

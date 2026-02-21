@@ -19,10 +19,14 @@ function Dashboard() {
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-semibold">
-          Hi, {currentUser?.full_name || currentUser?.email}
+          {currentUser
+            ? `Hi, ${currentUser.full_name || currentUser.email}`
+            : "Welcome to Nightreign Relic Planner"}
         </h1>
         <p className="text-muted-foreground mt-1">
-          Welcome to the Nightreign Relic Planner.
+          {currentUser
+            ? "Welcome back to your Relic Planner."
+            : "Upload a save file to get started, or sign in to sync your data."}
         </p>
       </div>
 

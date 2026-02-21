@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router"
+import { createFileRoute, Link } from "@tanstack/react-router"
 import { useMutation, useSuspenseQuery } from "@tanstack/react-query"
 import { Suspense, useState } from "react"
 import { ChevronDown, ChevronUp, CheckCircle2, XCircle } from "lucide-react"
@@ -16,7 +16,8 @@ import {
 } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Separator } from "@/components/ui/separator"
-import useAuth from "@/hooks/useAuth"
+import { isLoggedIn } from "@/hooks/useAuth"
+import { useLocalBuilds } from "@/hooks/useLocalBuilds"
 import { handleError } from "@/utils"
 
 export const Route = createFileRoute("/_layout/optimize")({
@@ -143,6 +144,8 @@ function VesselCard({ vessel }: { vessel: VesselResult }) {
   )
 }
 
+// --- Authenticated optimizer (DB-backed) ---
+
 function AuthOptimizeForm() {
   const { data: buildsData } = useSuspenseQuery({
     queryKey: ["builds"],
@@ -231,18 +234,120 @@ function AuthOptimizeForm() {
   )
 }
 
-function AnonOptimize() {
+// --- Anonymous optimizer (inline mode) ---
+
+interface SessionCharacter {
+  name: string
+  relics: Array<Record<string, unknown>>
+}
+
+function AnonOptimizeForm() {
+  const { builds } = useLocalBuilds()
+
+  const rawChar = sessionStorage.getItem("selectedCharacter")
+  const char: SessionCharacter | null = rawChar ? JSON.parse(rawChar) : null
+
+  const [buildId, setBuildId] = useState(builds[0]?.id ?? "")
+  const [results, setResults] = useState<VesselResult[]>([])
+
+  const optimizeMutation = useMutation({
+    mutationFn: () => {
+      const build = builds.find((b) => b.id === buildId)
+      if (!build || !char) throw new Error("Missing build or character data")
+
+      return OptimizeService.runOptimize({
+        requestBody: {
+          build: {
+            id: build.id,
+            name: build.name,
+            character: build.character,
+            tiers: build.tiers,
+            family_tiers: build.family_tiers,
+            include_deep: build.include_deep,
+            curse_max: build.curse_max,
+          } as any,
+          relics: char.relics as any,
+          character_name: char.name,
+        },
+      })
+    },
+    onSuccess: (data) => setResults(data),
+    onError: handleError,
+  })
+
+  if (!char) {
+    return (
+      <p className="text-sm text-muted-foreground py-8">
+        No inventory loaded.{" "}
+        <Link to="/upload" className="underline">Upload a save file</Link> first.
+      </p>
+    )
+  }
+
+  if (builds.length === 0) {
+    return (
+      <p className="text-sm text-muted-foreground py-8">
+        No builds found.{" "}
+        <Link to="/builds" className="underline">Create a build</Link> first.
+      </p>
+    )
+  }
+
   return (
-    <p className="text-sm text-muted-foreground py-8">
-      Please <a href="/login" className="underline">sign in</a> to use the optimizer.
-      Anonymous optimization via inline data will be supported in a future update.
-    </p>
+    <div className="space-y-6">
+      <div className="flex flex-wrap gap-3 items-end">
+        <div className="space-y-1.5">
+          <label className="text-sm font-medium">Build</label>
+          <Select value={buildId} onValueChange={setBuildId}>
+            <SelectTrigger className="w-56">
+              <SelectValue placeholder="Select build" />
+            </SelectTrigger>
+            <SelectContent>
+              {builds.map((b) => (
+                <SelectItem key={b.id} value={b.id}>{b.name} ({b.character})</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-1.5">
+          <label className="text-sm font-medium">Character</label>
+          <div className="flex h-9 items-center rounded-md border px-3 text-sm w-56 bg-muted/30">
+            {char.name}
+          </div>
+        </div>
+        <Button
+          onClick={() => optimizeMutation.mutate()}
+          disabled={!buildId || optimizeMutation.isPending}
+        >
+          {optimizeMutation.isPending ? "Optimizing…" : "Optimize"}
+        </Button>
+      </div>
+
+      <p className="text-xs text-muted-foreground border rounded-md px-3 py-2 bg-muted/40">
+        Running in session mode with data from your uploaded save.{" "}
+        <Link to="/login" search={{ redirect: "/optimize" }} className="underline">
+          Sign in
+        </Link>{" "}
+        to persist builds and inventory across devices.
+      </p>
+
+      {results.length > 0 && (
+        <div className="space-y-3">
+          <h2 className="text-lg font-medium">
+            Top {results.length} vessel{results.length !== 1 ? "s" : ""}
+          </h2>
+          {results.map((vessel) => (
+            <VesselCard key={`${vessel.vessel_id}-${vessel.total_score}`} vessel={vessel} />
+          ))}
+        </div>
+      )}
+    </div>
   )
 }
 
-function OptimizePage() {
-  const { user } = useAuth()
+// --- Page ---
 
+function OptimizePage() {
   return (
     <div className="space-y-6">
       <div>
@@ -252,7 +357,7 @@ function OptimizePage() {
         </p>
       </div>
       <Suspense fallback={<Skeleton className="h-32 w-full" />}>
-        {user ? <AuthOptimizeForm /> : <AnonOptimize />}
+        {isLoggedIn() ? <AuthOptimizeForm /> : <AnonOptimizeForm />}
       </Suspense>
     </div>
   )

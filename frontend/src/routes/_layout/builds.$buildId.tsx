@@ -11,6 +11,8 @@ import { Label } from "@/components/ui/label"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Separator } from "@/components/ui/separator"
 import useCustomToast from "@/hooks/useCustomToast"
+import { isLoggedIn } from "@/hooks/useAuth"
+import { useLocalBuilds } from "@/hooks/useLocalBuilds"
 import { handleError } from "@/utils"
 
 export const Route = createFileRoute("/_layout/builds/$buildId")({
@@ -59,90 +61,58 @@ function EffectChip({
   )
 }
 
-function BuildEditorContent({ buildId }: { buildId: string }) {
-  const queryClient = useQueryClient()
-  const { showSuccessToast } = useCustomToast()
+// --- Shared editor UI (works for both auth and anon) ---
 
-  const { data: build } = useSuspenseQuery({
-    queryKey: ["builds", buildId],
-    queryFn: () => BuildsService.getBuild({ buildId }),
-  })
+interface EditorUIProps {
+  name: string
+  character: string
+  tiers: Record<string, number[]>
+  includeDeep: boolean
+  curseMax: number
+  dirty: boolean
+  saving: boolean
+  effects: EffectMeta[]
+  onTiersChange: (tiers: Record<string, number[]>) => void
+  onIncludeDeepChange: (v: boolean) => void
+  onCurseMaxChange: (v: number) => void
+  onSave: () => void
+}
 
-  const { data: effectsData } = useSuspenseQuery({
-    queryKey: ["game", "effects"],
-    queryFn: () => GameService.getEffects(),
-    staleTime: Infinity,
-  })
-
-  const effects = (effectsData ?? []) as EffectMeta[]
-
-  // Local state mirrors the build tiers so we can edit without constant re-fetches
-  const [tiers, setTiers] = useState<Record<string, number[]>>(
-    () => (build.tiers as Record<string, number[]>) ?? {},
-  )
-  const [includeDeep, setIncludeDeep] = useState(build.include_deep)
-  const [curseMax, setCurseMax] = useState(build.curse_max)
+function BuildEditorUI({
+  name, character, tiers, includeDeep, curseMax,
+  dirty, saving, effects,
+  onTiersChange, onIncludeDeepChange, onCurseMaxChange, onSave,
+}: EditorUIProps) {
   const [effectSearch, setEffectSearch] = useState("")
-  const [dirty, setDirty] = useState(false)
-
-  // Keep local state in sync if build reloads
-  useEffect(() => {
-    setTiers((build.tiers as Record<string, number[]>) ?? {})
-    setIncludeDeep(build.include_deep)
-    setCurseMax(build.curse_max)
-    setDirty(false)
-  }, [build])
-
-  const saveMutation = useMutation({
-    mutationFn: () =>
-      BuildsService.updateBuild({
-        buildId,
-        requestBody: { tiers, include_deep: includeDeep, curse_max: curseMax },
-      }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["builds"] })
-      showSuccessToast("Build saved.")
-      setDirty(false)
-    },
-    onError: handleError,
-  })
 
   const assignEffect = useCallback(
     (effectId: number, targetTier: string) => {
-      setTiers((prev) => {
-        const next = { ...prev }
-        // Remove from any existing tier first
-        for (const key of TIER_ORDER) {
-          next[key] = (next[key] ?? []).filter((id) => id !== effectId)
-        }
-        next[targetTier] = [...(next[targetTier] ?? []), effectId]
-        return next
-      })
-      setDirty(true)
+      const next = { ...tiers }
+      for (const key of TIER_ORDER) {
+        next[key] = (next[key] ?? []).filter((id) => id !== effectId)
+      }
+      next[targetTier] = [...(next[targetTier] ?? []), effectId]
+      onTiersChange(next)
     },
-    [],
+    [tiers, onTiersChange],
   )
 
-  const removeEffect = useCallback((effectId: number, fromTier: string) => {
-    setTiers((prev) => ({
-      ...prev,
-      [fromTier]: (prev[fromTier] ?? []).filter((id) => id !== effectId),
-    }))
-    setDirty(true)
-  }, [])
+  const removeEffect = useCallback(
+    (effectId: number, fromTier: string) => {
+      onTiersChange({
+        ...tiers,
+        [fromTier]: (tiers[fromTier] ?? []).filter((id) => id !== effectId),
+      })
+    },
+    [tiers, onTiersChange],
+  )
 
-  // Build a map for quick name lookup
   const effectMap = new Map(effects.map((e) => [e.id, e]))
-
-  // Which effects are already assigned somewhere
   const assignedIds = new Set(Object.values(tiers).flat())
-
-  // Filtered available effects
   const filteredEffects = effects.filter(
     (e) =>
       !assignedIds.has(e.id) &&
-      (effectSearch === "" ||
-        e.name.toLowerCase().includes(effectSearch.toLowerCase())),
+      (effectSearch === "" || e.name.toLowerCase().includes(effectSearch.toLowerCase())),
   )
 
   return (
@@ -150,14 +120,11 @@ function BuildEditorContent({ buildId }: { buildId: string }) {
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-2xl font-semibold">{build.name}</h1>
-          <p className="text-muted-foreground text-sm mt-0.5">{build.character}</p>
+          <h1 className="text-2xl font-semibold">{name}</h1>
+          <p className="text-muted-foreground text-sm mt-0.5">{character}</p>
         </div>
-        <Button
-          onClick={() => saveMutation.mutate()}
-          disabled={!dirty || saveMutation.isPending}
-        >
-          {saveMutation.isPending ? "Saving…" : dirty ? "Save Changes" : "Saved"}
+        <Button onClick={onSave} disabled={!dirty || saving}>
+          {saving ? "Saving…" : dirty ? "Save Changes" : "Saved"}
         </Button>
       </div>
 
@@ -167,7 +134,7 @@ function BuildEditorContent({ buildId }: { buildId: string }) {
           <Checkbox
             id="include-deep"
             checked={includeDeep}
-            onCheckedChange={(v: boolean) => { setIncludeDeep(v); setDirty(true) }}
+            onCheckedChange={(v: boolean) => onIncludeDeepChange(v)}
           />
           <Label htmlFor="include-deep">Include deep relics</Label>
         </div>
@@ -179,7 +146,7 @@ function BuildEditorContent({ buildId }: { buildId: string }) {
             min={0}
             max={3}
             value={curseMax}
-            onChange={(e) => { setCurseMax(Number(e.target.value)); setDirty(true) }}
+            onChange={(e) => onCurseMaxChange(Number(e.target.value))}
             className="w-16"
           />
         </div>
@@ -196,9 +163,7 @@ function BuildEditorContent({ buildId }: { buildId: string }) {
 
             return (
               <div key={tierKey} className="rounded-lg border p-4 space-y-3">
-                <h3 className="text-sm font-semibold" style={{ color }}>
-                  {label}
-                </h3>
+                <h3 className="text-sm font-semibold" style={{ color }}>{label}</h3>
                 {tierEffects.length === 0 ? (
                   <p className="text-xs text-muted-foreground italic">
                     No effects assigned. Pick from the browser →
@@ -271,12 +236,134 @@ function BuildEditorContent({ buildId }: { buildId: string }) {
   )
 }
 
+// --- Authenticated editor (API-backed) ---
+
+function AuthBuildEditorContent({ buildId }: { buildId: string }) {
+  const queryClient = useQueryClient()
+  const { showSuccessToast } = useCustomToast()
+
+  const { data: build } = useSuspenseQuery({
+    queryKey: ["builds", buildId],
+    queryFn: () => BuildsService.getBuild({ buildId }),
+  })
+  const { data: effectsData } = useSuspenseQuery({
+    queryKey: ["game", "effects"],
+    queryFn: () => GameService.getEffects(),
+    staleTime: Infinity,
+  })
+
+  const effects = (effectsData ?? []) as EffectMeta[]
+  const [tiers, setTiers] = useState<Record<string, number[]>>(
+    () => (build.tiers as Record<string, number[]>) ?? {},
+  )
+  const [includeDeep, setIncludeDeep] = useState(build.include_deep)
+  const [curseMax, setCurseMax] = useState(build.curse_max)
+  const [dirty, setDirty] = useState(false)
+
+  useEffect(() => {
+    setTiers((build.tiers as Record<string, number[]>) ?? {})
+    setIncludeDeep(build.include_deep)
+    setCurseMax(build.curse_max)
+    setDirty(false)
+  }, [build])
+
+  const saveMutation = useMutation({
+    mutationFn: () =>
+      BuildsService.updateBuild({
+        buildId,
+        requestBody: { tiers, include_deep: includeDeep, curse_max: curseMax },
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["builds"] })
+      showSuccessToast("Build saved.")
+      setDirty(false)
+    },
+    onError: handleError,
+  })
+
+  return (
+    <BuildEditorUI
+      name={build.name}
+      character={build.character}
+      tiers={tiers}
+      includeDeep={includeDeep}
+      curseMax={curseMax}
+      dirty={dirty}
+      saving={saveMutation.isPending}
+      effects={effects}
+      onTiersChange={(t) => { setTiers(t); setDirty(true) }}
+      onIncludeDeepChange={(v) => { setIncludeDeep(v); setDirty(true) }}
+      onCurseMaxChange={(v) => { setCurseMax(v); setDirty(true) }}
+      onSave={() => saveMutation.mutate()}
+    />
+  )
+}
+
+// --- Anonymous editor (localStorage-backed) ---
+
+function LocalBuildEditorContent({ buildId }: { buildId: string }) {
+  const { getById, update } = useLocalBuilds()
+  const { showSuccessToast } = useCustomToast()
+
+  const { data: effectsData } = useSuspenseQuery({
+    queryKey: ["game", "effects"],
+    queryFn: () => GameService.getEffects(),
+    staleTime: Infinity,
+  })
+
+  const effects = (effectsData ?? []) as EffectMeta[]
+  const build = getById(buildId)
+
+  const [tiers, setTiers] = useState<Record<string, number[]>>(
+    () => build?.tiers ?? {},
+  )
+  const [includeDeep, setIncludeDeep] = useState(build?.include_deep ?? false)
+  const [curseMax, setCurseMax] = useState(build?.curse_max ?? 0)
+  const [dirty, setDirty] = useState(false)
+
+  if (!build) {
+    return (
+      <p className="text-muted-foreground py-16 text-center">
+        Build not found. It may have been deleted or stored in a different browser.
+      </p>
+    )
+  }
+
+  function handleSave() {
+    update(buildId, { tiers, include_deep: includeDeep, curse_max: curseMax })
+    showSuccessToast("Build saved.")
+    setDirty(false)
+  }
+
+  return (
+    <BuildEditorUI
+      name={build.name}
+      character={build.character}
+      tiers={tiers}
+      includeDeep={includeDeep}
+      curseMax={curseMax}
+      dirty={dirty}
+      saving={false}
+      effects={effects}
+      onTiersChange={(t) => { setTiers(t); setDirty(true) }}
+      onIncludeDeepChange={(v) => { setIncludeDeep(v); setDirty(true) }}
+      onCurseMaxChange={(v) => { setCurseMax(v); setDirty(true) }}
+      onSave={handleSave}
+    />
+  )
+}
+
+// --- Page ---
+
 function BuildEditorPage() {
   const { buildId } = useParams({ from: "/_layout/builds/$buildId" })
 
   return (
     <Suspense fallback={<Skeleton className="h-64 w-full" />}>
-      <BuildEditorContent buildId={buildId} />
+      {isLoggedIn()
+        ? <AuthBuildEditorContent buildId={buildId} />
+        : <LocalBuildEditorContent buildId={buildId} />
+      }
     </Suspense>
   )
 }

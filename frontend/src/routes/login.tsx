@@ -34,6 +34,9 @@ type FormData = z.infer<typeof formSchema>
 
 export const Route = createFileRoute("/login")({
   component: Login,
+  validateSearch: (search: Record<string, string>) => ({
+    redirect: search.redirect as string | undefined,
+  }),
   beforeLoad: async () => {
     if (isLoggedIn()) {
       throw redirect({
@@ -44,7 +47,7 @@ export const Route = createFileRoute("/login")({
   head: () => ({
     meta: [
       {
-        title: "Log In - FastAPI Template",
+        title: "Log In - Nightreign Relic Planner",
       },
     ],
   }),

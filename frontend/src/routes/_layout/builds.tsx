@@ -34,6 +34,8 @@ import {
 } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 import useCustomToast from "@/hooks/useCustomToast"
+import { isLoggedIn } from "@/hooks/useAuth"
+import { useLocalBuilds, type LocalBuild } from "@/hooks/useLocalBuilds"
 import { handleError } from "@/utils"
 
 export const Route = createFileRoute("/_layout/builds")({
@@ -54,28 +56,25 @@ const newBuildSchema = z.object({
 })
 type NewBuildForm = z.infer<typeof newBuildSchema>
 
-function NewBuildDialog({ onCreated }: { onCreated: () => void }) {
-  const [open, setOpen] = useState(false)
-  const { showSuccessToast } = useCustomToast()
-  const queryClient = useQueryClient()
+// --- Shared build form dialog (used by both auth and anon) ---
 
+interface NewBuildDialogProps {
+  onCreate: (data: NewBuildForm) => void
+  isPending?: boolean
+}
+
+function NewBuildDialogContent({ onCreate, isPending }: NewBuildDialogProps) {
+  const [open, setOpen] = useState(false)
   const form = useForm<NewBuildForm>({
     resolver: zodResolver(newBuildSchema),
     defaultValues: { name: "", character: "Wylder" },
   })
 
-  const createMutation = useMutation({
-    mutationFn: (data: NewBuildForm) =>
-      BuildsService.createBuild({ requestBody: data }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["builds"] })
-      showSuccessToast("Build created.")
-      form.reset()
-      setOpen(false)
-      onCreated()
-    },
-    onError: handleError,
-  })
+  function handleSubmit(data: NewBuildForm) {
+    onCreate(data)
+    form.reset()
+    setOpen(false)
+  }
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -90,10 +89,7 @@ function NewBuildDialog({ onCreated }: { onCreated: () => void }) {
           <DialogTitle>Create Build</DialogTitle>
         </DialogHeader>
         <Form {...form}>
-          <form
-            onSubmit={form.handleSubmit((d) => createMutation.mutate(d))}
-            className="space-y-4"
-          >
+          <form onSubmit={form.handleSubmit(handleSubmit)} className="space-y-4">
             <FormField
               control={form.control}
               name="name"
@@ -129,8 +125,8 @@ function NewBuildDialog({ onCreated }: { onCreated: () => void }) {
                 </FormItem>
               )}
             />
-            <Button type="submit" className="w-full" disabled={createMutation.isPending}>
-              {createMutation.isPending ? "Creating…" : "Create"}
+            <Button type="submit" className="w-full" disabled={isPending}>
+              {isPending ? "Creating…" : "Create"}
             </Button>
           </form>
         </Form>
@@ -139,20 +135,17 @@ function NewBuildDialog({ onCreated }: { onCreated: () => void }) {
   )
 }
 
-function DeleteBuildButton({ buildId, buildName }: { buildId: string; buildName: string }) {
-  const [open, setOpen] = useState(false)
-  const { showSuccessToast } = useCustomToast()
-  const queryClient = useQueryClient()
+// --- Delete confirmation dialog (shared) ---
 
-  const deleteMutation = useMutation({
-    mutationFn: () => BuildsService.deleteBuild({ buildId }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["builds"] })
-      showSuccessToast(`"${buildName}" deleted.`)
-      setOpen(false)
-    },
-    onError: handleError,
-  })
+interface DeleteDialogProps {
+  buildId: string
+  buildName: string
+  onDelete: (id: string) => void
+  isPending?: boolean
+}
+
+function DeleteBuildButton({ buildId, buildName, onDelete, isPending }: DeleteDialogProps) {
+  const [open, setOpen] = useState(false)
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -170,10 +163,10 @@ function DeleteBuildButton({ buildId, buildName }: { buildId: string; buildName:
           <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
           <Button
             variant="destructive"
-            onClick={() => deleteMutation.mutate()}
-            disabled={deleteMutation.isPending}
+            onClick={() => { onDelete(buildId); setOpen(false) }}
+            disabled={isPending}
           >
-            {deleteMutation.isPending ? "Deleting…" : "Delete"}
+            {isPending ? "Deleting…" : "Delete"}
           </Button>
         </div>
       </DialogContent>
@@ -181,10 +174,78 @@ function DeleteBuildButton({ buildId, buildName }: { buildId: string; buildName:
   )
 }
 
-function BuildList() {
+// --- Shared build card renderer ---
+
+interface BuildCardData {
+  id: string
+  name: string
+  character: string
+  tiers: Record<string, number[]>
+  updated_at?: string | null
+}
+
+function BuildCard({
+  build,
+  onDelete,
+  isDeleting,
+}: {
+  build: BuildCardData
+  onDelete: (id: string) => void
+  isDeleting?: boolean
+}) {
+  const effectCount = Object.values(build.tiers).reduce((acc, ids) => acc + ids.length, 0)
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <div className="flex items-center justify-between">
+          <CardTitle className="text-base truncate">{build.name}</CardTitle>
+          <div className="flex items-center gap-1 shrink-0">
+            <Button asChild variant="ghost" size="icon" className="h-8 w-8">
+              <Link to="/builds/$buildId" params={{ buildId: build.id }}>
+                <Pencil className="h-4 w-4" />
+              </Link>
+            </Button>
+            <DeleteBuildButton
+              buildId={build.id}
+              buildName={build.name}
+              onDelete={onDelete}
+              isPending={isDeleting}
+            />
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent>
+        <CardDescription>
+          {build.character} · {effectCount} effect{effectCount !== 1 ? "s" : ""} prioritized
+        </CardDescription>
+        {build.updated_at && (
+          <p className="text-xs text-muted-foreground mt-1">
+            Updated {new Date(build.updated_at).toLocaleDateString()}
+          </p>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+// --- Authenticated build section (API-backed) ---
+
+function AuthBuildList() {
   const { data } = useSuspenseQuery({
     queryKey: ["builds"],
     queryFn: () => BuildsService.listBuilds(),
+  })
+  const { showSuccessToast } = useCustomToast()
+  const queryClient = useQueryClient()
+
+  const deleteMutation = useMutation({
+    mutationFn: (buildId: string) => BuildsService.deleteBuild({ buildId }),
+    onSuccess: (_data, buildId) => {
+      queryClient.invalidateQueries({ queryKey: ["builds"] })
+      const name = data.data?.find((b) => b.id === buildId)?.name ?? "Build"
+      showSuccessToast(`"${name}" deleted.`)
+    },
+    onError: handleError,
   })
 
   if (!data.data?.length) {
@@ -197,44 +258,39 @@ function BuildList() {
 
   return (
     <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-      {data.data.map((build) => {
-        const effectCount = Object.values(build.tiers as Record<string, number[]>)
-          .reduce((acc, ids) => acc + ids.length, 0)
-        return (
-          <Card key={build.id}>
-            <CardHeader className="pb-2">
-              <div className="flex items-center justify-between">
-                <CardTitle className="text-base truncate">{build.name}</CardTitle>
-                <div className="flex items-center gap-1 shrink-0">
-                  <Button asChild variant="ghost" size="icon" className="h-8 w-8">
-                    <Link to="/builds/$buildId" params={{ buildId: build.id }}>
-                      <Pencil className="h-4 w-4" />
-                    </Link>
-                  </Button>
-                  <DeleteBuildButton buildId={build.id} buildName={build.name} />
-                </div>
-              </div>
-            </CardHeader>
-            <CardContent>
-              <CardDescription>
-                {build.character} · {effectCount} effect{effectCount !== 1 ? "s" : ""} prioritized
-              </CardDescription>
-              {build.updated_at && (
-                <p className="text-xs text-muted-foreground mt-1">
-                  Updated {new Date(build.updated_at).toLocaleDateString()}
-                </p>
-              )}
-            </CardContent>
-          </Card>
-        )
-      })}
+      {data.data.map((build) => (
+        <BuildCard
+          key={build.id}
+          build={{
+            id: build.id,
+            name: build.name,
+            character: build.character,
+            tiers: build.tiers as Record<string, number[]>,
+            updated_at: build.updated_at,
+          }}
+          onDelete={(id) => deleteMutation.mutate(id)}
+          isDeleting={deleteMutation.isPending && deleteMutation.variables === build.id}
+        />
+      ))}
     </div>
   )
 }
 
-function BuildsPage() {
+function AuthBuildsSection() {
+  const { showSuccessToast } = useCustomToast()
+  const queryClient = useQueryClient()
+
+  const createMutation = useMutation({
+    mutationFn: (data: NewBuildForm) => BuildsService.createBuild({ requestBody: data }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["builds"] })
+      showSuccessToast("Build created.")
+    },
+    onError: handleError,
+  })
+
   return (
-    <div className="space-y-6">
+    <>
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold">Builds</h1>
@@ -242,12 +298,68 @@ function BuildsPage() {
             Create build definitions to drive the optimizer.
           </p>
         </div>
-        <NewBuildDialog onCreated={() => {}} />
+        <NewBuildDialogContent
+          onCreate={(data) => createMutation.mutate(data)}
+          isPending={createMutation.isPending}
+        />
+      </div>
+      <Suspense fallback={<Skeleton className="h-48 w-full" />}>
+        <AuthBuildList />
+      </Suspense>
+    </>
+  )
+}
+
+// --- Anonymous build section (localStorage-backed) ---
+
+function AnonBuildsSection() {
+  const { builds, create, remove } = useLocalBuilds()
+
+  return (
+    <>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold">Builds</h1>
+          <p className="text-muted-foreground mt-1">
+            Create build definitions to drive the optimizer.
+          </p>
+        </div>
+        <NewBuildDialogContent onCreate={create} />
       </div>
 
-      <Suspense fallback={<Skeleton className="h-48 w-full" />}>
-        <BuildList />
-      </Suspense>
+      <p className="text-xs text-muted-foreground border rounded-md px-3 py-2 bg-muted/40">
+        Builds are stored in your browser.{" "}
+        <Link to="/login" search={{ redirect: "/builds" }} className="underline">
+          Sign in
+        </Link>{" "}
+        to sync across devices.
+      </p>
+
+      {builds.length === 0 ? (
+        <p className="text-muted-foreground py-8 text-center">
+          No builds yet. Create one to get started.
+        </p>
+      ) : (
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {builds.map((build: LocalBuild) => (
+            <BuildCard
+              key={build.id}
+              build={build}
+              onDelete={remove}
+            />
+          ))}
+        </div>
+      )}
+    </>
+  )
+}
+
+// --- Page ---
+
+function BuildsPage() {
+  return (
+    <div className="space-y-6">
+      {isLoggedIn() ? <AuthBuildsSection /> : <AnonBuildsSection />}
     </div>
   )
 }
