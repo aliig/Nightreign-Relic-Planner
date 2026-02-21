@@ -142,6 +142,13 @@ class RelicInventory:
             and (slot_color == "White" or r.color == slot_color)
         ]
 
+    @classmethod
+    def from_owned_relics(cls, relics: list[OwnedRelic]) -> "RelicInventory":
+        """Construct directly from already-parsed OwnedRelics (skip save parsing)."""
+        instance = cls.__new__(cls)
+        instance.relics = list(relics)
+        return instance
+
     def __len__(self) -> int:
         return len(self.relics)
 

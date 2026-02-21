@@ -22,3 +22,18 @@ src/check_deep_relics.py
 src/check_relic_ids.py
 src/find_vessel.py
 src/find_presets.py
+
+# Environment
+.env
+.venv/
+
+# IDE
+.vscode/*
+!.vscode/extensions.json
+
+# Node / Frontend
+node_modules/
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/

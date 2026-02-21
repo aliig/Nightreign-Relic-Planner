@@ -4,7 +4,14 @@
       "Bash(wc:*)",
       "Bash(head:*)",
       "Bash(pip install:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(git -C /c/Users/aliig/Documents/Projects/Nightreign-Relic-Planner-1 branch -a)",
+      "Bash(git clone:*)",
+      "Bash(curl:*)",
+      "Bash(uv lock:*)",
+      "Bash(uv pip list:*)",
+      "Bash(uv sync:*)",
+      "Bash(python3:*)"
     ]
   }
 }
