@@ -11,7 +11,8 @@
       "Bash(uv lock:*)",
       "Bash(uv pip list:*)",
       "Bash(uv sync:*)",
-      "Bash(python3:*)"
+      "Bash(python3:*)",
+      "Bash(grep:*)"
     ]
   }
 }

@@ -4,14 +4,13 @@ import { Suspense, useCallback, useEffect, useState } from "react"
 import { X, Search } from "lucide-react"
 
 import { BuildsService, GameService } from "@/client"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Skeleton } from "@/components/ui/skeleton"
-import { Switch } from "@/components/ui/switch"
 import { Separator } from "@/components/ui/separator"
-import { useCustomToast } from "@/hooks/useCustomToast"
+import useCustomToast from "@/hooks/useCustomToast"
 import { handleError } from "@/utils"
 
 export const Route = createFileRoute("/_layout/builds/$buildId")({
@@ -33,12 +32,10 @@ const TIER_ORDER = ["required", "preferred", "nice_to_have", "avoid", "blacklist
 type EffectMeta = { id: number; name: string; family?: string; is_debuff?: boolean }
 
 function EffectChip({
-  effectId,
   name,
   tierKey,
   onRemove,
 }: {
-  effectId: number
   name: string
   tierKey: string
   onRemove: () => void
@@ -77,7 +74,7 @@ function BuildEditorContent({ buildId }: { buildId: string }) {
     staleTime: Infinity,
   })
 
-  const effects: EffectMeta[] = effectsData ?? []
+  const effects = (effectsData ?? []) as EffectMeta[]
 
   // Local state mirrors the build tiers so we can edit without constant re-fetches
   const [tiers, setTiers] = useState<Record<string, number[]>>(
@@ -167,10 +164,10 @@ function BuildEditorContent({ buildId }: { buildId: string }) {
       {/* Settings */}
       <div className="flex flex-wrap items-center gap-6 p-4 rounded-lg border bg-muted/30">
         <div className="flex items-center gap-2">
-          <Switch
+          <Checkbox
             id="include-deep"
             checked={includeDeep}
-            onCheckedChange={(v) => { setIncludeDeep(v); setDirty(true) }}
+            onCheckedChange={(v: boolean) => { setIncludeDeep(v); setDirty(true) }}
           />
           <Label htmlFor="include-deep">Include deep relics</Label>
         </div>
@@ -211,7 +208,6 @@ function BuildEditorContent({ buildId }: { buildId: string }) {
                     {tierEffects.map((e) => (
                       <EffectChip
                         key={e.id}
-                        effectId={e.id}
                         name={e.name}
                         tierKey={tierKey}
                         onRemove={() => removeEffect(e.id, tierKey)}

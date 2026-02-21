@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime, timezone
+from typing import Optional
 
 from pydantic import EmailStr
 from sqlalchemy import BigInteger, Column, DateTime, JSON
@@ -89,7 +90,7 @@ class SaveUpload(SQLModel, table=True):
     )
     character_count: int = 0
 
-    owner: "User | None" = Relationship(back_populates="save_uploads")
+    owner: Optional["User"] = Relationship(back_populates="save_uploads")
     characters: list["CharacterSlot"] = Relationship(
         back_populates="save_upload", cascade_delete=True
     )
@@ -119,7 +120,7 @@ class CharacterSlot(SQLModel, table=True):
     slot_index: int
     name: str = Field(max_length=100)
 
-    save_upload: "SaveUpload | None" = Relationship(back_populates="characters")
+    save_upload: Optional["SaveUpload"] = Relationship(back_populates="characters")
     relics: list["Relic"] = Relationship(
         back_populates="character_slot", cascade_delete=True
     )
@@ -164,7 +165,7 @@ class Relic(SQLModel, table=True):
     name: str = Field(max_length=255)
     tier: str = Field(max_length=20)  # "Grand" | "Polished" | "Delicate"
 
-    character_slot: "CharacterSlot | None" = Relationship(back_populates="relics")
+    character_slot: Optional["CharacterSlot"] = Relationship(back_populates="relics")
 
 
 class RelicPublic(SQLModel):
@@ -227,7 +228,7 @@ class Build(SQLModel, table=True):
         sa_type=DateTime(timezone=True),  # type: ignore
     )
 
-    owner: "User | None" = Relationship(back_populates="builds")
+    owner: Optional["User"] = Relationship(back_populates="builds")
 
 
 class BuildCreate(SQLModel):

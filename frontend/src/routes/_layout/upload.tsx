@@ -4,10 +4,9 @@ import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { Upload, User2, AlertCircle } from "lucide-react"
 
 import { SavesService } from "@/client"
-import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { useCustomToast } from "@/hooks/useCustomToast"
+import useCustomToast from "@/hooks/useCustomToast"
 import { handleError } from "@/utils"
 
 export const Route = createFileRoute("/_layout/upload")({
@@ -20,7 +19,7 @@ export const Route = createFileRoute("/_layout/upload")({
 function UploadPage() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
-  const { showSuccessToast } = useCustomToast()
+  const { showSuccessToast, showErrorToast } = useCustomToast()
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [dragging, setDragging] = useState(false)
   const [uploadResult, setUploadResult] = useState<Awaited<ReturnType<typeof SavesService.uploadSave>> | null>(null)
@@ -37,13 +36,13 @@ function UploadPage() {
         )
       }
     },
-    onError: (err) => handleError(err),
+    onError: handleError,
   })
 
   function handleFile(file: File) {
     const name = file.name.toLowerCase()
     if (!name.endsWith(".sl2") && !name.endsWith(".dat")) {
-      handleError(new Error("Please upload a .sl2 (PC) or memory.dat (PS4) file."))
+      showErrorToast("Please upload a .sl2 (PC) or memory.dat (PS4) file.")
       return
     }
     uploadMutation.mutate(file)

@@ -3,7 +3,7 @@ import { useMutation, useSuspenseQuery } from "@tanstack/react-query"
 import { Suspense, useState } from "react"
 import { ChevronDown, ChevronUp, CheckCircle2, XCircle } from "lucide-react"
 
-import { BuildsService, GameService, OptimizeService, SavesService } from "@/client"
+import { BuildsService, OptimizeService, SavesService } from "@/client"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"

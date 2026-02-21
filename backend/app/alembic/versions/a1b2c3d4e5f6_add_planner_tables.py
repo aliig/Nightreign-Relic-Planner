@@ -1,7 +1,7 @@
 """Add planner tables: save_upload, character_slot, relic, build; drop item
 
 Revision ID: a1b2c3d4e5f6
-Revises: 1a31ce608336
+Revises: fe56fa70289e
 Create Date: 2026-02-21 00:00:00.000000
 
 """
@@ -12,7 +12,7 @@ import sqlmodel.sql.sqltypes
 
 # revision identifiers, used by Alembic.
 revision = 'a1b2c3d4e5f6'
-down_revision = '1a31ce608336'
+down_revision = 'fe56fa70289e'
 branch_labels = None
 depends_on = None
 
