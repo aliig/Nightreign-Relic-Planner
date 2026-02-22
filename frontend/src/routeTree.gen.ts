@@ -15,6 +15,7 @@ import { Route as RecoverPasswordRouteImport } from './routes/recover-password'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as LayoutRouteImport } from './routes/_layout'
 import { Route as LayoutIndexRouteImport } from './routes/_layout/index'
+import { Route as AuthCallbackRouteImport } from './routes/auth/callback'
 import { Route as LayoutUploadRouteImport } from './routes/_layout/upload'
 import { Route as LayoutSettingsRouteImport } from './routes/_layout/settings'
 import { Route as LayoutOptimizeRouteImport } from './routes/_layout/optimize'
@@ -51,6 +52,11 @@ const LayoutIndexRoute = LayoutIndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => LayoutRoute,
+} as any)
+const AuthCallbackRoute = AuthCallbackRouteImport.update({
+  id: '/auth/callback',
+  path: '/auth/callback',
+  getParentRoute: () => rootRouteImport,
 } as any)
 const LayoutUploadRoute = LayoutUploadRouteImport.update({
   id: '/upload',
@@ -100,6 +106,7 @@ export interface FileRoutesByFullPath {
   '/optimize': typeof LayoutOptimizeRoute
   '/settings': typeof LayoutSettingsRoute
   '/upload': typeof LayoutUploadRoute
+  '/auth/callback': typeof AuthCallbackRoute
   '/builds/$buildId': typeof LayoutBuildsBuildIdRoute
 }
 export interface FileRoutesByTo {
@@ -113,6 +120,7 @@ export interface FileRoutesByTo {
   '/optimize': typeof LayoutOptimizeRoute
   '/settings': typeof LayoutSettingsRoute
   '/upload': typeof LayoutUploadRoute
+  '/auth/callback': typeof AuthCallbackRoute
   '/': typeof LayoutIndexRoute
   '/builds/$buildId': typeof LayoutBuildsBuildIdRoute
 }
@@ -129,6 +137,7 @@ export interface FileRoutesById {
   '/_layout/optimize': typeof LayoutOptimizeRoute
   '/_layout/settings': typeof LayoutSettingsRoute
   '/_layout/upload': typeof LayoutUploadRoute
+  '/auth/callback': typeof AuthCallbackRoute
   '/_layout/': typeof LayoutIndexRoute
   '/_layout/builds/$buildId': typeof LayoutBuildsBuildIdRoute
 }
@@ -146,6 +155,7 @@ export interface FileRouteTypes {
     | '/optimize'
     | '/settings'
     | '/upload'
+    | '/auth/callback'
     | '/builds/$buildId'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -159,6 +169,7 @@ export interface FileRouteTypes {
     | '/optimize'
     | '/settings'
     | '/upload'
+    | '/auth/callback'
     | '/'
     | '/builds/$buildId'
   id:
@@ -174,6 +185,7 @@ export interface FileRouteTypes {
     | '/_layout/optimize'
     | '/_layout/settings'
     | '/_layout/upload'
+    | '/auth/callback'
     | '/_layout/'
     | '/_layout/builds/$buildId'
   fileRoutesById: FileRoutesById
@@ -184,6 +196,7 @@ export interface RootRouteChildren {
   RecoverPasswordRoute: typeof RecoverPasswordRoute
   ResetPasswordRoute: typeof ResetPasswordRoute
   SignupRoute: typeof SignupRoute
+  AuthCallbackRoute: typeof AuthCallbackRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -229,6 +242,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/'
       preLoaderRoute: typeof LayoutIndexRouteImport
       parentRoute: typeof LayoutRoute
+    }
+    '/auth/callback': {
+      id: '/auth/callback'
+      path: '/auth/callback'
+      fullPath: '/auth/callback'
+      preLoaderRoute: typeof AuthCallbackRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/_layout/upload': {
       id: '/_layout/upload'
@@ -323,6 +343,7 @@ const rootRouteChildren: RootRouteChildren = {
   RecoverPasswordRoute: RecoverPasswordRoute,
   ResetPasswordRoute: ResetPasswordRoute,
   SignupRoute: SignupRoute,
+  AuthCallbackRoute: AuthCallbackRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

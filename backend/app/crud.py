@@ -48,6 +48,9 @@ def authenticate(*, session: Session, email: str, password: str) -> User | None:
         # This ensures the response time is similar whether or not the email exists
         verify_password(password, DUMMY_HASH)
         return None
+    if not db_user.hashed_password:
+        # OAuth-only user — no password set, cannot authenticate via password
+        return None
     verified, updated_password_hash = verify_password(password, db_user.hashed_password)
     if not verified:
         return None
@@ -56,6 +59,19 @@ def authenticate(*, session: Session, email: str, password: str) -> User | None:
         session.add(db_user)
         session.commit()
         session.refresh(db_user)
+    return db_user
+
+
+def get_or_create_oauth_user(
+    *, session: Session, email: str, full_name: str | None
+) -> User:
+    db_user = get_user_by_email(session=session, email=email)
+    if db_user:
+        return db_user
+    db_user = User(email=email, full_name=full_name, hashed_password=None)
+    session.add(db_user)
+    session.commit()
+    session.refresh(db_user)
     return db_user
 
 
