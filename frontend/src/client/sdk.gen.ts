@@ -105,12 +105,30 @@ export interface BuildPublic {
   family_tiers: Record<string, string[]>
   include_deep: boolean
   curse_max: number
+  is_featured: boolean
   created_at?: string | null
   updated_at?: string | null
 }
 
 export interface BuildsPublic {
   data: BuildPublic[]
+  count: number
+}
+
+export interface FeaturedBuildPublic {
+  id: string
+  name: string
+  character: string
+  tiers: Record<string, number[]>
+  family_tiers: Record<string, string[]>
+  include_deep: boolean
+  curse_max: number
+  owner_name?: string | null
+  created_at?: string | null
+}
+
+export interface FeaturedBuildsPublic {
+  data: FeaturedBuildPublic[]
   count: number
 }
 
@@ -289,6 +307,32 @@ export class BuildsService {
     return __request(OpenAPI, {
       method: 'DELETE',
       url: '/api/v1/builds/{build_id}',
+      path: { build_id: data.buildId },
+      errors: { 403: 'Forbidden', 404: 'Not Found' },
+    });
+  }
+
+  public static listFeaturedBuilds(data: { skip?: number; limit?: number } = {}): CancelablePromise<FeaturedBuildsPublic> {
+    return __request(OpenAPI, {
+      method: 'GET',
+      url: '/api/v1/builds/featured',
+      query: { skip: data.skip, limit: data.limit },
+    });
+  }
+
+  public static toggleFeatured(data: { buildId: string }): CancelablePromise<BuildPublic> {
+    return __request(OpenAPI, {
+      method: 'PATCH',
+      url: '/api/v1/builds/{build_id}/featured',
+      path: { build_id: data.buildId },
+      errors: { 403: 'Forbidden', 404: 'Not Found' },
+    });
+  }
+
+  public static cloneBuild(data: { buildId: string }): CancelablePromise<BuildPublic> {
+    return __request(OpenAPI, {
+      method: 'POST',
+      url: '/api/v1/builds/{build_id}/clone',
       path: { build_id: data.buildId },
       errors: { 403: 'Forbidden', 404: 'Not Found' },
     });

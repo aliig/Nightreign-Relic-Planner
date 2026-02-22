@@ -70,7 +70,38 @@ export function useLocalBuilds() {
     return builds.find((b) => b.id === id)
   }
 
-  return { builds, create, update, remove, getById }
+  function duplicate(id: string): LocalBuild | undefined {
+    const source = builds.find((b) => b.id === id)
+    if (!source) return undefined
+    const now = new Date().toISOString()
+    const copy: LocalBuild = {
+      ...source,
+      id: crypto.randomUUID(),
+      name: `${source.name} (Copy)`,
+      created_at: now,
+      updated_at: now,
+    }
+    const next = [...builds, copy]
+    setBuilds(next)
+    saveToStorage(next)
+    return copy
+  }
+
+  function createFull(data: Omit<LocalBuild, "id" | "created_at" | "updated_at">): LocalBuild {
+    const now = new Date().toISOString()
+    const newBuild: LocalBuild = {
+      ...data,
+      id: crypto.randomUUID(),
+      created_at: now,
+      updated_at: now,
+    }
+    const next = [...builds, newBuild]
+    setBuilds(next)
+    saveToStorage(next)
+    return newBuild
+  }
+
+  return { builds, create, update, remove, getById, duplicate, createFull }
 }
 
 /**

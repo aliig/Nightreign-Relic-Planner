@@ -219,6 +219,7 @@ class Build(SQLModel, table=True):
     )
     include_deep: bool = True
     curse_max: int = 1
+    is_featured: bool = Field(default=False, index=True)
     created_at: datetime | None = Field(
         default_factory=get_datetime_utc,
         sa_type=DateTime(timezone=True),  # type: ignore
@@ -254,12 +255,30 @@ class BuildPublic(SQLModel):
     family_tiers: dict[str, list[str]]
     include_deep: bool
     curse_max: int
+    is_featured: bool
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
 
 class BuildsPublic(SQLModel):
     data: list[BuildPublic]
+    count: int
+
+
+class FeaturedBuildPublic(SQLModel):
+    id: uuid.UUID
+    name: str
+    character: str
+    tiers: dict[str, list[int]]
+    family_tiers: dict[str, list[str]]
+    include_deep: bool
+    curse_max: int
+    owner_name: str | None = None
+    created_at: datetime | None = None
+
+
+class FeaturedBuildsPublic(SQLModel):
+    data: list[FeaturedBuildPublic]
     count: int
 
 

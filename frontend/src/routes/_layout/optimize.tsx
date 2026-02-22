@@ -41,7 +41,6 @@ type VesselResult = Awaited<ReturnType<typeof OptimizeService.runOptimize>>[numb
 type SlotAssignment = VesselResult["assignments"][number]
 
 function SlotCard({ slot }: { slot: SlotAssignment }) {
-  const [open, setOpen] = useState(false)
   const relic = slot.relic
 
   return (
@@ -64,16 +63,6 @@ function SlotCard({ slot }: { slot: SlotAssignment }) {
           <p className="text-sm font-medium">{relic.name}</p>
           <p className="text-xs text-muted-foreground">{relic.tier} · {relic.color}</p>
           {slot.breakdown?.length > 0 && (
-            <button
-              type="button"
-              onClick={() => setOpen((v) => !v)}
-              className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground mt-1"
-            >
-              {open ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
-              Breakdown
-            </button>
-          )}
-          {open && (
             <div className="space-y-0.5 mt-1">
               {slot.breakdown.map((b: Record<string, unknown>, i: number) => (
                 <div key={i} className="flex items-center justify-between text-xs">

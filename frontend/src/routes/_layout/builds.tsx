@@ -1,12 +1,12 @@
 import { createFileRoute, Link, Outlet, useRouterState } from "@tanstack/react-router"
 import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query"
 import { Suspense, useRef, useState } from "react"
-import { Plus, Pencil, SlidersHorizontal, Trash2 } from "lucide-react"
+import { Copy, Pencil, Plus, SlidersHorizontal, Star, Trash2 } from "lucide-react"
 import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { z } from "zod"
 
-import { BuildsService } from "@/client"
+import { type FeaturedBuildPublic, BuildsService } from "@/client"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import {
@@ -32,9 +32,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
+import useAuth, { isLoggedIn } from "@/hooks/useAuth"
 import useCustomToast from "@/hooks/useCustomToast"
-import { isLoggedIn } from "@/hooks/useAuth"
 import { useLocalBuilds, type LocalBuild } from "@/hooks/useLocalBuilds"
 import { handleError } from "@/utils"
 
@@ -182,17 +183,22 @@ interface BuildCardData {
   character: string
   tiers: Record<string, number[]>
   updated_at?: string | null
+  is_featured?: boolean
 }
 
 function BuildCard({
   build,
   onDelete,
   onRename,
+  onDuplicate,
+  onToggleFeatured,
   isDeleting,
 }: {
   build: BuildCardData
   onDelete: (id: string) => void
   onRename: (id: string, newName: string) => void
+  onDuplicate?: (id: string) => void
+  onToggleFeatured?: (id: string) => void
   isDeleting?: boolean
 }) {
   const [isRenaming, setIsRenaming] = useState(false)
@@ -239,6 +245,28 @@ function BuildCard({
             <CardTitle className="text-base truncate">{build.name}</CardTitle>
           )}
           <div className="flex items-center gap-1 shrink-0">
+            {onToggleFeatured && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className={`h-8 w-8 ${build.is_featured ? "text-yellow-500" : "text-muted-foreground"}`}
+                onClick={() => onToggleFeatured(build.id)}
+                title={build.is_featured ? "Unfeature build" : "Feature build"}
+              >
+                <Star className={`h-4 w-4 ${build.is_featured ? "fill-current" : ""}`} />
+              </Button>
+            )}
+            {onDuplicate && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8"
+                onClick={() => onDuplicate(build.id)}
+                title="Duplicate build"
+              >
+                <Copy className="h-4 w-4" />
+              </Button>
+            )}
             <Button
               variant="ghost"
               size="icon"
@@ -276,6 +304,146 @@ function BuildCard({
   )
 }
 
+// --- Featured build card ---
+
+function FeaturedBuildCard({
+  build,
+  onClone,
+  isCloning,
+  isSuperuser,
+  onToggleFeatured,
+}: {
+  build: FeaturedBuildPublic
+  onClone: (build: FeaturedBuildPublic) => void
+  isCloning?: boolean
+  isSuperuser?: boolean
+  onToggleFeatured?: (buildId: string) => void
+}) {
+  const effectCount = Object.values(build.tiers).reduce((acc, ids) => acc + ids.length, 0)
+
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <div className="flex items-center justify-between gap-2">
+          <CardTitle className="text-base truncate">{build.name}</CardTitle>
+          <div className="flex items-center gap-1 shrink-0">
+            {isSuperuser && onToggleFeatured && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 text-yellow-500"
+                onClick={() => onToggleFeatured(build.id)}
+                title="Unfeature build"
+              >
+                <Star className="h-4 w-4 fill-current" />
+              </Button>
+            )}
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => onClone(build)}
+              disabled={isCloning}
+            >
+              {isCloning ? "Cloning…" : "Use This Build"}
+            </Button>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent>
+        <CardDescription>
+          {build.character} · {effectCount} effect{effectCount !== 1 ? "s" : ""} prioritized
+        </CardDescription>
+        {build.owner_name && (
+          <p className="text-xs text-muted-foreground mt-1">by {build.owner_name}</p>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+// --- Suggested builds section (visible to everyone) ---
+
+function SuggestedBuildsContent() {
+  const { data } = useSuspenseQuery({
+    queryKey: ["builds", "featured"],
+    queryFn: () => BuildsService.listFeaturedBuilds(),
+  })
+
+  const { user } = useAuth()
+  const isSuperuser = user?.is_superuser ?? false
+  const loggedIn = isLoggedIn()
+  const { createFull } = useLocalBuilds()
+  const { showSuccessToast, showErrorToast } = useCustomToast()
+  const queryClient = useQueryClient()
+
+  const cloneMutation = useMutation({
+    mutationFn: (buildId: string) => BuildsService.cloneBuild({ buildId }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["builds"] })
+      showSuccessToast("Build copied to your account.")
+    },
+    onError: handleError.bind(showErrorToast),
+  })
+
+  const toggleMutation = useMutation({
+    mutationFn: (buildId: string) => BuildsService.toggleFeatured({ buildId }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["builds", "featured"] })
+      queryClient.invalidateQueries({ queryKey: ["builds"] })
+    },
+    onError: handleError.bind(showErrorToast),
+  })
+
+  function handleClone(build: FeaturedBuildPublic) {
+    if (loggedIn) {
+      cloneMutation.mutate(build.id)
+    } else {
+      createFull({
+        name: build.name,
+        character: build.character,
+        tiers: build.tiers,
+        family_tiers: build.family_tiers as Record<string, unknown>,
+        include_deep: build.include_deep,
+        curse_max: build.curse_max,
+      })
+      showSuccessToast("Build saved to your browser.")
+    }
+  }
+
+  if (!data.data?.length) return null
+
+  return (
+    <div className="space-y-3">
+      <div>
+        <h2 className="text-lg font-semibold">Suggested Builds</h2>
+        <p className="text-sm text-muted-foreground">
+          Community-curated builds to get you started.
+        </p>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        {data.data.map((build) => (
+          <FeaturedBuildCard
+            key={build.id}
+            build={build}
+            onClone={handleClone}
+            isCloning={cloneMutation.isPending}
+            isSuperuser={isSuperuser}
+            onToggleFeatured={(id) => toggleMutation.mutate(id)}
+          />
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function SuggestedBuildsSection() {
+  return (
+    <Suspense fallback={<Skeleton className="h-32 w-full" />}>
+      <SuggestedBuildsContent />
+    </Suspense>
+  )
+}
+
 // --- Authenticated build section (API-backed) ---
 
 function AuthBuildList() {
@@ -283,6 +451,7 @@ function AuthBuildList() {
     queryKey: ["builds"],
     queryFn: () => BuildsService.listBuilds(),
   })
+  const { user } = useAuth()
   const { showSuccessToast, showErrorToast } = useCustomToast()
   const queryClient = useQueryClient()
 
@@ -300,6 +469,27 @@ function AuthBuildList() {
     mutationFn: ({ buildId, name }: { buildId: string; name: string }) =>
       BuildsService.updateBuild({ buildId, requestBody: { name } }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["builds"] }),
+    onError: handleError.bind(showErrorToast),
+  })
+
+  const duplicateMutation = useMutation({
+    mutationFn: (buildId: string) => BuildsService.cloneBuild({ buildId }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["builds"] })
+      showSuccessToast("Build duplicated.")
+    },
+    onError: handleError.bind(showErrorToast),
+  })
+
+  const toggleFeaturedMutation = useMutation({
+    mutationFn: (buildId: string) => BuildsService.toggleFeatured({ buildId }),
+    onSuccess: (_data, buildId) => {
+      queryClient.invalidateQueries({ queryKey: ["builds"] })
+      queryClient.invalidateQueries({ queryKey: ["builds", "featured"] })
+      const build = data.data?.find((b) => b.id === buildId)
+      const action = build?.is_featured ? "unfeatured" : "featured"
+      showSuccessToast(`Build ${action}.`)
+    },
     onError: handleError.bind(showErrorToast),
   })
 
@@ -322,9 +512,12 @@ function AuthBuildList() {
             character: build.character,
             tiers: build.tiers as Record<string, number[]>,
             updated_at: build.updated_at,
+            is_featured: build.is_featured,
           }}
           onDelete={(id) => deleteMutation.mutate(id)}
           onRename={(id, name) => renameMutation.mutate({ buildId: id, name })}
+          onDuplicate={(id) => duplicateMutation.mutate(id)}
+          onToggleFeatured={user?.is_superuser ? (id) => toggleFeaturedMutation.mutate(id) : undefined}
           isDeleting={deleteMutation.isPending && deleteMutation.variables === build.id}
         />
       ))}
@@ -369,7 +562,13 @@ function AuthBuildsSection() {
 // --- Anonymous build section (localStorage-backed) ---
 
 function AnonBuildsSection() {
-  const { builds, create, remove, update } = useLocalBuilds()
+  const { builds, create, remove, update, duplicate } = useLocalBuilds()
+  const { showSuccessToast } = useCustomToast()
+
+  function handleDuplicate(id: string) {
+    duplicate(id)
+    showSuccessToast("Build duplicated.")
+  }
 
   return (
     <>
@@ -403,6 +602,7 @@ function AnonBuildsSection() {
               build={build}
               onDelete={remove}
               onRename={(id, name) => update(id, { name })}
+              onDuplicate={handleDuplicate}
             />
           ))}
         </div>
@@ -422,6 +622,8 @@ function BuildsPage() {
 
   return (
     <div className="space-y-6">
+      <SuggestedBuildsSection />
+      <Separator />
       {isLoggedIn() ? <AuthBuildsSection /> : <AnonBuildsSection />}
     </div>
   )
