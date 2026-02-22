@@ -181,3 +181,7 @@ Do not loop blindly.
 * Summarize what you've tried.
 * Point to the logs.
 * Ask for a new angle or architectural re-evaluation.
+
+## Etc.
+
+For Git operations, always use the github MCP server. Do not use MCP_DOCKER for version control tasks." 

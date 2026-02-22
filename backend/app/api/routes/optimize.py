@@ -2,7 +2,9 @@
 
 Supports two modes:
 - **DB mode** (authenticated): provide build_id + character_id — data loaded from DB.
-- **Inline mode** (any): provide a full BuildDefinition + list[OwnedRelic] + character_name.
+- **Inline mode** (any): provide a full BuildDefinition + list[OwnedRelic].
+
+The character class used for vessel filtering is always taken from build_def.character.
 """
 import uuid
 from typing import Any
@@ -60,7 +62,6 @@ class OptimizeRequest(BaseModel):
     # --- Inline mode (anonymous or authenticated) ---
     build: BuildDefinition | None = None
     relics: list[OwnedRelic] | None = None
-    character_name: str | None = None
 
     # --- Common params ---
     top_n: int = Field(default=10, ge=1, le=50)
@@ -82,18 +83,21 @@ def run_optimize(
     { "build_id": "...", "character_id": "..." }
     ```
 
-    **Inline mode** — supply the full build definition, relic list, and character name:
+    **Inline mode** — supply the full build definition and relic list:
     ```json
-    { "build": {...}, "relics": [...], "character_name": "Wylder" }
+    { "build": {...}, "relics": [...] }
     ```
+
+    The character class used for vessel filtering is taken from `build.character` in
+    both modes. This matches the class selected when the build was created.
     """
     using_db = req.build_id is not None or req.character_id is not None
-    using_inline = req.build is not None or req.relics is not None or req.character_name is not None
+    using_inline = req.build is not None or req.relics is not None
 
     if using_db and using_inline:
         raise HTTPException(
             status_code=422,
-            detail="Provide either (build_id + character_id) or (build + relics + character_name), not both.",
+            detail="Provide either (build_id + character_id) or (build + relics), not both.",
         )
 
     if using_db:
@@ -140,19 +144,17 @@ def run_optimize(
             )
             for r in db_relics
         ]
-        character_name = char_slot.name
 
     else:
-        if req.build is None or req.relics is None or req.character_name is None:
+        if req.build is None or req.relics is None:
             raise HTTPException(
                 status_code=422,
-                detail="Inline mode requires build, relics, and character_name.",
+                detail="Inline mode requires build and relics.",
             )
         build_def = req.build
         owned_relics = req.relics
-        character_name = req.character_name
 
     return _run_optimizer(
-        build_def, owned_relics, character_name,
+        build_def, owned_relics, build_def.character,
         req.top_n, req.max_per_vessel, ds,
     )
