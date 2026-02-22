@@ -18,7 +18,7 @@ def get_game_data() -> SourceDataHandler:
 def get_items_json() -> dict:
     """Load items.json from nrplanner package resources (maps real_id → {name, color})."""
     import nrplanner as _pkg
-    path = Path(_pkg.__file__).parent / "resources" / "Json" / "items.json"
+    path = Path(_pkg.__file__).parent / "resources" / "json" / "items.json"
     return json.loads(path.read_text(encoding="utf-8"))
 
 

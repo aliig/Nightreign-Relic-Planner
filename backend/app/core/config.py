@@ -1,5 +1,6 @@
 import secrets
 import warnings
+from pathlib import Path
 from typing import Annotated, Any, Literal
 
 from pydantic import (
@@ -25,8 +26,9 @@ def parse_cors(v: Any) -> list[str] | str:
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        # Use top level .env file (one level above ./backend/)
-        env_file="../.env",
+        # Absolute path so .env resolves correctly regardless of CWD (tests vs. server).
+        # config.py is at backend/app/core/config.py → parents[3] is the repo root.
+        env_file=str(Path(__file__).resolve().parents[3] / ".env"),
         env_ignore_empty=True,
         extra="ignore",
     )

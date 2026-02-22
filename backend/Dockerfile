@@ -33,6 +33,8 @@ COPY ./backend/pyproject.toml ./backend/alembic.ini /app/backend/
 
 COPY ./backend/app /app/backend/app
 
+COPY ./nrplanner /app/nrplanner
+
 # Sync the project
 # Ref: https://docs.astral.sh/uv/guides/integration/docker/#intermediate-layers
 RUN --mount=type=cache,target=/root/.cache/uv \
@@ -41,5 +43,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --package app
 
 WORKDIR /app/backend/
+
+ENV PYTHONPATH=/app
 
 CMD ["fastapi", "run", "--workers", "4", "app/main.py"]

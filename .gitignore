@@ -12,9 +12,14 @@ preset_debug.txt
 __pycache__/
 *.pyc
 *.pyo
+*.egg-info/
 
 # Decrypted save files
 src/decrypted_output/
+
+# Test fixture save files (real saves, never commit)
+backend/tests/fixtures/*.sl2
+backend/tests/fixtures/*.dat
 
 # Dev/test scripts
 src/analyze_presets.py
