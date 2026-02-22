@@ -36,7 +36,7 @@ function UploadPage() {
         )
       }
     },
-    onError: handleError,
+    onError: handleError.bind(showErrorToast),
   })
 
   function handleFile(file: File) {

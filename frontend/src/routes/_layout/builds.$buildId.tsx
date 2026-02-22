@@ -23,6 +23,7 @@ import { Separator } from "@/components/ui/separator"
 import { cn } from "@/lib/utils"
 import { isLoggedIn } from "@/hooks/useAuth"
 import { useLocalBuilds } from "@/hooks/useLocalBuilds"
+import useCustomToast from "@/hooks/useCustomToast"
 import { handleError } from "@/utils"
 
 export const Route = createFileRoute("/_layout/builds/$buildId")({
@@ -456,6 +457,7 @@ function BuildEditorUI({
 // --- Authenticated editor (API-backed) ---
 
 function AuthBuildEditorContent({ buildId }: { buildId: string }) {
+  const { showErrorToast } = useCustomToast()
   const queryClient = useQueryClient()
 
   const { data: build } = useSuspenseQuery({
@@ -520,7 +522,7 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
         },
       }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["builds"] }),
-    onError: handleError,
+    onError: handleError.bind(showErrorToast),
   })
 
   const scheduleAutoSave = useCallback(() => {
@@ -532,7 +534,7 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
     mutationFn: (name: string) =>
       BuildsService.updateBuild({ buildId, requestBody: { name } }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["builds"] }),
-    onError: handleError,
+    onError: handleError.bind(showErrorToast),
   })
 
   return (

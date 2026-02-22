@@ -283,7 +283,7 @@ function AuthBuildList() {
     queryKey: ["builds"],
     queryFn: () => BuildsService.listBuilds(),
   })
-  const { showSuccessToast } = useCustomToast()
+  const { showSuccessToast, showErrorToast } = useCustomToast()
   const queryClient = useQueryClient()
 
   const deleteMutation = useMutation({
@@ -293,14 +293,14 @@ function AuthBuildList() {
       const name = data.data?.find((b) => b.id === buildId)?.name ?? "Build"
       showSuccessToast(`"${name}" deleted.`)
     },
-    onError: handleError,
+    onError: handleError.bind(showErrorToast),
   })
 
   const renameMutation = useMutation({
     mutationFn: ({ buildId, name }: { buildId: string; name: string }) =>
       BuildsService.updateBuild({ buildId, requestBody: { name } }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["builds"] }),
-    onError: handleError,
+    onError: handleError.bind(showErrorToast),
   })
 
   if (!data.data?.length) {
@@ -333,7 +333,7 @@ function AuthBuildList() {
 }
 
 function AuthBuildsSection() {
-  const { showSuccessToast } = useCustomToast()
+  const { showSuccessToast, showErrorToast } = useCustomToast()
   const queryClient = useQueryClient()
 
   const createMutation = useMutation({
@@ -342,7 +342,7 @@ function AuthBuildsSection() {
       queryClient.invalidateQueries({ queryKey: ["builds"] })
       showSuccessToast("Build created.")
     },
-    onError: handleError,
+    onError: handleError.bind(showErrorToast),
   })
 
   return (

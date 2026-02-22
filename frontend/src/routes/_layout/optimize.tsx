@@ -18,6 +18,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Separator } from "@/components/ui/separator"
 import { isLoggedIn } from "@/hooks/useAuth"
 import { useLocalBuilds } from "@/hooks/useLocalBuilds"
+import useCustomToast from "@/hooks/useCustomToast"
 import { handleError } from "@/utils"
 
 export const Route = createFileRoute("/_layout/optimize")({
@@ -147,6 +148,7 @@ function VesselCard({ vessel }: { vessel: VesselResult }) {
 // --- Authenticated optimizer (DB-backed) ---
 
 function AuthOptimizeForm() {
+  const { showErrorToast } = useCustomToast()
   const { data: buildsData } = useSuspenseQuery({
     queryKey: ["builds"],
     queryFn: () => BuildsService.listBuilds(),
@@ -169,7 +171,7 @@ function AuthOptimizeForm() {
         requestBody: { build_id: buildId, character_id: characterId },
       }),
     onSuccess: (data) => setResults(data),
-    onError: handleError,
+    onError: handleError.bind(showErrorToast),
   })
 
   return (
@@ -242,6 +244,7 @@ interface SessionCharacter {
 }
 
 function AnonOptimizeForm() {
+  const { showErrorToast } = useCustomToast()
   const { builds } = useLocalBuilds()
 
   const rawChar = sessionStorage.getItem("selectedCharacter")
@@ -255,6 +258,19 @@ function AnonOptimizeForm() {
       const build = builds.find((b) => b.id === buildId)
       if (!build || !char) throw new Error("Missing build or character data")
 
+      // ParsedRelicData uses flat effect_1/2/3 fields; OwnedRelic expects arrays
+      const relics = char.relics.map((r: any) => ({
+        ga_handle: r.ga_handle,
+        item_id: r.item_id,
+        real_id: r.real_id,
+        color: r.color,
+        effects: [r.effect_1, r.effect_2, r.effect_3],
+        curses: [r.curse_1, r.curse_2, r.curse_3],
+        is_deep: r.is_deep,
+        name: r.name,
+        tier: r.tier,
+      }))
+
       return OptimizeService.runOptimize({
         requestBody: {
           build: {
@@ -266,13 +282,12 @@ function AnonOptimizeForm() {
             include_deep: build.include_deep,
             curse_max: build.curse_max,
           } as any,
-          relics: char.relics as any,
-          character_name: char.name,
+          relics: relics as any,
         },
       })
     },
     onSuccess: (data) => setResults(data),
-    onError: handleError,
+    onError: handleError.bind(showErrorToast),
   })
 
   if (!char) {

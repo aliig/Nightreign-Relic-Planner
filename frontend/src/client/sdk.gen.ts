@@ -156,7 +156,6 @@ export interface OptimizeRequest {
   // Inline mode
   build?: Record<string, unknown> | null
   relics?: RelicPublic[] | null
-  character_name?: string | null
   // Common
   top_n?: number
   max_per_vessel?: number
