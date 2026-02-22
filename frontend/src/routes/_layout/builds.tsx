@@ -1,7 +1,7 @@
-import { createFileRoute, Link } from "@tanstack/react-router"
+import { createFileRoute, Link, Outlet, useRouterState } from "@tanstack/react-router"
 import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query"
-import { Suspense, useState } from "react"
-import { Plus, Pencil, Trash2 } from "lucide-react"
+import { Suspense, useRef, useState } from "react"
+import { Plus, Pencil, SlidersHorizontal, Trash2 } from "lucide-react"
 import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { z } from "zod"
@@ -187,22 +187,70 @@ interface BuildCardData {
 function BuildCard({
   build,
   onDelete,
+  onRename,
   isDeleting,
 }: {
   build: BuildCardData
   onDelete: (id: string) => void
+  onRename: (id: string, newName: string) => void
   isDeleting?: boolean
 }) {
+  const [isRenaming, setIsRenaming] = useState(false)
+  const [draftName, setDraftName] = useState(build.name)
+  const inputRef = useRef<HTMLInputElement>(null)
   const effectCount = Object.values(build.tiers).reduce((acc, ids) => acc + ids.length, 0)
+
+  function startRename() {
+    setDraftName(build.name)
+    setIsRenaming(true)
+  }
+
+  function commitRename() {
+    const trimmed = draftName.trim()
+    if (trimmed && trimmed !== build.name) {
+      onRename(build.id, trimmed)
+    }
+    setIsRenaming(false)
+  }
+
+  function cancelRename() {
+    setDraftName(build.name)
+    setIsRenaming(false)
+  }
+
   return (
     <Card>
       <CardHeader className="pb-2">
-        <div className="flex items-center justify-between">
-          <CardTitle className="text-base truncate">{build.name}</CardTitle>
+        <div className="flex items-center justify-between gap-2">
+          {isRenaming ? (
+            <Input
+              ref={inputRef}
+              autoFocus
+              value={draftName}
+              onChange={(e) => setDraftName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") { e.preventDefault(); commitRename() }
+                if (e.key === "Escape") cancelRename()
+              }}
+              onBlur={commitRename}
+              className="h-7 text-sm font-semibold px-1.5 py-0"
+            />
+          ) : (
+            <CardTitle className="text-base truncate">{build.name}</CardTitle>
+          )}
           <div className="flex items-center gap-1 shrink-0">
-            <Button asChild variant="ghost" size="icon" className="h-8 w-8">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8"
+              onClick={startRename}
+              title="Rename build"
+            >
+              <Pencil className="h-4 w-4" />
+            </Button>
+            <Button asChild variant="ghost" size="icon" className="h-8 w-8" title="Edit effects">
               <Link to="/builds/$buildId" params={{ buildId: build.id }}>
-                <Pencil className="h-4 w-4" />
+                <SlidersHorizontal className="h-4 w-4" />
               </Link>
             </Button>
             <DeleteBuildButton
@@ -248,6 +296,13 @@ function AuthBuildList() {
     onError: handleError,
   })
 
+  const renameMutation = useMutation({
+    mutationFn: ({ buildId, name }: { buildId: string; name: string }) =>
+      BuildsService.updateBuild({ buildId, requestBody: { name } }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["builds"] }),
+    onError: handleError,
+  })
+
   if (!data.data?.length) {
     return (
       <p className="text-muted-foreground py-8 text-center">
@@ -269,6 +324,7 @@ function AuthBuildList() {
             updated_at: build.updated_at,
           }}
           onDelete={(id) => deleteMutation.mutate(id)}
+          onRename={(id, name) => renameMutation.mutate({ buildId: id, name })}
           isDeleting={deleteMutation.isPending && deleteMutation.variables === build.id}
         />
       ))}
@@ -313,7 +369,7 @@ function AuthBuildsSection() {
 // --- Anonymous build section (localStorage-backed) ---
 
 function AnonBuildsSection() {
-  const { builds, create, remove } = useLocalBuilds()
+  const { builds, create, remove, update } = useLocalBuilds()
 
   return (
     <>
@@ -346,6 +402,7 @@ function AnonBuildsSection() {
               key={build.id}
               build={build}
               onDelete={remove}
+              onRename={(id, name) => update(id, { name })}
             />
           ))}
         </div>
@@ -357,6 +414,12 @@ function AnonBuildsSection() {
 // --- Page ---
 
 function BuildsPage() {
+  const hasBuildEditor = useRouterState({
+    select: (s) => s.matches.some((m) => m.routeId === "/_layout/builds/$buildId"),
+  })
+
+  if (hasBuildEditor) return <Outlet />
+
   return (
     <div className="space-y-6">
       {isLoggedIn() ? <AuthBuildsSection /> : <AnonBuildsSection />}
