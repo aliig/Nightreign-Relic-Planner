@@ -283,6 +283,19 @@ class FeaturedBuildsPublic(SQLModel):
 
 
 # ---------------------------------------------------------------------------
+# Save status schema
+# ---------------------------------------------------------------------------
+
+class SaveStatusPublic(SQLModel):
+    """Lightweight status of the user's most recent save upload."""
+    id: uuid.UUID
+    platform: str
+    uploaded_at: datetime | None = None
+    character_count: int
+    character_names: list[str]
+
+
+# ---------------------------------------------------------------------------
 # Upload response schemas
 # ---------------------------------------------------------------------------
 

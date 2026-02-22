@@ -19,6 +19,7 @@ from app.models import (
     RelicPublic,
     RelicsPublic,
     SaveUpload,
+    SaveStatusPublic,
     UploadResponse,
 )
 from nrplanner import (
@@ -219,6 +220,34 @@ async def upload_save(
         characters=characters,
         save_upload_id=save_upload.id,
         persisted=True,
+    )
+
+
+@router.get("/status", response_model=SaveStatusPublic | None)
+def get_save_status(
+    session: SessionDep,
+    current_user: CurrentUser,
+) -> SaveStatusPublic | None:
+    """Return metadata about the user's most recent save upload, or null if none."""
+    upload = session.exec(
+        select(SaveUpload).where(SaveUpload.owner_id == current_user.id)
+    ).first()
+
+    if not upload:
+        return None
+
+    characters = session.exec(
+        select(CharacterSlot)
+        .where(CharacterSlot.save_upload_id == upload.id)
+        .order_by(col(CharacterSlot.slot_index))
+    ).all()
+
+    return SaveStatusPublic(
+        id=upload.id,
+        platform=upload.platform,
+        uploaded_at=upload.uploaded_at,
+        character_count=upload.character_count,
+        character_names=[c.name for c in characters],
     )
 
 

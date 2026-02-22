@@ -61,6 +61,14 @@ export interface UploadResponse {
   persisted: boolean
 }
 
+export interface SaveStatusPublic {
+  id: string
+  platform: string
+  uploaded_at: string | null
+  character_count: number
+  character_names: string[]
+}
+
 export interface CharacterPublic {
   id: string
   save_upload_id: string
@@ -240,6 +248,13 @@ export class SavesService {
       formData: data.formData,
       mediaType: 'multipart/form-data',
       errors: { 400: 'Bad Request', 422: 'Validation Error' },
+    });
+  }
+
+  public static getSaveStatus(): CancelablePromise<SaveStatusPublic | null> {
+    return __request(OpenAPI, {
+      method: 'GET',
+      url: '/api/v1/saves/status',
     });
   }
 

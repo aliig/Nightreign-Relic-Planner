@@ -1,13 +1,15 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router"
 import { useRef, useState } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { Upload, User2, AlertCircle } from "lucide-react"
+import { Upload, User2, AlertCircle, Info } from "lucide-react"
 
 import { SavesService } from "@/client"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Alert, AlertDescription } from "@/components/ui/alert"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { Badge } from "@/components/ui/badge"
 import useCustomToast from "@/hooks/useCustomToast"
-import { handleError } from "@/utils"
+import { handleError, formatRelativeTime } from "@/utils"
+import { useSaveStatus, storeAnonUploadMeta } from "@/hooks/useSaveStatus"
 
 export const Route = createFileRoute("/_layout/upload")({
   component: UploadPage,
@@ -15,6 +17,39 @@ export const Route = createFileRoute("/_layout/upload")({
     meta: [{ title: "Upload Save - Nightreign Relic Planner" }],
   }),
 })
+
+function SaveStatusBanner() {
+  const { status, isLoading, isAnon } = useSaveStatus()
+
+  if (isLoading || !status) return null
+
+  return (
+    <Alert>
+      <Info className="h-4 w-4" />
+      <AlertTitle>{isAnon ? "Session data loaded" : "Save data on file"}</AlertTitle>
+      <AlertDescription>
+        <div className="flex flex-wrap items-center gap-2 mt-1">
+          <Badge variant="secondary">{status.platform}</Badge>
+          <span>
+            {status.character_count} character{status.character_count !== 1 ? "s" : ""}
+            {status.character_names.length > 0 && `: ${status.character_names.join(", ")}`}
+          </span>
+        </div>
+        {!isAnon && status.uploaded_at && (
+          <p className="mt-1 text-xs">
+            Uploaded {formatRelativeTime(status.uploaded_at)} — drop a new file to replace.
+          </p>
+        )}
+        {isAnon && (
+          <p className="mt-1 text-xs">
+            Session only — drop a new file to refresh, or{" "}
+            <a href="/login" className="underline">sign in</a> to persist your data.
+          </p>
+        )}
+      </AlertDescription>
+    </Alert>
+  )
+}
 
 function UploadPage() {
   const navigate = useNavigate()
@@ -30,6 +65,15 @@ function UploadPage() {
     onSuccess: (data) => {
       setUploadResult(data)
       queryClient.invalidateQueries({ queryKey: ["characters"] })
+      queryClient.invalidateQueries({ queryKey: ["save-status"] })
+      if (!data.persisted) {
+        storeAnonUploadMeta({
+          character_count: data.character_count,
+          character_names: data.characters.map((c) => c.name),
+          platform: data.platform,
+          uploaded_at: new Date().toISOString(),
+        })
+      }
       if (data.persisted) {
         showSuccessToast(
           `Save imported — ${data.character_count} character${data.character_count !== 1 ? "s" : ""} found.`,
@@ -68,6 +112,8 @@ function UploadPage() {
           Import your PC (.sl2) or PS4 (memory.dat) save to load your relic inventory.
         </p>
       </div>
+
+      <SaveStatusBanner />
 
       {/* Drop zone */}
       <div

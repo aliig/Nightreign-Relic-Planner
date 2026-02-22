@@ -2,7 +2,10 @@ import { createFileRoute, Link } from "@tanstack/react-router"
 import { Layers, Package, Upload, Zap } from "lucide-react"
 
 import useAuth from "@/hooks/useAuth"
+import { useSaveStatus } from "@/hooks/useSaveStatus"
+import { formatRelativeTime } from "@/utils"
 import { Button } from "@/components/ui/button"
+import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 
 export const Route = createFileRoute("/_layout/")({
@@ -14,6 +17,24 @@ export const Route = createFileRoute("/_layout/")({
 
 function Dashboard() {
   const { user: currentUser } = useAuth()
+  const { status: saveStatus, isLoading: saveStatusLoading, isAnon } = useSaveStatus()
+
+  let uploadFooter: React.ReactNode = null
+  if (!saveStatusLoading && saveStatus) {
+    uploadFooter = (
+      <div className="text-xs text-muted-foreground space-y-0.5">
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <Badge variant="secondary" className="text-[10px] px-1.5 py-0">{saveStatus.platform}</Badge>
+          <span>{saveStatus.character_count} character{saveStatus.character_count !== 1 ? "s" : ""}</span>
+        </div>
+        <p>
+          {isAnon
+            ? "Session data loaded"
+            : `Uploaded ${formatRelativeTime(saveStatus.uploaded_at)}`}
+        </p>
+      </div>
+    )
+  }
 
   return (
     <div className="space-y-6">
@@ -36,7 +57,8 @@ function Dashboard() {
           title="Upload Save"
           description="Import your .sl2 or memory.dat save file to load your relic inventory."
           href="/upload"
-          action="Upload"
+          action={saveStatus ? "Re-upload" : "Upload"}
+          footer={uploadFooter}
         />
         <QuickCard
           icon={<Package className="h-5 w-5" />}
@@ -70,9 +92,10 @@ interface QuickCardProps {
   description: string
   href: string
   action: string
+  footer?: React.ReactNode
 }
 
-function QuickCard({ icon, title, description, href, action }: QuickCardProps) {
+function QuickCard({ icon, title, description, href, action, footer }: QuickCardProps) {
   return (
     <Card>
       <CardHeader className="pb-2">
@@ -83,6 +106,7 @@ function QuickCard({ icon, title, description, href, action }: QuickCardProps) {
       </CardHeader>
       <CardContent className="space-y-3">
         <CardDescription>{description}</CardDescription>
+        {footer}
         <Button asChild variant="outline" size="sm" className="w-full">
           <Link to={href}>{action}</Link>
         </Button>
