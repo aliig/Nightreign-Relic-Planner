@@ -193,16 +193,16 @@ describe("Effect Browser – Groups section visibility", () => {
     const input = screen.getByPlaceholderText(/search effects/i)
 
     // Before search: no term entered, Groups section visible because families exist
-    expect(screen.getByText("Groups")).toBeInTheDocument()
+    expect(screen.getByText(/^Groups/)).toBeInTheDocument()
 
     // Search for something that matches the family
     fireEvent.change(input, { target: { value: "poise" } })
-    expect(screen.getByText("Groups")).toBeInTheDocument()
+    expect(screen.getByText(/^Groups/)).toBeInTheDocument()
     expect(screen.getByText("Poise")).toBeInTheDocument()
 
     // Search for something with no family match
     fireEvent.change(input, { target: { value: "xxxxxxno-match" } })
-    expect(screen.queryByText("Groups")).not.toBeInTheDocument()
+    expect(screen.queryByText(/^Groups/)).not.toBeInTheDocument()
   })
 
   it("does not show 'Groups' when families list is empty", () => {
@@ -210,7 +210,7 @@ describe("Effect Browser – Groups section visibility", () => {
     mockEffects = [{ id: 340800, name: "Improved Damage Negation at Low HP" }]
 
     renderEditor()
-    expect(screen.queryByText("Groups")).not.toBeInTheDocument()
+    expect(screen.queryByText(/^Groups/)).not.toBeInTheDocument()
   })
 })
 
@@ -232,7 +232,7 @@ describe("Effect Browser – 'Improved Damage Negation at Low HP' regression", (
     fireEvent.change(input, { target: { value: "low hp" } })
 
     // The "Groups" label should NOT be visible — no family matched "low hp"
-    expect(screen.queryByText("Groups")).not.toBeInTheDocument()
+    expect(screen.queryByText(/^Groups/)).not.toBeInTheDocument()
 
     // The individual effect must still appear in the browser
     expect(screen.getByText("Improved Damage Negation at Low HP")).toBeInTheDocument()
@@ -258,7 +258,7 @@ describe("Effect Browser – 'Improved Damage Negation at Low HP' regression", (
     // When the backend mistakenly returns it as a family it appears in BOTH the
     // Groups section (italic chip) AND the Individual section — hence two nodes.
     // This test exists so reviewers understand the failure mode.
-    expect(screen.getByText("Groups")).toBeInTheDocument()
+    expect(screen.getByText(/^Groups/)).toBeInTheDocument()
     expect(screen.getAllByText("Improved Damage Negation at Low HP").length).toBeGreaterThanOrEqual(1)
   })
 })
