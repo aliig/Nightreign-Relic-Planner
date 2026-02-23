@@ -199,13 +199,15 @@ class TestE2EWorkflow:
         assert build["name"] == "E2E Test Build"
         assert build["character"] == class_name
         assert "id" in build
-        expected_tier_keys = {"required", "preferred", "nice_to_have", "avoid", "blacklist"}
+        expected_tier_keys = {"required", "preferred", "nice_to_have", "bonus", "avoid", "blacklist"}
         assert set(build["tiers"].keys()) == expected_tier_keys
         for tier_list in build["tiers"].values():
             assert tier_list == [], "All tiers should be empty on creation"
         assert set(build["family_tiers"].keys()) == expected_tier_keys
         assert build["include_deep"] is True
         assert build["curse_max"] == 1
+        assert build["tier_weights"] is None
+        assert build["pinned_relics"] == []
 
         state["build_id"] = build["id"]
         state["build_data"] = build
@@ -226,6 +228,7 @@ class TestE2EWorkflow:
             "required": [],
             "preferred": preferred_ids,
             "nice_to_have": [],
+            "bonus": [],
             "avoid": [],
             "blacklist": [],
         }
@@ -312,6 +315,8 @@ class TestE2EWorkflow:
             "family_tiers": build_data["family_tiers"],
             "include_deep": build_data["include_deep"],
             "curse_max": build_data["curse_max"],
+            "tier_weights": build_data.get("tier_weights"),
+            "pinned_relics": build_data.get("pinned_relics", []),
         }
 
         response = client.post(
