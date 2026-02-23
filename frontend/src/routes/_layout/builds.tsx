@@ -1,7 +1,7 @@
 import { createFileRoute, Link, Outlet, useRouterState } from "@tanstack/react-router"
 import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query"
-import { Suspense, useRef, useState } from "react"
-import { Copy, Pencil, Plus, SlidersHorizontal, Star, Trash2 } from "lucide-react"
+import { Suspense, useState } from "react"
+import { Copy, Pencil, Plus, Star, Trash2 } from "lucide-react"
 import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { z } from "zod"
@@ -201,49 +201,32 @@ function BuildCard({
   onToggleFeatured?: (id: string) => void
   isDeleting?: boolean
 }) {
-  const [isRenaming, setIsRenaming] = useState(false)
   const [draftName, setDraftName] = useState(build.name)
-  const inputRef = useRef<HTMLInputElement>(null)
   const effectCount = Object.values(build.tiers).reduce((acc, ids) => acc + ids.length, 0)
-
-  function startRename() {
-    setDraftName(build.name)
-    setIsRenaming(true)
-  }
 
   function commitRename() {
     const trimmed = draftName.trim()
     if (trimmed && trimmed !== build.name) {
       onRename(build.id, trimmed)
+    } else {
+      setDraftName(build.name)
     }
-    setIsRenaming(false)
-  }
-
-  function cancelRename() {
-    setDraftName(build.name)
-    setIsRenaming(false)
   }
 
   return (
     <Card>
       <CardHeader className="pb-2">
         <div className="flex items-center justify-between gap-2">
-          {isRenaming ? (
-            <Input
-              ref={inputRef}
-              autoFocus
-              value={draftName}
-              onChange={(e) => setDraftName(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") { e.preventDefault(); commitRename() }
-                if (e.key === "Escape") cancelRename()
-              }}
-              onBlur={commitRename}
-              className="h-7 text-sm font-semibold px-1.5 py-0"
-            />
-          ) : (
-            <CardTitle className="text-base truncate">{build.name}</CardTitle>
-          )}
+          <input
+            value={draftName}
+            onChange={(e) => setDraftName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") { e.preventDefault(); e.currentTarget.blur() }
+              if (e.key === "Escape") { setDraftName(build.name); e.currentTarget.blur() }
+            }}
+            onBlur={commitRename}
+            className="text-base font-semibold bg-transparent border-b border-transparent hover:border-muted-foreground/30 focus:border-primary focus:outline-none focus:ring-0 py-0.5 min-w-0 flex-1 truncate transition-colors"
+          />
           <div className="flex items-center gap-1 shrink-0">
             {onToggleFeatured && (
               <Button
@@ -267,18 +250,9 @@ function BuildCard({
                 <Copy className="h-4 w-4" />
               </Button>
             )}
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8"
-              onClick={startRename}
-              title="Rename build"
-            >
-              <Pencil className="h-4 w-4" />
-            </Button>
-            <Button asChild variant="ghost" size="icon" className="h-8 w-8" title="Edit effects">
+            <Button asChild variant="ghost" size="icon" className="h-8 w-8" title="Edit build">
               <Link to="/builds/$buildId" params={{ buildId: build.id }}>
-                <SlidersHorizontal className="h-4 w-4" />
+                <Pencil className="h-4 w-4" />
               </Link>
             </Button>
             <DeleteBuildButton

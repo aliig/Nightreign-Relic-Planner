@@ -1,7 +1,7 @@
 import { createFileRoute, useParams } from "@tanstack/react-router"
 import { useMutation, useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query"
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { X, Search, Pencil, ChevronDown, ChevronUp, Pin } from "lucide-react"
+import { X, Search, Pin } from "lucide-react"
 import {
   DndContext,
   DragEndEvent,
@@ -66,17 +66,6 @@ type DragData =
 
 const COLOR_HEX: Record<string, string> = {
   Red: "#FF4444", Blue: "#4488FF", Yellow: "#B8860B", Green: "#44BB44", White: "#AAAAAA",
-}
-
-function weightToLabel(weight: number, isBlacklist: boolean): string {
-  if (isBlacklist) return "Excluded"
-  if (weight >= 80) return "Essential"
-  if (weight >= 50) return "Preferred"
-  if (weight >= 25) return "Nice-to-Have"
-  if (weight >= 1) return "Bonus"
-  if (weight === 0) return "Neutral"
-  if (weight >= -50) return "Avoid"
-  return "Strongly Avoid"
 }
 
 // ---------------------------------------------------------------------------
@@ -387,10 +376,11 @@ function BuildEditorUI({
   onTierWeightsChange, onPinnedRelicsChange, onRename,
 }: EditorUIProps) {
   const [effectSearch, setEffectSearch] = useState("")
-  const [isRenaming, setIsRenaming] = useState(false)
   const [draftName, setDraftName] = useState(name)
   const [activeDragName, setActiveDragName] = useState<string | null>(null)
-  const [weightEditorOpen, setWeightEditorOpen] = useState(false)
+
+  // Keep draft name in sync with prop (e.g., after save roundtrip)
+  useEffect(() => { setDraftName(name) }, [name])
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
@@ -412,13 +402,13 @@ function BuildEditorUI({
     return [...nonBlacklist, ...blacklistKeys]
   }, [tierConfigs, effectiveWeights])
 
-  // Build display info per tier (dynamic label + color)
+  // Build display info per tier (fixed label from config + color)
   const tierDisplay = useMemo(() => {
     return Object.fromEntries(
       tierConfigs.map((t) => [
         t.key,
         {
-          label: weightToLabel(effectiveWeights[t.key] ?? t.weight, t.is_exclusion),
+          label: t.display_name,
           color: t.color,
           weight: effectiveWeights[t.key] ?? t.weight,
           scored: t.scored,
@@ -432,13 +422,11 @@ function BuildEditorUI({
 
   function commitRename() {
     const trimmed = draftName.trim()
-    if (trimmed && trimmed !== name) onRename(trimmed)
-    setIsRenaming(false)
-  }
-
-  function cancelRename() {
-    setDraftName(name)
-    setIsRenaming(false)
+    if (trimmed && trimmed !== name) {
+      onRename(trimmed)
+    } else {
+      setDraftName(name)
+    }
   }
 
   const assignEffect = useCallback(
@@ -545,31 +533,16 @@ function BuildEditorUI({
         {/* Header */}
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div>
-            {isRenaming ? (
-              <Input
-                autoFocus
-                value={draftName}
-                onChange={(e) => setDraftName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") { e.preventDefault(); commitRename() }
-                  if (e.key === "Escape") cancelRename()
-                }}
-                onBlur={commitRename}
-                className="text-2xl font-semibold h-auto py-0.5 w-64"
-              />
-            ) : (
-              <div className="flex items-center gap-2 group">
-                <h1 className="text-2xl font-semibold">{name}</h1>
-                <button
-                  type="button"
-                  onClick={() => { setDraftName(name); setIsRenaming(true) }}
-                  title="Rename build"
-                  className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-foreground"
-                >
-                  <Pencil className="h-4 w-4" />
-                </button>
-              </div>
-            )}
+            <input
+              value={draftName}
+              onChange={(e) => setDraftName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") { e.preventDefault(); e.currentTarget.blur() }
+                if (e.key === "Escape") { setDraftName(name); e.currentTarget.blur() }
+              }}
+              onBlur={commitRename}
+              className="text-2xl font-semibold bg-transparent border-b border-transparent hover:border-muted-foreground/30 focus:border-primary focus:outline-none focus:ring-0 py-0.5 w-64 transition-colors"
+            />
             <p className="text-muted-foreground text-sm mt-0.5">{character}</p>
           </div>
           {saving && <span className="text-sm text-muted-foreground">Saving…</span>}
@@ -598,56 +571,6 @@ function BuildEditorUI({
                 className="w-16"
               />
             </div>
-          </div>
-
-          {/* Weight editor */}
-          <div>
-            <button
-              type="button"
-              onClick={() => setWeightEditorOpen((v) => !v)}
-              className="flex items-center gap-1.5 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
-            >
-              {weightEditorOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-              Customize Tier Weights
-            </button>
-            {weightEditorOpen && (
-              <div className="mt-3 grid grid-cols-2 sm:grid-cols-3 gap-3">
-                {tierConfigs
-                  .filter((t) => t.scored && !t.is_exclusion)
-                  .map((t) => {
-                    const eff = effectiveWeights[t.key] ?? t.weight
-                    return (
-                      <div key={t.key} className="flex items-center gap-2">
-                        <Label
-                          htmlFor={`weight-${t.key}`}
-                          className="text-xs w-28 shrink-0"
-                          style={{ color: t.color }}
-                        >
-                          {weightToLabel(eff, false)}
-                        </Label>
-                        <Input
-                          id={`weight-${t.key}`}
-                          type="number"
-                          min={-100}
-                          max={100}
-                          value={eff}
-                          onChange={(e) => handleWeightChange(t.key, Number(e.target.value))}
-                          className="w-20"
-                        />
-                      </div>
-                    )
-                  })}
-                {tierWeights && (
-                  <button
-                    type="button"
-                    onClick={() => onTierWeightsChange(null)}
-                    className="text-xs text-muted-foreground underline col-span-full"
-                  >
-                    Reset to defaults
-                  </button>
-                )}
-              </div>
-            )}
           </div>
 
           {/* Pinned relics */}
@@ -718,8 +641,17 @@ function BuildEditorUI({
         <div className="grid lg:grid-cols-[1fr_320px] gap-6">
           {/* Tier columns */}
           <div className="space-y-4">
+            {tierWeights && (
+              <button
+                type="button"
+                onClick={() => onTierWeightsChange(null)}
+                className="text-xs text-muted-foreground underline"
+              >
+                Reset weights to defaults
+              </button>
+            )}
             {sortedTierKeys.map((tierKey) => {
-              const { label, color } = tierDisplay[tierKey] ?? { label: tierKey, color: "#888" }
+              const { label, color, is_exclusion } = tierDisplay[tierKey] ?? { label: tierKey, color: "#888", is_exclusion: false }
               const tierEffects = (tiers[tierKey] ?? [])
                 .map((id) => effectMap.get(id))
                 .filter(Boolean) as EffectMeta[]
@@ -727,45 +659,52 @@ function BuildEditorUI({
               const isEmpty = tierEffects.length === 0 && tierFamilies.length === 0
 
               return (
-                <DroppableTierZone key={tierKey} tierKey={tierKey} color={color}>
-                  <div className="flex items-center justify-between">
+                <div key={tierKey}>
+                  <div className="flex items-center justify-between mb-1">
                     <h3 className="text-sm font-semibold" style={{ color }}>{label}</h3>
-                    {!tierDisplay[tierKey]?.is_exclusion && (
-                      <span className="text-xs text-muted-foreground">
-                        {(effectiveWeights[tierKey] ?? 0) >= 0 ? "+" : ""}
-                        {effectiveWeights[tierKey] ?? 0} pts
-                      </span>
+                    {!is_exclusion && (
+                      <input
+                        type="number"
+                        min={-100}
+                        max={100}
+                        value={effectiveWeights[tierKey] ?? 0}
+                        onChange={(e) => handleWeightChange(tierKey, Number(e.target.value))}
+                        className="w-16 text-xs text-right text-muted-foreground bg-transparent border-b border-transparent hover:border-muted-foreground/30 focus:border-primary focus:outline-none focus:ring-0 py-0.5 transition-colors [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                        title="Tier weight"
+                      />
                     )}
                   </div>
-                  {isEmpty ? (
-                    <p className="text-xs text-muted-foreground italic">
-                      Drop effects here, or click in the browser to add to Essential
-                    </p>
-                  ) : (
-                    <div className="flex flex-wrap gap-2">
-                      {tierFamilies.map((familyName) => (
-                        <DraggableChip
-                          key={`family:${familyName}`}
-                          dragId={`family:${familyName}`}
-                          name={`${familyName} (group)`}
-                          color={color}
-                          dragData={{ type: "family", familyName, sourceTier: tierKey }}
-                          onRemove={() => removeFamily(familyName, tierKey)}
-                        />
-                      ))}
-                      {tierEffects.map((e) => (
-                        <DraggableChip
-                          key={e.id}
-                          dragId={`effect:${e.id}`}
-                          name={e.name}
-                          color={color}
-                          dragData={{ type: "effect", effectId: e.id, sourceTier: tierKey }}
-                          onRemove={() => removeEffect(e.id, tierKey)}
-                        />
-                      ))}
-                    </div>
-                  )}
-                </DroppableTierZone>
+                  <DroppableTierZone tierKey={tierKey} color={color}>
+                    {isEmpty ? (
+                      <p className="text-xs text-muted-foreground italic">
+                        Drop effects here, or click in the browser to add
+                      </p>
+                    ) : (
+                      <div className="flex flex-wrap gap-2">
+                        {tierFamilies.map((familyName) => (
+                          <DraggableChip
+                            key={`family:${familyName}`}
+                            dragId={`family:${familyName}`}
+                            name={`${familyName} (group)`}
+                            color={color}
+                            dragData={{ type: "family", familyName, sourceTier: tierKey }}
+                            onRemove={() => removeFamily(familyName, tierKey)}
+                          />
+                        ))}
+                        {tierEffects.map((e) => (
+                          <DraggableChip
+                            key={e.id}
+                            dragId={`effect:${e.id}`}
+                            name={e.name}
+                            color={color}
+                            dragData={{ type: "effect", effectId: e.id, sourceTier: tierKey }}
+                            onRemove={() => removeEffect(e.id, tierKey)}
+                          />
+                        ))}
+                      </div>
+                    )}
+                  </DroppableTierZone>
+                </div>
               )
             })}
           </div>
@@ -906,6 +845,48 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
 
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
+  // On mount: populate pinnedRelicMeta for handles already stored in the build
+  // so chips show names instead of raw IDs after a page reload.
+  useEffect(() => {
+    const pinned = build.pinned_relics ?? []
+    if (pinned.length === 0) return
+    const pinnedSet = new Set(pinned)
+
+    async function populateMeta() {
+      const charsResponse = await queryClient.fetchQuery({
+        queryKey: ["characters"],
+        queryFn: () => SavesService.listCharacters(),
+        staleTime: 5 * 60 * 1000,
+      })
+      const chars = charsResponse?.data ?? []
+      const meta = new Map<number, RelicForPicker>()
+
+      for (const char of chars) {
+        if (pinnedSet.size === 0) break
+        const relicsResponse = await queryClient.fetchQuery({
+          queryKey: ["relics", char.id],
+          queryFn: () => SavesService.getCharacterRelics({ characterId: char.id }),
+          staleTime: 5 * 60 * 1000,
+        })
+        for (const r of relicsResponse?.data ?? []) {
+          if (pinnedSet.has(r.ga_handle)) {
+            meta.set(r.ga_handle, {
+              ga_handle: r.ga_handle,
+              name: r.name,
+              color: r.color,
+              is_deep: r.is_deep,
+            })
+            pinnedSet.delete(r.ga_handle)
+          }
+        }
+      }
+
+      if (meta.size > 0) setPinnedRelicMeta(meta)
+    }
+
+    populateMeta()
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
     setTiers((build.tiers as Record<string, number[]>) ?? {})
     setFamilyTiers((build.family_tiers as Record<string, string[]>) ?? {})
@@ -1019,7 +1000,19 @@ function LocalBuildEditorContent({ buildId }: { buildId: string }) {
     build?.tier_weights ?? null,
   )
   const [pinnedRelics, setPinnedRelics] = useState<number[]>(build?.pinned_relics ?? [])
-  const [pinnedRelicMeta, setPinnedRelicMeta] = useState<Map<number, RelicForPicker>>(new Map())
+  const [pinnedRelicMeta, setPinnedRelicMeta] = useState<Map<number, RelicForPicker>>(() => {
+    // Pre-populate from sessionStorage so chips show names after a page reload.
+    const raw = sessionStorage.getItem("selectedCharacter")
+    const char = raw ? JSON.parse(raw) : null
+    const handles = new Set(build?.pinned_relics ?? [])
+    const map = new Map<number, RelicForPicker>()
+    for (const r of (char?.relics ?? []) as RelicForPicker[]) {
+      if (handles.has(r.ga_handle)) {
+        map.set(r.ga_handle, { ga_handle: r.ga_handle, name: r.name, color: r.color, is_deep: r.is_deep })
+      }
+    }
+    return map
+  })
 
   const tiersRef = useRef(tiers)
   const familyTiersRef = useRef(familyTiers)
