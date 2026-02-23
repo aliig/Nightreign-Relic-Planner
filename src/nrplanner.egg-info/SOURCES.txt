@@ -1,8 +1,0 @@
-LICENSE
-README.md
-pyproject.toml
-src/nrplanner.egg-info/PKG-INFO
-src/nrplanner.egg-info/SOURCES.txt
-src/nrplanner.egg-info/dependency_links.txt
-src/nrplanner.egg-info/requires.txt
-src/nrplanner.egg-info/top_level.txt
