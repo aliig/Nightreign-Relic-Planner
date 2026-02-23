@@ -763,7 +763,7 @@ function BuildEditorUI({
               {/* Family groups */}
               {filteredFamilies.length > 0 && (
                 <>
-                  <p className="text-xs font-medium text-muted-foreground px-2 pt-1">Groups</p>
+                  <p className="text-xs font-medium text-muted-foreground px-2 pt-1">Groups (Weighted Effect Scaling)</p>
                   {filteredFamilies.map((family) => (
                     <DraggableBrowserRow
                       key={`family:${family.name}`}

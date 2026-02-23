@@ -136,6 +136,9 @@ function UploadPage() {
         <p className="text-sm font-medium">Drop your save file here</p>
         <p className="text-xs text-muted-foreground mt-1">or click to browse</p>
         <p className="text-xs text-muted-foreground mt-3">.sl2 (PC) · memory.dat (PS4)</p>
+        <p className="text-xs text-muted-foreground mt-2">
+          PC: <code className="font-mono">%AppData%\Roaming\Nightreign\[SteamID]\NR0000.sl2</code>
+        </p>
         <input
           ref={fileInputRef}
           type="file"
