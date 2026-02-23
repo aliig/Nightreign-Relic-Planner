@@ -6,7 +6,7 @@ BuildDefinition tiers are populated with real effect IDs from game data.
 import pytest
 
 from nrplanner import BuildScorer, SourceDataHandler
-from nrplanner.models import ALL_TIER_KEYS, BuildDefinition, OwnedRelic, TIER_BONUS
+from nrplanner.models import ALL_TIER_KEYS, BuildDefinition, OwnedRelic
 
 EMPTY = 4294967295  # EMPTY_EFFECT sentinel
 
@@ -76,22 +76,18 @@ class TestScoreRelic:
     def test_no_matching_effects_scores_zero(
         self, scorer: BuildScorer, all_effects: list[dict]
     ) -> None:
-        # Use effects not in any tier — score should just be the tier bonus
         eff_id = all_effects[2]["id"]
         build = _make_build()  # empty tiers
         relic = _make_relic([eff_id, EMPTY, EMPTY])
-        # Score is 0 from tiers + TIER_BONUS[1] = 0
-        assert scorer.score_relic(relic, build) == TIER_BONUS[1]
+        assert scorer.score_relic(relic, build) == 0
 
-    def test_grand_relic_gets_tier_bonus(
+    def test_grand_relic_with_no_tier_match_scores_zero(
         self, scorer: BuildScorer, all_effects: list[dict]
     ) -> None:
         eff1, eff2, eff3 = all_effects[0]["id"], all_effects[1]["id"], all_effects[2]["id"]
-        build = _make_build()
-        relic = _make_relic([eff1, eff2, eff3])  # 3 effects = Grand
-        score = scorer.score_relic(relic, build)
-        # Score from effects = 0 (no tiers), bonus for 3 effects = TIER_BONUS[3] = 5
-        assert score == TIER_BONUS[3]
+        build = _make_build()  # empty tiers — no bonus for effect count
+        relic = _make_relic([eff1, eff2, eff3])  # Grand (3 effects)
+        assert scorer.score_relic(relic, build) == 0
 
 
 class TestHasBlacklistedEffect:

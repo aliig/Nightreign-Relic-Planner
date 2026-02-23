@@ -56,9 +56,8 @@ TIER_WEIGHTS:           dict[str, int]        = {t.key: t.weight for t in TIERS}
 SCORED_TIERS:           tuple[str, ...]       = tuple(t.key for t in TIERS if t.scored)
 MAGNITUDE_TIERS:        tuple[str, ...]       = tuple(t.key for t in TIERS if t.magnitude_weighted)
 
-# Penalty per excess curse beyond build.curse_max; small bonus for relic richness
+# Penalty per excess curse beyond build.curse_max
 CURSE_EXCESS_PENALTY = -200
-TIER_BONUS: dict[int, int] = {3: 5, 2: 2, 1: 0, 0: 0}
 
 
 # ---------------------------------------------------------------------------

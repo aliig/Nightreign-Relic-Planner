@@ -3,7 +3,7 @@ from nrplanner.constants import EMPTY_EFFECT
 from nrplanner.data import SourceDataHandler
 from nrplanner.models import (
     BuildDefinition, OwnedRelic,
-    CURSE_EXCESS_PENALTY, MAGNITUDE_TIERS, SCORED_TIERS, TIER_BONUS,
+    CURSE_EXCESS_PENALTY, MAGNITUDE_TIERS, SCORED_TIERS,
 )
 
 
@@ -106,7 +106,7 @@ class BuildScorer:
             tier, weight = self._resolve_tier_and_weight(curse, build)
             if tier in SCORED_TIERS:
                 score += weight
-        return score + TIER_BONUS.get(relic.effect_count, 0)
+        return score
 
     def _effect_stacking_score(self, eff_id: int, tier: str, weight: int,
                                 vessel_effect_ids: set[int],
@@ -165,7 +165,7 @@ class BuildScorer:
                     continue
                 if vessel_curse_counts.get(curse, 0) >= build.curse_max:
                     score += CURSE_EXCESS_PENALTY
-        return score + TIER_BONUS.get(relic.effect_count, 0)
+        return score
 
     # ------------------------------------------------------------------
     # Breakdown (for UI / API)
@@ -214,15 +214,4 @@ class BuildScorer:
                     "redundant": override_status is not None,
                     "override_status": override_status,
                 })
-        tier_bonus = TIER_BONUS.get(relic.effect_count, 0)
-        if tier_bonus:
-            breakdown.append({
-                "effect_id": -1,
-                "name": f"{relic.tier} relic bonus",
-                "tier": None,
-                "score": tier_bonus,
-                "is_curse": False,
-                "redundant": False,
-                "override_status": None,
-            })
         return breakdown
