@@ -14,7 +14,7 @@ import {
   useSensors,
 } from "@dnd-kit/core"
 
-import { BuildsService, GameService, SavesService } from "@/client"
+import { BuildsService, GameService, SavesService, type ParsedRelicData } from "@/client"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
@@ -23,6 +23,8 @@ import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Separator } from "@/components/ui/separator"
+import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip"
+import { buildEffectMap, EffectList, EMPTY_EFFECT } from "@/components/RelicDisplay"
 import { cn } from "@/lib/utils"
 import { isLoggedIn } from "@/hooks/useAuth"
 import { useLocalBuilds } from "@/hooks/useLocalBuilds"
@@ -149,9 +151,9 @@ function DraggableBrowserRow({
 // ---------------------------------------------------------------------------
 
 function PinnedRelicPickerContent({
-  characterId, onSelect,
+  characterId, onSelect, effects,
 }: {
-  characterId: string; onSelect: (relic: RelicForPicker) => void
+  characterId: string; onSelect: (relic: RelicForPicker) => void; effects: EffectMeta[]
 }) {
   const { data } = useSuspenseQuery({
     queryKey: ["relics", characterId],
@@ -162,6 +164,7 @@ function PinnedRelicPickerContent({
   const relics = (data.data ?? []).filter((r) =>
     !search || r.name.toLowerCase().includes(search.toLowerCase()),
   )
+  const effectMap = useMemo(() => buildEffectMap(effects), [effects])
 
   return (
     <>
@@ -176,27 +179,41 @@ function PinnedRelicPickerContent({
         />
       </div>
       <div className="space-y-1 max-h-64 overflow-y-auto">
-        {relics.map((r) => (
-          <button
-            key={r.id}
-            type="button"
-            onClick={() =>
-              onSelect({ ga_handle: r.ga_handle, name: r.name, color: r.color, is_deep: r.is_deep })
-            }
-            className="w-full text-left rounded px-2 py-1.5 hover:bg-muted/50 flex items-center gap-2 text-sm"
-          >
-            <span
-              className="w-2 h-2 rounded-full shrink-0"
-              style={{ background: COLOR_HEX[r.color] ?? "#888" }}
-            />
-            <span className="truncate" style={{ color: COLOR_HEX[r.color] ?? undefined }}>
-              {r.name}
-            </span>
-            <span className="ml-auto text-xs text-muted-foreground shrink-0">
-              {r.tier} {r.is_deep ? "· Deep" : ""}
-            </span>
-          </button>
-        ))}
+        {relics.map((r) => {
+          const effectIds = [r.effect_1, r.effect_2, r.effect_3]
+          const curseIds = [r.curse_1, r.curse_2, r.curse_3]
+          const hasEffects = effectIds.some((id) => id !== 0 && id !== EMPTY_EFFECT)
+          return (
+            <Tooltip key={r.id}>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={() =>
+                    onSelect({ ga_handle: r.ga_handle, name: r.name, color: r.color, is_deep: r.is_deep })
+                  }
+                  className="w-full text-left rounded px-2 py-1.5 hover:bg-muted/50 flex items-center gap-2 text-sm"
+                >
+                  <span
+                    className="w-2 h-2 rounded-full shrink-0"
+                    style={{ background: COLOR_HEX[r.color] ?? "#888" }}
+                  />
+                  <span className="truncate" style={{ color: COLOR_HEX[r.color] ?? undefined }}>
+                    {r.name}
+                  </span>
+                  <span className="ml-auto text-xs text-muted-foreground shrink-0">
+                    {r.tier} {r.is_deep ? "· Deep" : ""}
+                  </span>
+                </button>
+              </TooltipTrigger>
+              {hasEffects && (
+                <TooltipContent side="right" className="max-w-64 space-y-1.5">
+                  <EffectList effectIds={effectIds} isCurse={false} effectMap={effectMap} />
+                  <EffectList effectIds={curseIds} isCurse={true} effectMap={effectMap} />
+                </TooltipContent>
+              )}
+            </Tooltip>
+          )
+        })}
         {relics.length === 0 && (
           <p className="text-xs text-muted-foreground text-center py-4">No relics match.</p>
         )}
@@ -206,11 +223,12 @@ function PinnedRelicPickerContent({
 }
 
 function AuthPinnedRelicDialog({
-  pinnedHandles, onAdd, disabled,
+  pinnedHandles, onAdd, disabled, effects,
 }: {
   pinnedHandles: number[]
   onAdd: (relic: RelicForPicker) => void
   disabled: boolean
+  effects: EffectMeta[]
 }) {
   const [open, setOpen] = useState(false)
   const [charId, setCharId] = useState<string | null>(null)
@@ -252,6 +270,7 @@ function AuthPinnedRelicDialog({
           <Suspense fallback={<Skeleton className="h-40 w-full" />}>
             <PinnedRelicPickerContent
               characterId={selectedCharId}
+              effects={effects}
               onSelect={(relic) => {
                 if (!pinnedHandles.includes(relic.ga_handle)) {
                   onAdd(relic)
@@ -271,21 +290,23 @@ function AuthPinnedRelicDialog({
 }
 
 function AnonPinnedRelicDialog({
-  pinnedHandles, onAdd, disabled,
+  pinnedHandles, onAdd, disabled, effects,
 }: {
   pinnedHandles: number[]
   onAdd: (relic: RelicForPicker) => void
   disabled: boolean
+  effects: EffectMeta[]
 }) {
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState("")
 
   const raw = sessionStorage.getItem("selectedCharacter")
   const char = raw ? JSON.parse(raw) : null
-  const relics: RelicForPicker[] = (char?.relics ?? []).filter(
-    (r: RelicForPicker) =>
+  const relics: ParsedRelicData[] = (char?.relics ?? []).filter(
+    (r: ParsedRelicData) =>
       !search || r.name.toLowerCase().includes(search.toLowerCase()),
   )
+  const effectMap = useMemo(() => buildEffectMap(effects), [effects])
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -309,28 +330,42 @@ function AnonPinnedRelicDialog({
           />
         </div>
         <div className="space-y-1 max-h-64 overflow-y-auto">
-          {relics.map((r) => (
-            <button
-              key={r.ga_handle}
-              type="button"
-              onClick={() => {
-                if (!pinnedHandles.includes(r.ga_handle)) onAdd(r)
-                setOpen(false)
-              }}
-              className="w-full text-left rounded px-2 py-1.5 hover:bg-muted/50 flex items-center gap-2 text-sm"
-            >
-              <span
-                className="w-2 h-2 rounded-full shrink-0"
-                style={{ background: COLOR_HEX[r.color] ?? "#888" }}
-              />
-              <span className="truncate" style={{ color: COLOR_HEX[r.color] ?? undefined }}>
-                {r.name}
-              </span>
-              <span className="ml-auto text-xs text-muted-foreground shrink-0">
-                {r.is_deep ? "Deep" : "Standard"}
-              </span>
-            </button>
-          ))}
+          {relics.map((r) => {
+            const effectIds = [r.effect_1, r.effect_2, r.effect_3]
+            const curseIds = [r.curse_1, r.curse_2, r.curse_3]
+            const hasEffects = effectIds.some((id) => id !== 0 && id !== EMPTY_EFFECT)
+            return (
+              <Tooltip key={r.ga_handle}>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!pinnedHandles.includes(r.ga_handle)) onAdd(r)
+                      setOpen(false)
+                    }}
+                    className="w-full text-left rounded px-2 py-1.5 hover:bg-muted/50 flex items-center gap-2 text-sm"
+                  >
+                    <span
+                      className="w-2 h-2 rounded-full shrink-0"
+                      style={{ background: COLOR_HEX[r.color] ?? "#888" }}
+                    />
+                    <span className="truncate" style={{ color: COLOR_HEX[r.color] ?? undefined }}>
+                      {r.name}
+                    </span>
+                    <span className="ml-auto text-xs text-muted-foreground shrink-0">
+                      {r.is_deep ? "Deep" : "Standard"}
+                    </span>
+                  </button>
+                </TooltipTrigger>
+                {hasEffects && (
+                  <TooltipContent side="right" className="max-w-64 space-y-1.5">
+                    <EffectList effectIds={effectIds} isCurse={false} effectMap={effectMap} />
+                    <EffectList effectIds={curseIds} isCurse={true} effectMap={effectMap} />
+                  </TooltipContent>
+                )}
+              </Tooltip>
+            )
+          })}
           {relics.length === 0 && (
             <p className="text-xs text-muted-foreground text-center py-4">No relics match.</p>
           )}
@@ -583,6 +618,7 @@ function BuildEditorUI({
               {isAuth ? (
                 <AuthPinnedRelicDialog
                   pinnedHandles={pinnedRelics}
+                  effects={effects}
                   onAdd={(relic) => {
                     const nextMeta = new Map(pinnedRelicMeta)
                     nextMeta.set(relic.ga_handle, relic)
@@ -593,6 +629,7 @@ function BuildEditorUI({
               ) : (
                 <AnonPinnedRelicDialog
                   pinnedHandles={pinnedRelics}
+                  effects={effects}
                   onAdd={(relic) => {
                     const nextMeta = new Map(pinnedRelicMeta)
                     nextMeta.set(relic.ga_handle, relic)

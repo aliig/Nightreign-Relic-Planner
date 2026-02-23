@@ -144,9 +144,9 @@ function SlotCard({ slot, isPinned = false }: { slot: SlotAssignment; isPinned?:
           )}
           {curses.length > 0 && (
             <div className="mt-1.5 pt-1.5 border-t border-destructive/20">
-              <p className="text-[10px] font-medium text-destructive/70 uppercase tracking-wide mb-0.5">
+              {/* <p className="text-[10px] font-medium text-destructive/70 uppercase tracking-wide mb-0.5">
                 Curses
-              </p>
+              </p> */}
               <div className="space-y-0.5">
                 {curses.map((b: Record<string, unknown>, i: number) => (
                   <div key={i} className="flex items-center justify-between text-xs">
