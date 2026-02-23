@@ -1,10 +1,11 @@
 import { createFileRoute, Link } from "@tanstack/react-router"
 import { useSuspenseQuery } from "@tanstack/react-query"
-import { Suspense, useState } from "react"
+import { Suspense, useMemo, useState } from "react"
 import { ChevronDown, ChevronUp, CheckCircle2, XCircle, Trophy, Pin } from "lucide-react"
 
-import { BuildsService, SavesService } from "@/client"
+import { BuildsService, GameService, SavesService } from "@/client"
 import type { VesselResult } from "@/client"
+import { buildEffectMap, COLOR_HEX, RelicNameCell } from "@/components/RelicDisplay"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -28,10 +29,6 @@ export const Route = createFileRoute("/_layout/optimize")({
     meta: [{ title: "Optimize - Nightreign Relic Planner" }],
   }),
 })
-
-const COLOR_HEX: Record<string, string> = {
-  Red: "#FF4444", Blue: "#4488FF", Yellow: "#B8860B", Green: "#44BB44", White: "#AAAAAA",
-}
 
 const TIER_COLORS: Record<string, string> = {
   required: "#FF4444", preferred: "#4488FF", nice_to_have: "#44BB88",
@@ -98,6 +95,8 @@ async function runOptimizeStream(
 
 function SlotCard({ slot, isPinned = false }: { slot: SlotAssignment; isPinned?: boolean }) {
   const relic = slot.relic
+  const effects = slot.breakdown?.filter((b: Record<string, unknown>) => !b.is_curse) ?? []
+  const curses = slot.breakdown?.filter((b: Record<string, unknown>) => b.is_curse) ?? []
 
   return (
     <div className={`rounded-md border p-3 space-y-1.5${isPinned ? " border-primary/40 bg-primary/5" : ""}`}>
@@ -119,11 +118,15 @@ function SlotCard({ slot, isPinned = false }: { slot: SlotAssignment; isPinned?:
       </div>
       {relic ? (
         <>
-          <p className="text-sm font-medium">{relic.name}</p>
-          <p className="text-xs text-muted-foreground">{relic.tier} · {relic.color}</p>
-          {slot.breakdown?.length > 0 && (
+          <RelicNameCell
+            name={relic.name}
+            color={relic.color}
+            tier={relic.tier}
+            isDeep={relic.is_deep}
+          />
+          {effects.length > 0 && (
             <div className="space-y-0.5 mt-1">
-              {slot.breakdown.map((b: Record<string, unknown>, i: number) => (
+              {effects.map((b: Record<string, unknown>, i: number) => (
                 <div key={i} className="flex items-center justify-between text-xs">
                   <span
                     className="truncate"
@@ -139,6 +142,26 @@ function SlotCard({ slot, isPinned = false }: { slot: SlotAssignment; isPinned?:
               ))}
             </div>
           )}
+          {curses.length > 0 && (
+            <div className="mt-1.5 pt-1.5 border-t border-destructive/20">
+              <p className="text-[10px] font-medium text-destructive/70 uppercase tracking-wide mb-0.5">
+                Curses
+              </p>
+              <div className="space-y-0.5">
+                {curses.map((b: Record<string, unknown>, i: number) => (
+                  <div key={i} className="flex items-center justify-between text-xs">
+                    <span className="truncate text-destructive/80">
+                      {b.name as string}
+                      {b.redundant ? " (redundant)" : ""}
+                    </span>
+                    <span className="font-mono ml-2 shrink-0 text-destructive/80">
+                      {(b.score as number) >= 0 ? "+" : ""}{b.score as number}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </>
       ) : (
         <p className="text-xs text-muted-foreground italic">No relic assigned</p>
@@ -152,11 +175,13 @@ function VesselCard({
   defaultExpanded = false,
   highlighted = false,
   pinnedHandles = new Set(),
+  effectMap = new Map(),
 }: {
   vessel: VesselResult
   defaultExpanded?: boolean
   highlighted?: boolean
   pinnedHandles?: Set<number>
+  effectMap?: Map<number, string>
 }) {
   const [expanded, setExpanded] = useState(defaultExpanded)
 
@@ -203,7 +228,14 @@ function VesselCard({
           </div>
           {!vessel.meets_requirements && vessel.missing_requirements?.length > 0 && (
             <p className="text-xs text-destructive mt-3">
-              Missing required effects: {vessel.missing_requirements.join(", ")}
+              Missing required effects:{" "}
+              {vessel.missing_requirements
+                .map((m) =>
+                  typeof m === "number"
+                    ? (effectMap.get(m) ?? `Effect ${m}`)
+                    : m,
+                )
+                .join(", ")}
             </p>
           )}
         </CardContent>
@@ -224,6 +256,12 @@ function AuthOptimizeForm() {
     queryKey: ["characters"],
     queryFn: () => SavesService.listCharacters(),
   })
+  const { data: effectsData } = useSuspenseQuery({
+    queryKey: ["game", "effects"],
+    queryFn: () => GameService.getEffects(),
+    staleTime: Infinity,
+  })
+  const effectMap = useMemo(() => buildEffectMap((effectsData ?? []) as unknown[]), [effectsData])
 
   const builds = buildsData?.data ?? []
   const chars = charsData?.data ?? []
@@ -326,6 +364,7 @@ function AuthOptimizeForm() {
               defaultExpanded={index === 0}
               highlighted={index === 0}
               pinnedHandles={pinnedHandles}
+              effectMap={effectMap}
             />
           ))}
         </div>
@@ -345,6 +384,12 @@ interface SessionCharacter {
 function AnonOptimizeForm() {
   const { showErrorToast } = useCustomToast()
   const { builds } = useLocalBuilds()
+  const { data: effectsData } = useSuspenseQuery({
+    queryKey: ["game", "effects"],
+    queryFn: () => GameService.getEffects(),
+    staleTime: Infinity,
+  })
+  const effectMap = useMemo(() => buildEffectMap((effectsData ?? []) as unknown[]), [effectsData])
 
   const allChars: SessionCharacter[] = JSON.parse(
     sessionStorage.getItem("parsedCharacters") ?? "[]"
@@ -512,6 +557,7 @@ function AnonOptimizeForm() {
               defaultExpanded={index === 0}
               highlighted={index === 0}
               pinnedHandles={pinnedHandles}
+              effectMap={effectMap}
             />
           ))}
         </div>

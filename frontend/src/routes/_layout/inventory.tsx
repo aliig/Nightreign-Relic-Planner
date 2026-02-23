@@ -3,6 +3,7 @@ import { useSuspenseQuery } from "@tanstack/react-query"
 import { Suspense, useMemo, useState } from "react"
 
 import { GameService, SavesService } from "@/client"
+import { buildEffectMap, EffectList, RelicNameCell } from "@/components/RelicDisplay"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -22,58 +23,6 @@ export const Route = createFileRoute("/_layout/inventory")({
     meta: [{ title: "Inventory - Nightreign Relic Planner" }],
   }),
 })
-
-const COLOR_HEX: Record<string, string> = {
-  Red: "#FF4444",
-  Blue: "#4488FF",
-  Yellow: "#B8860B",
-  Green: "#44BB44",
-  White: "#AAAAAA",
-}
-
-const EMPTY_EFFECT = 4294967295
-
-function effectPills(effectIds: number[], isDebuff: boolean, effectMap: Map<number, string>) {
-  const pills: string[] = []
-  for (const id of effectIds) {
-    if (id === 0 || id === EMPTY_EFFECT) continue
-    const name = effectMap.get(id)
-    if (name) pills.push(name)
-  }
-  if (pills.length === 0) return null
-  return (
-    <div className="flex flex-col gap-1">
-      {pills.map((name) => (
-        <span
-          key={name}
-          className={`inline-block rounded px-1.5 py-0.5 text-xs ${
-            isDebuff
-              ? "bg-destructive/10 text-destructive"
-              : "bg-muted text-muted-foreground"
-          }`}
-        >
-          {name}
-        </span>
-      ))}
-    </div>
-  )
-}
-
-function RelicNameCell({ name, color, tier, isDeep }: {
-  name: string; color: string; tier: string; isDeep: boolean
-}) {
-  const hex = COLOR_HEX[color] ?? "#AAAAAA"
-  return (
-    <div>
-      <span className="font-medium" style={{ color: hex }}>
-        {name}
-      </span>
-      <div className="text-xs text-muted-foreground mt-0.5">
-        {tier} · {color} · {isDeep ? <span style={{ color: "#8B6FC0" }}>Deep</span> : "Standard"}
-      </div>
-    </div>
-  )
-}
 
 // --- Authenticated inventory table ---
 
@@ -134,12 +83,12 @@ function InventoryTable({
               />
             </TableCell>
             <TableCell>
-              {effectPills([relic.effect_1, relic.effect_2, relic.effect_3], false, effectMap) ?? (
+              {EffectList({ effectIds: [relic.effect_1, relic.effect_2, relic.effect_3], isCurse: false, effectMap }) ?? (
                 <span className="text-xs text-muted-foreground italic">—</span>
               )}
             </TableCell>
             <TableCell>
-              {effectPills([relic.curse_1, relic.curse_2, relic.curse_3], true, effectMap) ?? (
+              {EffectList({ effectIds: [relic.curse_1, relic.curse_2, relic.curse_3], isCurse: true, effectMap }) ?? (
                 <span className="text-xs text-muted-foreground italic">—</span>
               )}
             </TableCell>
@@ -162,20 +111,7 @@ function AuthInventory() {
     staleTime: Infinity,
   })
 
-  const effectMap = useMemo(() => {
-    const m = new Map<number, string>()
-    for (const e of effectsData ?? []) {
-      if (typeof e.id === "number" && typeof e.name === "string") {
-        m.set(e.id, e.name)
-        if (Array.isArray(e.alias_ids)) {
-          for (const aliasId of e.alias_ids) {
-            if (typeof aliasId === "number") m.set(aliasId, e.name)
-          }
-        }
-      }
-    }
-    return m
-  }, [effectsData])
+  const effectMap = useMemo(() => buildEffectMap((effectsData ?? []) as unknown[]), [effectsData])
 
   const [selectedId, setSelectedId] = useState<string | null>(
     chars.data?.[0]?.id ?? null,
@@ -280,20 +216,7 @@ function AnonInventory() {
     staleTime: Infinity,
   })
 
-  const effectMap = useMemo(() => {
-    const m = new Map<number, string>()
-    for (const e of effectsData ?? []) {
-      if (typeof e.id === "number" && typeof e.name === "string") {
-        m.set(e.id, e.name)
-        if (Array.isArray(e.alias_ids)) {
-          for (const aliasId of e.alias_ids) {
-            if (typeof aliasId === "number") m.set(aliasId, e.name)
-          }
-        }
-      }
-    }
-    return m
-  }, [effectsData])
+  const effectMap = useMemo(() => buildEffectMap((effectsData ?? []) as unknown[]), [effectsData])
 
   const allChars: Array<Record<string, unknown>> = JSON.parse(
     sessionStorage.getItem("parsedCharacters") ?? "[]"
@@ -367,18 +290,18 @@ function AnonInventory() {
                 />
               </TableCell>
               <TableCell>
-                {effectPills(
-                  [relic.effect_1 as number, relic.effect_2 as number, relic.effect_3 as number],
-                  false,
+                {EffectList({
+                  effectIds: [relic.effect_1 as number, relic.effect_2 as number, relic.effect_3 as number],
+                  isCurse: false,
                   effectMap,
-                ) ?? <span className="text-xs text-muted-foreground italic">—</span>}
+                }) ?? <span className="text-xs text-muted-foreground italic">—</span>}
               </TableCell>
               <TableCell>
-                {effectPills(
-                  [relic.curse_1 as number, relic.curse_2 as number, relic.curse_3 as number],
-                  true,
+                {EffectList({
+                  effectIds: [relic.curse_1 as number, relic.curse_2 as number, relic.curse_3 as number],
+                  isCurse: true,
                   effectMap,
-                ) ?? <span className="text-xs text-muted-foreground italic">—</span>}
+                }) ?? <span className="text-xs text-muted-foreground italic">—</span>}
               </TableCell>
             </TableRow>
           ))}
