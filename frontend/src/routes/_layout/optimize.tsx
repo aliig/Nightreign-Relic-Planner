@@ -349,12 +349,6 @@ function AnonOptimizeForm() {
             </SelectContent>
           </Select>
         </div>
-        <div className="space-y-1.5">
-          <label className="text-sm font-medium">Character</label>
-          <div className="flex h-9 items-center rounded-md border px-3 text-sm w-56 bg-muted/30">
-            {char.name}
-          </div>
-        </div>
         <Button
           onClick={() => optimizeMutation.mutate()}
           disabled={!buildId || optimizeMutation.isPending}
