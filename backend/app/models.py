@@ -251,7 +251,7 @@ class BuildUpdate(SQLModel):
     tiers: dict[str, list[int]] | None = None
     family_tiers: dict[str, list[str]] | None = None
     include_deep: bool | None = None
-    curse_max: int | None = Field(default=None, ge=0)
+    curse_max: int | None = Field(default=None, ge=1)
     tier_weights: dict[str, int] | None = None
     pinned_relics: list[int] | None = None
 

@@ -2,7 +2,7 @@
 
 Inventory is constructed with RelicInventory.from_owned_relics() — no save
 file parsing. Uses real SourceDataHandler and real vessel data for Wylder
-(hero_type 100000).
+(hero_type 1 — CSV hero index, not NPC text file ID).
 """
 import pytest
 
@@ -73,7 +73,7 @@ class TestOptimizeAllVessels:
         self, optimizer: VesselOptimizer, small_inventory: RelicInventory
     ) -> None:
         build = _make_build()
-        results = optimizer.optimize_all_vessels(build, small_inventory, 100000)
+        results = optimizer.optimize_all_vessels(build, small_inventory, 1)
         assert isinstance(results, list)
         assert all(isinstance(r, VesselResult) for r in results)
 
@@ -81,9 +81,9 @@ class TestOptimizeAllVessels:
         self, optimizer: VesselOptimizer, small_inventory: RelicInventory
     ) -> None:
         build = _make_build()
-        results = optimizer.optimize_all_vessels(build, small_inventory, 100000)
+        results = optimizer.optimize_all_vessels(build, small_inventory, 1)
         if not results:
-            pytest.skip("No vessels returned for hero 100000")
+            pytest.skip("No vessels returned for hero 1")
         r = results[0]
         assert hasattr(r, "vessel_id")
         assert hasattr(r, "vessel_name")
@@ -97,7 +97,7 @@ class TestOptimizeAllVessels:
     ) -> None:
         build = _make_build()
         empty_inventory = RelicInventory.from_owned_relics([])
-        results = optimizer.optimize_all_vessels(build, empty_inventory, 100000)
+        results = optimizer.optimize_all_vessels(build, empty_inventory, 1)
         assert isinstance(results, list)
         # All assignments should have no relic assigned
         for result in results:
@@ -108,7 +108,7 @@ class TestOptimizeAllVessels:
         self, optimizer: VesselOptimizer, small_inventory: RelicInventory
     ) -> None:
         build = _make_build()
-        results = optimizer.optimize_all_vessels(build, small_inventory, 100000, top_n=2)
+        results = optimizer.optimize_all_vessels(build, small_inventory, 1, top_n=2)
         assert len(results) <= 2
 
     def test_meets_requirements_first(
@@ -119,7 +119,7 @@ class TestOptimizeAllVessels:
         # Build with a "required" effect — some vessels may not have it
         eff_id = all_effects[0]["id"]
         build = _make_build(required=[eff_id])
-        results = optimizer.optimize_all_vessels(build, small_inventory, 100000)
+        results = optimizer.optimize_all_vessels(build, small_inventory, 1)
         if not results:
             pytest.skip("No results to check ordering")
         # Find the index of the first result that does NOT meet requirements
@@ -144,6 +144,19 @@ class TestOptimizeAllVessels:
         for r in results:
             assert r.vessel_character == "All"
 
+    def test_valid_hero_includes_character_specific_vessels(
+        self, optimizer: VesselOptimizer, small_inventory: RelicInventory
+    ) -> None:
+        """A valid hero_type must return character-specific vessels, not only
+        the shared 'All' vessels.  This catches the NPC-ID-vs-hero-index bug
+        where passing e.g. 100000 instead of 1 produced only 'All' results."""
+        build = _make_build()
+        results = optimizer.optimize_all_vessels(build, small_inventory, 1)
+        characters = {r.vessel_character for r in results}
+        assert "Wylder" in characters, (
+            f"Expected Wylder-specific vessels in results but got: {characters}"
+        )
+
 
 class TestPinnedRelics:
     def test_pinned_relic_appears_in_all_results(
@@ -166,7 +179,7 @@ class TestPinnedRelics:
             curse_max=1,
             pinned_relics=[pinned_handle],
         )
-        results = optimizer.optimize_all_vessels(build, inventory, 100000)
+        results = optimizer.optimize_all_vessels(build, inventory, 1)
         assert results, "Expected at least one vessel result with pinned relic"
         for result in results:
             assigned_handles = {
@@ -190,7 +203,7 @@ class TestPinnedRelics:
             curse_max=1,
             pinned_relics=[0xDEADBEEF],
         )
-        results = optimizer.optimize_all_vessels(build, inventory, 100000)
+        results = optimizer.optimize_all_vessels(build, inventory, 1)
         # Should not crash and should still return vessels (none excluded due to absent pin)
         assert isinstance(results, list)
 
@@ -208,6 +221,6 @@ class TestPinnedRelics:
             curse_max=1,
             pinned_relics=[],
         )
-        results_no_pins = optimizer.optimize_all_vessels(build_no_pins, small_inventory, 100000)
-        results_empty_pins = optimizer.optimize_all_vessels(build_empty_pins, small_inventory, 100000)
+        results_no_pins = optimizer.optimize_all_vessels(build_no_pins, small_inventory, 1)
+        results_empty_pins = optimizer.optimize_all_vessels(build_empty_pins, small_inventory, 1)
         assert len(results_no_pins) == len(results_empty_pins)

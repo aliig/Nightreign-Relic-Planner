@@ -77,12 +77,26 @@ def test_get_all_effects_list_structure(
 
 
 def test_get_all_vessels_for_hero(ds: SourceDataHandler) -> None:
-    # hero_type 100000 = Wylder
-    vessels = ds.get_all_vessels_for_hero(100000)
+    # hero_type 1 = Wylder (1-based CSV index, NOT the NPC text file ID)
+    vessels = ds.get_all_vessels_for_hero(1)
     assert isinstance(vessels, list)
     assert len(vessels) > 0
     first = vessels[0]
     assert "vessel_id" in first
+
+
+def test_get_all_vessels_for_hero_includes_character_specific(
+    ds: SourceDataHandler,
+) -> None:
+    """Querying with a valid hero index must return character-specific vessels,
+    not only the shared 'All' vessels (heroType=11)."""
+    vessels = ds.get_all_vessels_for_hero(1)  # Wylder
+    characters = {v["Character"] for v in vessels}
+    assert "Wylder" in characters, (
+        f"Expected Wylder-specific vessels but got characters: {characters}"
+    )
+    # Should also include shared vessels
+    assert "All" in characters
 
 
 def test_reload_text_en_us(ds: SourceDataHandler) -> None:

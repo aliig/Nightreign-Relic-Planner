@@ -121,6 +121,28 @@ class TestInlineMode:
         assert response.status_code == 422
 
 
+    def test_results_include_character_specific_vessels(
+        self, client: TestClient,
+    ) -> None:
+        """Optimization for Wylder must return Wylder-specific vessels,
+        not only the shared 'All' vessels.  This catches the NPC-ID-vs-
+        hero-index mapping bug in _resolve_hero_type."""
+        response = client.post(
+            "/api/v1/optimize/",
+            json={
+                "build": _MINIMAL_BUILD,
+                "relics": [_MINIMAL_RELIC],
+                "top_n": 50,
+            },
+        )
+        assert response.status_code == 200
+        data = response.json()
+        characters = {r["vessel_character"] for r in data}
+        assert "Wylder" in characters, (
+            f"Expected Wylder-specific vessels but got: {characters}"
+        )
+
+
 @pytest.mark.usefixtures("override_game_data")
 class TestDbMode:
     def test_db_mode_requires_auth(self, client: TestClient) -> None:

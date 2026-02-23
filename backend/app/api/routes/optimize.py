@@ -15,14 +15,18 @@ from sqlmodel import select
 
 from app.api.deps import GameDataDep, OptionalUser, SessionDep
 from app.models import Build, CharacterSlot, Relic
-from nrplanner.constants import CHARACTER_NAME_ID, CHARACTER_NAMES
+from nrplanner.constants import CHARACTER_NAMES
 from nrplanner.models import BuildDefinition, OwnedRelic, RelicInventory, VesselResult
 from nrplanner.scoring import BuildScorer
 from nrplanner.optimizer import VesselOptimizer
 
 router = APIRouter(prefix="/optimize", tags=["optimize"])
 
-_CHAR_NAME_TO_HERO_TYPE: dict[str, int] = dict(zip(CHARACTER_NAMES, CHARACTER_NAME_ID))
+# Map character name → 1-based hero index matching the CSV heroType column (1-10),
+# NOT the NPC text file IDs from CHARACTER_NAME_ID.
+_CHAR_NAME_TO_HERO_TYPE: dict[str, int] = {
+    name: idx for idx, name in enumerate(CHARACTER_NAMES, start=1)
+}
 
 
 def _resolve_hero_type(character_name: str) -> int:
