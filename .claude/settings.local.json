@@ -32,5 +32,9 @@
       "Bash(bun run tsc:*)",
       "Bash(bun add:*)"
     ]
-  }
+  },
+  "enabledMcpjsonServers": [
+    "shadcn"
+  ],
+  "enableAllProjectMcpServers": true
 }

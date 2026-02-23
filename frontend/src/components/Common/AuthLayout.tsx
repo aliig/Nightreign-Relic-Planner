@@ -1,4 +1,3 @@
-import { Appearance } from "@/components/Common/Appearance"
 import { Logo } from "@/components/Common/Logo"
 import { Footer } from "./Footer"
 
@@ -13,9 +12,6 @@ export function AuthLayout({ children }: AuthLayoutProps) {
         <Logo variant="full" className="h-16" asLink={false} />
       </div>
       <div className="flex flex-col gap-4 p-6 md:p-10">
-        <div className="flex justify-end">
-          <Appearance />
-        </div>
         <div className="flex flex-1 items-center justify-center">
           <div className="w-full max-w-xs">{children}</div>
         </div>
