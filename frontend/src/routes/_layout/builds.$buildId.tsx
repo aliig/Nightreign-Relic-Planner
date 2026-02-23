@@ -564,7 +564,7 @@ function BuildEditorUI({
               <Input
                 id="curse-max"
                 type="number"
-                min={0}
+                min={1}
                 max={3}
                 value={curseMax}
                 onChange={(e) => onCurseMaxChange(Number(e.target.value))}
@@ -995,7 +995,7 @@ function LocalBuildEditorContent({ buildId }: { buildId: string }) {
     () => (build?.family_tiers as Record<string, string[]>) ?? {},
   )
   const [includeDeep, setIncludeDeep] = useState(build?.include_deep ?? false)
-  const [curseMax, setCurseMax] = useState(build?.curse_max ?? 0)
+  const [curseMax, setCurseMax] = useState(build?.curse_max ?? 1)
   const [tierWeights, setTierWeights] = useState<Record<string, number> | null | undefined>(
     build?.tier_weights ?? null,
   )
