@@ -6,7 +6,7 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 
-from nrplanner.constants import EMPTY_EFFECT
+from nrplanner.constants import EMPTY_EFFECT, is_unique_relic
 from nrplanner.data import SourceDataHandler
 from nrplanner.save import RawRelic
 
@@ -102,8 +102,13 @@ class RelicInventory:
 
     def _build(self, ga_relics: list[RawRelic], items_json: dict,
                data_source: SourceDataHandler) -> None:
+        seen_unique_ids: set[int] = set()
         for r in ga_relics:
             real_id = r.item_id - 2147483648
+            if is_unique_relic(real_id):
+                if real_id in seen_unique_ids:
+                    continue
+                seen_unique_ids.add(real_id)
             info = items_json.get(str(real_id), {})
             color = info.get("color", "Red")
             if color is None:

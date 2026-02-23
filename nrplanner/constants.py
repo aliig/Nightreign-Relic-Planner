@@ -68,3 +68,10 @@ RELIC_GROUPS: dict[str, tuple[int, int]] = {
     "deep_102":   (2000000,  2009999),
     "deep_103":   (2010000,  2019999),
 }
+
+
+def is_unique_relic(real_id: int) -> bool:
+    """Return True if real_id belongs to a unique (non-duplicatable) relic category."""
+    lo1, hi1 = RELIC_GROUPS["unique_1"]
+    lo2, hi2 = RELIC_GROUPS["unique_2"]
+    return (lo1 <= real_id <= hi1) or (lo2 <= real_id <= hi2)
