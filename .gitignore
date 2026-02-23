@@ -16,6 +16,13 @@ __pycache__/
 *.pyc
 *.pyo
 *.egg-info/
+.pytest_cache/
+
+# Coverage
+.coverage
+htmlcov/
+coverage/
+.nyc_output/
 
 # Decrypted save files
 src/decrypted_output/
@@ -33,15 +40,40 @@ src/find_presets.py
 
 # Environment
 .env
+.env.local
+.env.*.local
 .venv/
+
+# Local databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Build output
+dist/
+build/
 
 # IDE
 .vscode/*
 !.vscode/extensions.json
+.idea/
+
+# Claude Code local settings
+.claude/
+
+# OS metadata
+.DS_Store
+Thumbs.db
+desktop.ini
+ehthumbs.db
+
+# Logs
+*.log
+logs/
 
 # Node / Frontend
 node_modules/
-/test-results/
-/playwright-report/
-/blob-report/
-/playwright/.cache/
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
