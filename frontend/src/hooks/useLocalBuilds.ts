@@ -44,7 +44,7 @@ export function useLocalBuilds() {
       tiers: {},
       family_tiers: {},
       include_deep: false,
-      curse_max: 0,
+      curse_max: 1,
       created_at: now,
       updated_at: now,
     }
@@ -123,7 +123,7 @@ export async function migrateLocalBuildsToDb(): Promise<number> {
       const hasCustomSettings =
         Object.values(build.tiers).some((ids) => ids.length > 0) ||
         build.include_deep !== false ||
-        build.curse_max !== 0
+        build.curse_max !== 1
       if (hasCustomSettings) {
         await BuildsService.updateBuild({
           buildId: created.id,
