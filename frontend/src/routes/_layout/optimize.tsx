@@ -112,7 +112,11 @@ function SlotCard({ slot, isPinned = false }: { slot: SlotAssignment; isPinned?:
           </span>
         </div>
         <div className="flex items-center gap-1.5">
-          {isPinned && <Pin className="h-3 w-3 text-primary shrink-0" title="Pinned relic" />}
+          {isPinned && (
+            <span title="Pinned relic">
+              <Pin className="h-3 w-3 text-primary shrink-0" />
+            </span>
+          )}
           <span className="text-xs font-mono font-semibold">{slot.score} pts</span>
         </div>
       </div>
