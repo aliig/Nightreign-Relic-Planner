@@ -178,6 +178,24 @@ class VesselOptimizer:
 
         missing: list[int | str] = []
         required_ids = set(build.tiers.get("required", []))
+
+        # Name-based resolution: if a required effect ID wasn't found directly or via
+        # text_id, check if any assigned effect resolves to the same display name.
+        # This mirrors the name-fallback in BuildScorer._resolve_tier_and_weight and
+        # prevents false-positive "missing" warnings when alias effect IDs are used.
+        uncovered = required_ids - assigned_effect_ids
+        if uncovered:
+            required_name_to_id: dict[str, int] = {}
+            for req_id in uncovered:
+                name = self.data_source.get_effect_name(req_id)
+                if name and name not in ("", "Empty"):
+                    required_name_to_id[name] = req_id
+            if required_name_to_id:
+                for eff in list(assigned_effect_ids):
+                    name = self.data_source.get_effect_name(eff)
+                    if name and name in required_name_to_id:
+                        assigned_effect_ids.add(required_name_to_id[name])
+
         missing.extend(required_ids - assigned_effect_ids)
         for family in build.family_tiers.get("required", []):
             family_ids = self.data_source.get_family_effect_ids(family)
