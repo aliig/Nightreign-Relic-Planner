@@ -259,6 +259,7 @@ function AuthOptimizeForm() {
 // --- Anonymous optimizer (inline mode) ---
 
 interface SessionCharacter {
+  slot_index: number
   name: string
   relics: Array<Record<string, unknown>>
 }
@@ -267,8 +268,26 @@ function AnonOptimizeForm() {
   const { showErrorToast } = useCustomToast()
   const { builds } = useLocalBuilds()
 
-  const rawChar = sessionStorage.getItem("selectedCharacter")
-  const char: SessionCharacter | null = rawChar ? JSON.parse(rawChar) : null
+  const allChars: SessionCharacter[] = JSON.parse(
+    sessionStorage.getItem("parsedCharacters") ?? "[]"
+  )
+
+  const defaultSlot = (() => {
+    try {
+      const c = JSON.parse(sessionStorage.getItem("selectedCharacter") ?? "null")
+      return c?.slot_index ?? allChars[0]?.slot_index ?? null
+    } catch { return allChars[0]?.slot_index ?? null }
+  })()
+
+  const [selectedSlot, setSelectedSlot] = useState<number | null>(defaultSlot)
+  const char = allChars.find((c) => c.slot_index === selectedSlot) ?? allChars[0] ?? null
+
+  const handleCharChange = (slotStr: string) => {
+    const slot = Number(slotStr)
+    setSelectedSlot(slot)
+    const picked = allChars.find((c) => c.slot_index === slot)
+    if (picked) sessionStorage.setItem("selectedCharacter", JSON.stringify(picked))
+  }
 
   const [buildId, setBuildId] = useState(builds[0]?.id ?? "")
   const [results, setResults] = useState<VesselResult[]>([])
@@ -315,7 +334,7 @@ function AnonOptimizeForm() {
     onError: handleError.bind(showErrorToast),
   })
 
-  if (!char) {
+  if (allChars.length === 0) {
     return (
       <p className="text-sm text-muted-foreground py-8">
         No inventory loaded.{" "}
@@ -349,6 +368,23 @@ function AnonOptimizeForm() {
             </SelectContent>
           </Select>
         </div>
+        {allChars.length > 1 && (
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium">Character</label>
+            <Select value={String(char?.slot_index ?? "")} onValueChange={handleCharChange}>
+              <SelectTrigger className="w-56">
+                <SelectValue placeholder="Select character" />
+              </SelectTrigger>
+              <SelectContent>
+                {allChars.map((c) => (
+                  <SelectItem key={c.slot_index} value={String(c.slot_index)}>
+                    {c.name} (Slot {c.slot_index})
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
         <Button
           onClick={() => optimizeMutation.mutate()}
           disabled={!buildId || optimizeMutation.isPending}

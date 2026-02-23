@@ -165,6 +165,8 @@ def decrypt_sl2(input_file: str | Path,
         raise ValueError("Not a valid BND4 save file (missing BND4 header).")
 
     num_entries = struct.unpack("<i", raw[12:16])[0]
+    if num_entries < 0 or num_entries > 1000:
+        raise ValueError(f"BND4 num_entries={num_entries} is out of range (expected 0–1000).")
     log(f"BND4 entries: {num_entries}")
 
     BND4_HEADER_LEN      = 64

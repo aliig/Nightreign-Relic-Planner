@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, UploadFile
 from sqlmodel import col, select
 
 from app.api.deps import CurrentUser, GameDataDep, OptionalUser, SessionDep
+from app.core.config import settings
 from app.core.game_data import get_items_json
 from app.models import (
     CharacterPublic,
@@ -150,6 +151,12 @@ async def upload_save(
         )
 
     file_bytes = await file.read()
+    max_bytes = settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024
+    if len(file_bytes) > max_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large (max {settings.MAX_UPLOAD_SIZE_MB} MB).",
+        )
     items_json = get_items_json()
     platform, characters = _parse_save_to_characters(
         file_bytes, file.filename, ds, items_json

@@ -102,6 +102,10 @@ class Settings(BaseSettings):
     GOOGLE_TOKEN_URI: str = "https://oauth2.googleapis.com/token"
     GOOGLE_REDIRECT_URI: str = ""
 
+    # Upload / optimize limits
+    MAX_UPLOAD_SIZE_MB: int = 200
+    MAX_RELICS_PER_OPTIMIZE: int = 2000
+
     def _check_default_secret(self, var_name: str, value: str | None) -> None:
         if value == "changethis":
             message = (

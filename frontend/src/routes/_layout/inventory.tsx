@@ -285,10 +285,18 @@ function AnonInventory() {
     return m
   }, [effectsData])
 
-  const raw = sessionStorage.getItem("selectedCharacter")
-  const char = raw ? JSON.parse(raw) : null
+  const allChars: Array<Record<string, unknown>> = JSON.parse(
+    sessionStorage.getItem("parsedCharacters") ?? "[]"
+  )
 
-  if (!char) {
+  const defaultChar = (() => {
+    try { return JSON.parse(sessionStorage.getItem("selectedCharacter") ?? "null") } catch { return null }
+  })()
+
+  const defaultSlot = defaultChar?.slot_index ?? allChars[0]?.slot_index ?? null
+  const [selectedSlot, setSelectedSlot] = useState<number | null>(defaultSlot)
+
+  if (allChars.length === 0) {
     return (
       <p className="text-muted-foreground py-8 text-center">
         No inventory loaded. <a href="/upload" className="underline">Upload a save file</a> first.
@@ -296,14 +304,39 @@ function AnonInventory() {
     )
   }
 
-  const relics: Array<Record<string, unknown>> = char.relics ?? []
+  const char = allChars.find((c) => c.slot_index === selectedSlot) ?? allChars[0]
+  const relics: Array<Record<string, unknown>> = (char?.relics as Array<Record<string, unknown>>) ?? []
+
+  const handleCharChange = (slotStr: string) => {
+    const slot = Number(slotStr)
+    setSelectedSlot(slot)
+    const picked = allChars.find((c) => c.slot_index === slot)
+    if (picked) sessionStorage.setItem("selectedCharacter", JSON.stringify(picked))
+  }
 
   return (
     <div>
-      <p className="text-sm text-muted-foreground mb-4">
-        Showing inventory for <strong>{char.name}</strong> (session only —{" "}
-        <a href="/login" className="underline">sign in</a> to save).
-      </p>
+      <div className="flex flex-wrap gap-3 items-center mb-4">
+        {allChars.length > 1 && (
+          <Select value={String(char?.slot_index ?? "")} onValueChange={handleCharChange}>
+            <SelectTrigger className="w-48">
+              <SelectValue placeholder="Select character" />
+            </SelectTrigger>
+            <SelectContent>
+              {allChars.map((c) => (
+                <SelectItem key={c.slot_index as number} value={String(c.slot_index)}>
+                  {c.name as string} (Slot {c.slot_index as number})
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
+        <p className="text-sm text-muted-foreground">
+          {allChars.length === 1 && <><strong>{char?.name as string}</strong> · </>}
+          Session only —{" "}
+          <a href="/login" className="underline">sign in</a> to save.
+        </p>
+      </div>
       <Table>
         <TableHeader>
           <TableRow>

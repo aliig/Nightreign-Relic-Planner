@@ -73,6 +73,11 @@ function UploadPage() {
           platform: data.platform,
           uploaded_at: new Date().toISOString(),
         })
+        sessionStorage.setItem("parsedCharacters", JSON.stringify(data.characters))
+        // Default to first character so inventory/optimize have a selection immediately
+        if (data.characters.length > 0) {
+          sessionStorage.setItem("selectedCharacter", JSON.stringify(data.characters[0]))
+        }
       }
       if (data.persisted) {
         showSuccessToast(
@@ -167,7 +172,6 @@ function UploadPage() {
                 key={char.slot_index}
                 className="cursor-pointer hover:border-primary/50 transition-colors"
                 onClick={() => {
-                  // Store selected character in sessionStorage for the inventory page
                   sessionStorage.setItem("selectedCharacter", JSON.stringify(char))
                   navigate({ to: "/inventory" })
                 }}

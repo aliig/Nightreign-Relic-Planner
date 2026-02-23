@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from sqlmodel import select
 
 from app.api.deps import GameDataDep, OptionalUser, SessionDep
+from app.core.config import settings
 from app.models import Build, CharacterSlot, Relic
 from nrplanner.constants import CHARACTER_NAMES
 from nrplanner.models import BuildDefinition, OwnedRelic, RelicInventory, VesselResult
@@ -156,6 +157,11 @@ def run_optimize(
             raise HTTPException(
                 status_code=422,
                 detail="Inline mode requires build and relics.",
+            )
+        if len(req.relics) > settings.MAX_RELICS_PER_OPTIMIZE:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Too many relics (max {settings.MAX_RELICS_PER_OPTIMIZE}).",
             )
         build_def = req.build
         owned_relics = req.relics
