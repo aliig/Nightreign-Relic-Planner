@@ -151,7 +151,7 @@ function DeleteBuildButton({ buildId, buildName, onDelete, isPending }: DeleteDi
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:text-destructive">
+        <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:text-destructive" aria-label={`Delete "${buildName}"`}>
           <Trash2 className="h-4 w-4" />
         </Button>
       </DialogTrigger>

@@ -2,7 +2,9 @@
 // for local environments
 import { OpenAPI, PrivateService } from "../../src/client"
 
-OpenAPI.BASE = `${process.env.VITE_API_URL}`
+// VITE_API_URL is empty in frontend/.env because the browser uses Vite's
+// dev-server proxy. In Node.js (Playwright), we need the real backend URL.
+OpenAPI.BASE = process.env.VITE_API_URL || "http://localhost:8000"
 
 export const createUser = async ({
   email,
