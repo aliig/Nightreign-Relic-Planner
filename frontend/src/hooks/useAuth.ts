@@ -71,6 +71,7 @@ const useAuth = () => {
 
   const logout = () => {
     localStorage.removeItem("access_token")
+    queryClient.removeQueries({ queryKey: ["currentUser"] })
     navigate({ to: "/" })
   }
 
