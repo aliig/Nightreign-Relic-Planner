@@ -1,6 +1,6 @@
 import { createFileRoute, Link } from "@tanstack/react-router"
 import { useSuspenseQuery } from "@tanstack/react-query"
-import { Suspense, useMemo, useState } from "react"
+import { Suspense, useEffect, useMemo, useState } from "react"
 import { ChevronDown, ChevronUp, CheckCircle2, XCircle, Trophy, Pin } from "lucide-react"
 
 import { BuildsService, GameService, SavesService } from "@/client"
@@ -22,6 +22,7 @@ import { Separator } from "@/components/ui/separator"
 import { isLoggedIn } from "@/hooks/useAuth"
 import { useLocalBuilds } from "@/hooks/useLocalBuilds"
 import useCustomToast from "@/hooks/useCustomToast"
+import { useSaveStatus, getAnonUploadMeta } from "@/hooks/useSaveStatus"
 
 export const Route = createFileRoute("/_layout/optimize")({
   component: OptimizePage,
@@ -33,6 +34,13 @@ export const Route = createFileRoute("/_layout/optimize")({
 const TIER_COLORS: Record<string, string> = {
   required: "#FF4444", preferred: "#4488FF", nice_to_have: "#44BB88",
   bonus: "#9966CC", avoid: "#888888", blacklist: "#FF8C00",
+}
+
+// --- Optimization result cache (persists across route navigations, clears on page reload) ---
+const resultCache = new Map<string, VesselResult[]>()
+
+function cacheKey(...parts: (string | number | null | undefined)[]): string {
+  return parts.map((p) => String(p ?? "")).join(":")
 }
 
 type SlotAssignment = VesselResult["assignments"][number]
@@ -265,6 +273,7 @@ function AuthOptimizeForm() {
     queryFn: () => GameService.getEffects(),
     staleTime: Infinity,
   })
+  const { status: saveStatus } = useSaveStatus()
   const effectMap = useMemo(() => buildEffectMap((effectsData ?? []) as unknown[]), [effectsData])
 
   const builds = buildsData?.data ?? []
@@ -272,12 +281,18 @@ function AuthOptimizeForm() {
 
   const [buildId, setBuildId] = useState(builds[0]?.id ?? "")
   const [characterId, setCharacterId] = useState(chars[0]?.id ?? "")
-  const [results, setResults] = useState<VesselResult[]>([])
-  const [isPending, setIsPending] = useState(false)
-  const [progress, setProgress] = useState<OptimizeProgress | null>(null)
 
   const selectedBuild = builds.find((b) => b.id === buildId)
   const pinnedHandles = new Set<number>(selectedBuild?.pinned_relics ?? [])
+  const key = cacheKey("auth", buildId, selectedBuild?.updated_at, characterId, saveStatus?.uploaded_at)
+
+  const [results, setResults] = useState<VesselResult[]>(() => resultCache.get(key) ?? [])
+  const [isPending, setIsPending] = useState(false)
+  const [progress, setProgress] = useState<OptimizeProgress | null>(null)
+
+  useEffect(() => {
+    setResults(resultCache.get(key) ?? [])
+  }, [key])
 
   const handleOptimize = async () => {
     setIsPending(true)
@@ -289,6 +304,7 @@ function AuthOptimizeForm() {
         setProgress,
       )
       setResults(data)
+      resultCache.set(key, data)
     } catch (err) {
       showErrorToast(err instanceof Error ? err.message : "Optimization failed")
     } finally {
@@ -394,6 +410,7 @@ function AnonOptimizeForm() {
     staleTime: Infinity,
   })
   const effectMap = useMemo(() => buildEffectMap((effectsData ?? []) as unknown[]), [effectsData])
+  const anonMeta = getAnonUploadMeta()
 
   const allChars: SessionCharacter[] = JSON.parse(
     sessionStorage.getItem("parsedCharacters") ?? "[]"
@@ -417,12 +434,18 @@ function AnonOptimizeForm() {
   }
 
   const [buildId, setBuildId] = useState(builds[0]?.id ?? "")
-  const [results, setResults] = useState<VesselResult[]>([])
-  const [isPending, setIsPending] = useState(false)
-  const [progress, setProgress] = useState<OptimizeProgress | null>(null)
 
   const selectedBuild = builds.find((b) => b.id === buildId)
   const pinnedHandles = new Set<number>(selectedBuild?.pinned_relics ?? [])
+  const key = cacheKey("anon", buildId, selectedBuild?.updated_at, selectedSlot, anonMeta?.uploaded_at)
+
+  const [results, setResults] = useState<VesselResult[]>(() => resultCache.get(key) ?? [])
+  const [isPending, setIsPending] = useState(false)
+  const [progress, setProgress] = useState<OptimizeProgress | null>(null)
+
+  useEffect(() => {
+    setResults(resultCache.get(key) ?? [])
+  }, [key])
 
   const handleOptimize = async () => {
     const build = builds.find((b) => b.id === buildId)
@@ -463,6 +486,7 @@ function AnonOptimizeForm() {
         setProgress,
       )
       setResults(data)
+      resultCache.set(key, data)
     } catch (err) {
       showErrorToast(err instanceof Error ? err.message : "Optimization failed")
     } finally {
