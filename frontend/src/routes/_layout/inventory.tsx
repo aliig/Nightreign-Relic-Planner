@@ -42,7 +42,7 @@ function effectPills(effectIds: number[], isDebuff: boolean, effectMap: Map<numb
   }
   if (pills.length === 0) return null
   return (
-    <div className="flex flex-wrap gap-1">
+    <div className="flex flex-col gap-1">
       {pills.map((name) => (
         <span
           key={name}
@@ -62,14 +62,14 @@ function effectPills(effectIds: number[], isDebuff: boolean, effectMap: Map<numb
 function RelicNameCell({ name, color, tier, isDeep }: {
   name: string; color: string; tier: string; isDeep: boolean
 }) {
-  const hex = isDeep ? "#8B6FC0" : (COLOR_HEX[color] ?? "#AAAAAA")
+  const hex = COLOR_HEX[color] ?? "#AAAAAA"
   return (
     <div>
       <span className="font-medium" style={{ color: hex }}>
         {name}
       </span>
       <div className="text-xs text-muted-foreground mt-0.5">
-        {tier} · {color} · {isDeep ? "Deep" : "Standard"}
+        {tier} · {color} · {isDeep ? <span style={{ color: "#8B6FC0" }}>Deep</span> : "Standard"}
       </div>
     </div>
   )
@@ -227,7 +227,7 @@ function AuthInventory() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All Colors</SelectItem>
-                {["Red", "Blue", "Yellow", "Green", "White"].map((c) => (
+                {["Red", "Blue", "Yellow", "Green"].map((c) => (
                   <SelectItem key={c} value={c}>{c}</SelectItem>
                 ))}
               </SelectContent>
