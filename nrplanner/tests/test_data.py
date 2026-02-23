@@ -71,9 +71,41 @@ def test_get_all_effects_list_structure(
     ds: SourceDataHandler, all_effects: list[dict]
 ) -> None:
     assert len(all_effects) > 0
-    required_keys = {"id", "name"}
+    required_keys = {"id", "name", "alias_ids"}
     for effect in all_effects:
         assert required_keys.issubset(effect.keys()), f"Missing keys in: {effect}"
+        assert isinstance(effect["alias_ids"], list), "alias_ids must be a list"
+
+
+def test_get_all_effects_list_covers_all_valid_ids(
+    ds: SourceDataHandler, all_effects: list[dict]
+) -> None:
+    """Every valid effect ID in AttachEffectParam must be reachable via id or alias_ids.
+
+    Regression guard for the deduplication bug where get_all_effects_list() dropped
+    alias IDs, causing relics whose effects used those IDs to show blank properties.
+    """
+    # Build the set of all IDs reachable from the exported effects list
+    reachable: set[int] = set()
+    for e in all_effects:
+        reachable.add(e["id"])
+        reachable.update(e["alias_ids"])
+
+    # Compute all valid IDs from the raw param table (same filter as get_all_effects_list)
+    expected: set[int] = set()
+    for eff_id in ds.effect_params.index:
+        if eff_id == 0:
+            continue
+        name = ds.get_effect_name(eff_id).strip()
+        if name == "Empty" or name.startswith("Effect "):
+            continue
+        expected.add(eff_id)
+
+    missing = expected - reachable
+    assert not missing, (
+        f"{len(missing)} valid effect IDs are not reachable via id or alias_ids: "
+        f"{sorted(missing)[:20]}{'...' if len(missing) > 20 else ''}"
+    )
 
 
 def test_get_all_vessels_for_hero(ds: SourceDataHandler) -> None:

@@ -167,6 +167,11 @@ function AuthInventory() {
     for (const e of effectsData ?? []) {
       if (typeof e.id === "number" && typeof e.name === "string") {
         m.set(e.id, e.name)
+        if (Array.isArray(e.alias_ids)) {
+          for (const aliasId of e.alias_ids) {
+            if (typeof aliasId === "number") m.set(aliasId, e.name)
+          }
+        }
       }
     }
     return m
@@ -280,6 +285,11 @@ function AnonInventory() {
     for (const e of effectsData ?? []) {
       if (typeof e.id === "number" && typeof e.name === "string") {
         m.set(e.id, e.name)
+        if (Array.isArray(e.alias_ids)) {
+          for (const aliasId of e.alias_ids) {
+            if (typeof aliasId === "number") m.set(aliasId, e.name)
+          }
+        }
       }
     }
     return m

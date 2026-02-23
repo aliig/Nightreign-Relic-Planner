@@ -335,14 +335,20 @@ class SourceDataHandler:
             if name == "Empty" or name.startswith("Effect "):
                 continue
             if name in seen:
+                idx = seen[name]
                 if eff_id == int(row["attachTextId"]):
-                    results[seen[name]]["id"] = eff_id
+                    # New canonical: demote old canonical ID to alias list
+                    results[idx]["alias_ids"].append(results[idx]["id"])
+                    results[idx]["id"] = eff_id
+                else:
+                    results[idx]["alias_ids"].append(eff_id)
                 continue
             seen[name] = len(results)
             allow = {k: bool(row.get(c, 1)) for c, k in zip(char_cols, char_keys)}
             results.append({
                 "id": eff_id,
                 "name": name,
+                "alias_ids": [],
                 "compatibility_id": int(row["compatibilityId"]),
                 "is_debuff": bool(row.get("isDebuff", 0)),
                 "allow_per_character": allow,
