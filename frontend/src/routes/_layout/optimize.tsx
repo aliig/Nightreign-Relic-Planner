@@ -1,7 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router"
 import { useMutation, useSuspenseQuery } from "@tanstack/react-query"
 import { Suspense, useState } from "react"
-import { ChevronDown, ChevronUp, CheckCircle2, XCircle, Trophy } from "lucide-react"
+import { ChevronDown, ChevronUp, CheckCircle2, XCircle, Trophy, Pin } from "lucide-react"
 
 import { BuildsService, OptimizeService, SavesService } from "@/client"
 import { Badge } from "@/components/ui/badge"
@@ -40,11 +40,11 @@ const TIER_COLORS: Record<string, string> = {
 type VesselResult = Awaited<ReturnType<typeof OptimizeService.runOptimize>>[number]
 type SlotAssignment = VesselResult["assignments"][number]
 
-function SlotCard({ slot }: { slot: SlotAssignment }) {
+function SlotCard({ slot, isPinned = false }: { slot: SlotAssignment; isPinned?: boolean }) {
   const relic = slot.relic
 
   return (
-    <div className="rounded-md border p-3 space-y-1.5">
+    <div className={`rounded-md border p-3 space-y-1.5${isPinned ? " border-primary/40 bg-primary/5" : ""}`}>
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <span
@@ -56,7 +56,10 @@ function SlotCard({ slot }: { slot: SlotAssignment }) {
             Slot {slot.slot_index + 1} {slot.is_deep ? "(Deep)" : ""}
           </span>
         </div>
-        <span className="text-xs font-mono font-semibold">{slot.score} pts</span>
+        <div className="flex items-center gap-1.5">
+          {isPinned && <Pin className="h-3 w-3 text-primary shrink-0" title="Pinned relic" />}
+          <span className="text-xs font-mono font-semibold">{slot.score} pts</span>
+        </div>
       </div>
       {relic ? (
         <>
@@ -92,10 +95,12 @@ function VesselCard({
   vessel,
   defaultExpanded = false,
   highlighted = false,
+  pinnedHandles = new Set(),
 }: {
   vessel: VesselResult
   defaultExpanded?: boolean
   highlighted?: boolean
+  pinnedHandles?: Set<number>
 }) {
   const [expanded, setExpanded] = useState(defaultExpanded)
 
@@ -133,7 +138,11 @@ function VesselCard({
           <Separator className="mb-3" />
           <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
             {vessel.assignments.map((slot) => (
-              <SlotCard key={slot.slot_index} slot={slot} />
+              <SlotCard
+                key={slot.slot_index}
+                slot={slot}
+                isPinned={slot.relic != null && pinnedHandles.has((slot.relic as any).ga_handle)}
+              />
             ))}
           </div>
           {!vessel.meets_requirements && vessel.missing_requirements?.length > 0 && (
@@ -166,6 +175,9 @@ function AuthOptimizeForm() {
   const [buildId, setBuildId] = useState(builds[0]?.id ?? "")
   const [characterId, setCharacterId] = useState(chars[0]?.id ?? "")
   const [results, setResults] = useState<VesselResult[]>([])
+
+  const selectedBuild = builds.find((b) => b.id === buildId)
+  const pinnedHandles = new Set<number>(selectedBuild?.pinned_relics ?? [])
 
   const optimizeMutation = useMutation({
     mutationFn: () =>
@@ -235,6 +247,7 @@ function AuthOptimizeForm() {
               vessel={vessel}
               defaultExpanded={index === 0}
               highlighted={index === 0}
+              pinnedHandles={pinnedHandles}
             />
           ))}
         </div>
@@ -259,6 +272,9 @@ function AnonOptimizeForm() {
 
   const [buildId, setBuildId] = useState(builds[0]?.id ?? "")
   const [results, setResults] = useState<VesselResult[]>([])
+
+  const selectedBuild = builds.find((b) => b.id === buildId)
+  const pinnedHandles = new Set<number>(selectedBuild?.pinned_relics ?? [])
 
   const optimizeMutation = useMutation({
     mutationFn: () => {
@@ -366,6 +382,7 @@ function AnonOptimizeForm() {
               vessel={vessel}
               defaultExpanded={index === 0}
               highlighted={index === 0}
+              pinnedHandles={pinnedHandles}
             />
           ))}
         </div>
