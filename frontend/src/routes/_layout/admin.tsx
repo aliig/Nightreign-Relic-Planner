@@ -40,7 +40,7 @@ export const Route = createFileRoute("/_layout/admin")({
   head: () => ({
     meta: [
       {
-        title: "Admin - FastAPI Template",
+        title: "Admin - Nightreign Relic Planner",
       },
     ],
   }),
@@ -103,7 +103,7 @@ function FeaturedBuildsContent() {
               <Button
                 variant="ghost"
                 size="icon"
-                className="h-8 w-8 text-yellow-500 shrink-0"
+                className="h-8 w-8 text-gold shrink-0"
                 onClick={() => toggleMutation.mutate(build.id)}
                 disabled={toggleMutation.isPending}
                 title="Unfeature build"

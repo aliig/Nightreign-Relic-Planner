@@ -1,8 +1,6 @@
 import { Link } from "@tanstack/react-router"
 
 import { cn } from "@/lib/utils"
-import iconLogo from "/assets/images/fastapi-icon-light.svg"
-import fullLogo from "/assets/images/fastapi-logo-light.svg"
 
 interface LogoProps {
   variant?: "full" | "icon" | "responsive"
@@ -15,33 +13,37 @@ export function Logo({
   className,
   asLink = true,
 }: LogoProps) {
-
   const content =
     variant === "responsive" ? (
       <>
-        <img
-          src={fullLogo}
-          alt="FastAPI"
+        <span
           className={cn(
-            "h-6 w-auto group-data-[collapsible=icon]:hidden",
+            "font-heading text-base font-semibold tracking-[0.18em] text-gold group-data-[collapsible=icon]:hidden",
             className,
           )}
-        />
-        <img
-          src={iconLogo}
-          alt="FastAPI"
+        >
+          NIGHTREIGN
+        </span>
+        <span
           className={cn(
-            "size-5 hidden group-data-[collapsible=icon]:block",
+            "font-heading text-sm font-semibold tracking-widest text-gold hidden group-data-[collapsible=icon]:block",
             className,
           )}
-        />
+        >
+          NR
+        </span>
       </>
     ) : (
-      <img
-        src={variant === "full" ? fullLogo : iconLogo}
-        alt="FastAPI"
-        className={cn(variant === "full" ? "h-6 w-auto" : "size-5", className)}
-      />
+      <span
+        className={cn(
+          variant === "full"
+            ? "font-heading text-base font-semibold tracking-[0.18em] text-gold"
+            : "font-heading text-sm font-semibold tracking-widest text-gold",
+          className,
+        )}
+      >
+        {variant === "full" ? "NIGHTREIGN" : "NR"}
+      </span>
     )
 
   if (!asLink) {

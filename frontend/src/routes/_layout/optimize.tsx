@@ -207,7 +207,7 @@ function VesselCard({
       >
         <div className="flex items-center justify-between flex-wrap gap-2">
           <div className="flex items-center gap-2">
-            {highlighted && <Trophy className="h-4 w-4 text-yellow-500 shrink-0" />}
+            {highlighted && <Trophy className="h-4 w-4 text-gold shrink-0" />}
             <CardTitle className="text-base">{vessel.vessel_name}</CardTitle>
           </div>
           <div className="flex items-center gap-2">

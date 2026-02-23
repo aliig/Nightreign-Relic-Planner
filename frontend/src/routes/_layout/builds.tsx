@@ -232,7 +232,7 @@ function BuildCard({
               <Button
                 variant="ghost"
                 size="icon"
-                className={`h-8 w-8 ${build.is_featured ? "text-yellow-500" : "text-muted-foreground"}`}
+                className={`h-8 w-8 ${build.is_featured ? "text-gold" : "text-muted-foreground"}`}
                 onClick={() => onToggleFeatured(build.id)}
                 title={build.is_featured ? "Unfeature build" : "Feature build"}
               >
@@ -305,7 +305,7 @@ function FeaturedBuildCard({
               <Button
                 variant="ghost"
                 size="icon"
-                className="h-8 w-8 text-yellow-500"
+                className="h-8 w-8 text-gold"
                 onClick={() => onToggleFeatured(build.id)}
                 title="Unfeature build"
               >
@@ -389,8 +389,8 @@ function SuggestedBuildsContent() {
   return (
     <div className="space-y-3">
       <div>
-        <h2 className="text-lg font-semibold">Suggested Builds</h2>
-        <p className="text-sm text-muted-foreground">
+        <h2 className="text-2xl font-semibold">Suggested Builds</h2>
+        <p className="text-muted-foreground mt-1">
           Community-curated builds to get you started.
         </p>
       </div>
@@ -516,7 +516,7 @@ function AuthBuildsSection() {
     <>
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold">Builds</h1>
+          <h2 className="text-2xl font-semibold">Builds</h2>
           <p className="text-muted-foreground mt-1">
             Create build definitions to drive the optimizer.
           </p>
@@ -548,7 +548,7 @@ function AnonBuildsSection() {
     <>
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold">Builds</h1>
+          <h2 className="text-2xl font-semibold">Builds</h2>
           <p className="text-muted-foreground mt-1">
             Create build definitions to drive the optimizer.
           </p>

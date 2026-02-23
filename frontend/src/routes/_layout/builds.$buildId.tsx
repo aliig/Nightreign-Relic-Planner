@@ -114,7 +114,7 @@ function DroppableTierZone({
   return (
     <div
       ref={setNodeRef}
-      className={cn("rounded-lg border p-4 space-y-3 transition-colors", isOver && "bg-muted/20")}
+      className={cn("rounded-md border border-border/60 p-4 space-y-3 transition-colors", isOver && "bg-muted/20")}
       style={isOver ? { borderColor: color } : undefined}
     >
       {children}
@@ -137,7 +137,7 @@ function DraggableBrowserRow({
       {...attributes}
       onClick={onClick}
       className={cn(
-        "flex items-center rounded px-2 py-1.5 hover:bg-muted/50 gap-2 cursor-grab active:cursor-grabbing select-none",
+        "flex items-center rounded px-2 py-1.5 hover:bg-gradient-to-r hover:from-accent/40 hover:to-transparent transition-colors gap-2 cursor-grab active:cursor-grabbing select-none",
         isDragging && "opacity-40",
       )}
     >
@@ -191,7 +191,7 @@ function PinnedRelicPickerContent({
                   onClick={() =>
                     onSelect({ ga_handle: r.ga_handle, name: r.name, color: r.color, is_deep: r.is_deep })
                   }
-                  className="w-full text-left rounded px-2 py-1.5 hover:bg-muted/50 flex items-center gap-2 text-sm"
+                  className="w-full text-left rounded px-2 py-1.5 hover:bg-gradient-to-r hover:from-accent/40 hover:to-transparent transition-colors flex items-center gap-2 text-sm"
                 >
                   <span
                     className="w-2 h-2 rounded-full shrink-0"
@@ -343,7 +343,7 @@ function AnonPinnedRelicDialog({
                       if (!pinnedHandles.includes(r.ga_handle)) onAdd(r)
                       setOpen(false)
                     }}
-                    className="w-full text-left rounded px-2 py-1.5 hover:bg-muted/50 flex items-center gap-2 text-sm"
+                    className="w-full text-left rounded px-2 py-1.5 hover:bg-gradient-to-r hover:from-accent/40 hover:to-transparent transition-colors flex items-center gap-2 text-sm"
                   >
                     <span
                       className="w-2 h-2 rounded-full shrink-0"
@@ -584,7 +584,7 @@ function BuildEditorUI({
         </div>
 
         {/* Settings */}
-        <div className="p-4 rounded-lg border bg-muted/30 space-y-4">
+        <div className="p-4 rounded-md border border-border/60 bg-card/60 backdrop-blur-md space-y-4">
           <div className="flex flex-wrap items-center gap-6">
             <div className="flex items-center gap-2">
               <Checkbox
@@ -747,7 +747,7 @@ function BuildEditorUI({
           </div>
 
           {/* Effect browser */}
-          <div className="rounded-lg border p-4 space-y-3 self-start sticky top-20">
+          <div className="rounded-md border border-border/60 bg-card/60 backdrop-blur-md p-4 space-y-3 self-start sticky top-20">
             <h3 className="text-sm font-semibold">Effect Browser</h3>
             <div className="relative">
               <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
