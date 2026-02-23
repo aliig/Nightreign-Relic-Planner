@@ -214,4 +214,15 @@ class BuildScorer:
                     "redundant": override_status is not None,
                     "override_status": override_status,
                 })
+        tier_bonus = TIER_BONUS.get(relic.effect_count, 0)
+        if tier_bonus:
+            breakdown.append({
+                "effect_id": -1,
+                "name": f"{relic.tier} relic bonus",
+                "tier": None,
+                "score": tier_bonus,
+                "is_curse": False,
+                "redundant": False,
+                "override_status": None,
+            })
         return breakdown
