@@ -72,28 +72,39 @@ class TestInlineMode:
             assert "total_score" in result
             assert "assignments" in result
 
-    def test_missing_character_name_returns_422(self, client: TestClient) -> None:
+    def test_missing_build_returns_422(self, client: TestClient) -> None:
+        """Inline mode requires both build and relics."""
         response = client.post(
             "/api/v1/optimize/",
             json={
-                "build": _MINIMAL_BUILD,
+                # build omitted — only relics provided
                 "relics": [],
-                # character_name omitted
             },
         )
         assert response.status_code == 422
 
     def test_unknown_character_returns_422(self, client: TestClient) -> None:
+        """An unknown character name in build.character should return 422."""
+        bad_build = {**_MINIMAL_BUILD, "character": "NotARealCharacter"}
         response = client.post(
             "/api/v1/optimize/",
             json={
-                "build": _MINIMAL_BUILD,
+                "build": bad_build,
                 "relics": [],
-                "character_name": "NotARealCharacter",
             },
         )
         assert response.status_code == 422
         assert "Unknown character" in response.json()["detail"]
+
+    def test_inline_with_pinned_relics_ok(self, client: TestClient) -> None:
+        """Inline mode accepts pinned_relics without error."""
+        build_with_pins = {**_MINIMAL_BUILD, "pinned_relics": [_MINIMAL_RELIC["ga_handle"]]}
+        response = client.post(
+            "/api/v1/optimize/",
+            json={"build": build_with_pins, "relics": [_MINIMAL_RELIC], "top_n": 3},
+        )
+        assert response.status_code == 200
+        assert isinstance(response.json(), list)
 
     def test_both_db_and_inline_mode_returns_422(self, client: TestClient) -> None:
         import uuid

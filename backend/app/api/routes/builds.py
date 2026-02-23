@@ -95,6 +95,8 @@ def list_featured_builds(
             family_tiers=build.family_tiers,
             include_deep=build.include_deep,
             curse_max=build.curse_max,
+            tier_weights=build.tier_weights,
+            pinned_relics=build.pinned_relics or [],
             owner_name=full_name,
             created_at=build.created_at,
         )
@@ -185,6 +187,8 @@ def clone_build(
         family_tiers=dict(source.family_tiers),
         include_deep=source.include_deep,
         curse_max=source.curse_max,
+        tier_weights=dict(source.tier_weights) if source.tier_weights else None,
+        pinned_relics=list(source.pinned_relics or []),
         is_featured=False,
     )
     session.add(clone)

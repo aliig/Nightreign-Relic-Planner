@@ -63,6 +63,12 @@ vi.mock("@/hooks/useCustomToast", () => ({
 
 vi.mock("@/utils", () => ({
   handleError: vi.fn(),
+  formatRelativeTime: vi.fn(() => "just now"),
+}))
+
+vi.mock("@/hooks/useSaveStatus", () => ({
+  useSaveStatus: () => ({ status: null, isLoading: false, isAnon: false }),
+  storeAnonUploadMeta: vi.fn(),
 }))
 
 // ── import after mocks ─────────────────────────────────────────────────────

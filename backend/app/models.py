@@ -195,7 +195,7 @@ class RelicsPublic(SQLModel):
 # Build models
 # ---------------------------------------------------------------------------
 
-_DEFAULT_TIER_KEYS = ["required", "preferred", "nice_to_have", "avoid", "blacklist"]
+_DEFAULT_TIER_KEYS = ["required", "preferred", "nice_to_have", "bonus", "avoid", "blacklist"]
 
 
 def _default_tiers() -> dict:
@@ -219,6 +219,14 @@ class Build(SQLModel, table=True):
     )
     include_deep: bool = True
     curse_max: int = 1
+    tier_weights: dict | None = Field(
+        default=None,
+        sa_column=Column(JSON, nullable=True),
+    )
+    pinned_relics: list = Field(
+        default_factory=list,
+        sa_column=Column(JSON, nullable=False, server_default="[]"),
+    )
     is_featured: bool = Field(default=False, index=True)
     created_at: datetime | None = Field(
         default_factory=get_datetime_utc,
@@ -244,6 +252,8 @@ class BuildUpdate(SQLModel):
     family_tiers: dict[str, list[str]] | None = None
     include_deep: bool | None = None
     curse_max: int | None = Field(default=None, ge=0)
+    tier_weights: dict[str, int] | None = None
+    pinned_relics: list[int] | None = None
 
 
 class BuildPublic(SQLModel):
@@ -255,6 +265,8 @@ class BuildPublic(SQLModel):
     family_tiers: dict[str, list[str]]
     include_deep: bool
     curse_max: int
+    tier_weights: dict[str, int] | None = None
+    pinned_relics: list[int] = Field(default_factory=list)
     is_featured: bool
     created_at: datetime | None = None
     updated_at: datetime | None = None
@@ -273,6 +285,8 @@ class FeaturedBuildPublic(SQLModel):
     family_tiers: dict[str, list[str]]
     include_deep: bool
     curse_max: int
+    tier_weights: dict[str, int] | None = None
+    pinned_relics: list[int] = Field(default_factory=list)
     owner_name: str | None = None
     created_at: datetime | None = None
 

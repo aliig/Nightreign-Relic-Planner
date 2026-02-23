@@ -13,6 +13,8 @@ export interface LocalBuild {
   family_tiers: Record<string, unknown>
   include_deep: boolean
   curse_max: number
+  tier_weights?: Record<string, number> | null
+  pinned_relics?: number[]
   created_at: string
   updated_at: string
 }

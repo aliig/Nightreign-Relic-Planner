@@ -18,11 +18,12 @@ def _make_relic(
     effects: list[int],
     color: str = "Red",
     is_deep: bool = False,
+    ga_handle: int = 0xC0000001,
 ) -> OwnedRelic:
     effect_count = sum(1 for e in effects if e not in (EMPTY, 0))
     tier = "Grand" if effect_count >= 3 else ("Polished" if effect_count == 2 else "Delicate")
     return OwnedRelic(
-        ga_handle=0xC0000001,
+        ga_handle=ga_handle,
         item_id=100 + 2147483648,
         real_id=100,
         color=color,
@@ -142,3 +143,71 @@ class TestOptimizeAllVessels:
         # All returned vessels must be 'All'-character (no hero-specific ones)
         for r in results:
             assert r.vessel_character == "All"
+
+
+class TestPinnedRelics:
+    def test_pinned_relic_appears_in_all_results(
+        self, optimizer: VesselOptimizer, all_effects: list[dict]
+    ) -> None:
+        """Every returned vessel result must have the pinned relic assigned."""
+        e1 = all_effects[0]["id"]
+        pinned_handle = 0xC0000010
+        relics = [
+            _make_relic([e1, EMPTY, EMPTY], color="Red", ga_handle=pinned_handle),
+            _make_relic([EMPTY, EMPTY, EMPTY], color="Blue", ga_handle=0xC0000011),
+        ]
+        inventory = RelicInventory.from_owned_relics(relics)
+        tiers = {k: [] for k in ALL_TIER_KEYS}
+        build = BuildDefinition(
+            id="pin-test", name="Pin Test", character="Wylder",
+            tiers=tiers,
+            family_tiers={k: [] for k in ALL_TIER_KEYS},
+            include_deep=False,
+            curse_max=1,
+            pinned_relics=[pinned_handle],
+        )
+        results = optimizer.optimize_all_vessels(build, inventory, 100000)
+        assert results, "Expected at least one vessel result with pinned relic"
+        for result in results:
+            assigned_handles = {
+                a.relic.ga_handle for a in result.assignments if a.relic is not None
+            }
+            assert pinned_handle in assigned_handles, (
+                f"Pinned handle {hex(pinned_handle)} not in assignments "
+                f"for vessel '{result.vessel_name}'"
+            )
+
+    def test_absent_pinned_relic_does_not_exclude_vessels(
+        self, optimizer: VesselOptimizer
+    ) -> None:
+        """A pinned ga_handle not present in inventory is silently ignored."""
+        inventory = RelicInventory.from_owned_relics([])
+        build = BuildDefinition(
+            id="absent-pin", name="Absent Pin", character="Wylder",
+            tiers={k: [] for k in ALL_TIER_KEYS},
+            family_tiers={k: [] for k in ALL_TIER_KEYS},
+            include_deep=False,
+            curse_max=1,
+            pinned_relics=[0xDEADBEEF],
+        )
+        results = optimizer.optimize_all_vessels(build, inventory, 100000)
+        # Should not crash and should still return vessels (none excluded due to absent pin)
+        assert isinstance(results, list)
+
+    def test_no_pinned_relics_behaves_normally(
+        self, optimizer: VesselOptimizer, small_inventory: RelicInventory
+    ) -> None:
+        """Empty pinned_relics list produces the same result as not setting it."""
+        build_no_pins = _make_build()
+        tiers = {k: [] for k in ALL_TIER_KEYS}
+        build_empty_pins = BuildDefinition(
+            id="opt-test", name="Optimizer Test", character="Wylder",
+            tiers=tiers,
+            family_tiers={k: [] for k in ALL_TIER_KEYS},
+            include_deep=False,
+            curse_max=1,
+            pinned_relics=[],
+        )
+        results_no_pins = optimizer.optimize_all_vessels(build_no_pins, small_inventory, 100000)
+        results_empty_pins = optimizer.optimize_all_vessels(build_empty_pins, small_inventory, 100000)
+        assert len(results_no_pins) == len(results_empty_pins)

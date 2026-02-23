@@ -121,6 +121,46 @@ class TestHasBlacklistedEffect:
         assert scorer.has_blacklisted_effect(relic, build) is False
 
 
+class TestCustomTierWeights:
+    def test_higher_weight_yields_higher_score(
+        self, scorer: BuildScorer, all_effects: list[dict]
+    ) -> None:
+        eff_id = all_effects[0]["id"]
+        base_build = _make_build(required=[eff_id])
+        relic = _make_relic([eff_id, EMPTY, EMPTY])
+        default_score = scorer.score_relic(relic, base_build)
+
+        tiers = {k: [] for k in ALL_TIER_KEYS}
+        tiers["required"] = [eff_id]
+        high_build = BuildDefinition(
+            id="hw", name="HW", character="Wylder",
+            tiers=tiers,
+            family_tiers={k: [] for k in ALL_TIER_KEYS},
+            include_deep=False,
+            curse_max=1,
+            tier_weights={"required": 200},
+        )
+        assert scorer.score_relic(relic, high_build) > default_score
+
+    def test_none_tier_weights_uses_defaults(
+        self, scorer: BuildScorer, all_effects: list[dict]
+    ) -> None:
+        eff_id = all_effects[0]["id"]
+        relic = _make_relic([eff_id, EMPTY, EMPTY])
+        tiers = {k: [] for k in ALL_TIER_KEYS}
+        tiers["required"] = [eff_id]
+        build_explicit_none = BuildDefinition(
+            id="n", name="N", character="Wylder",
+            tiers=tiers,
+            family_tiers={k: [] for k in ALL_TIER_KEYS},
+            include_deep=False,
+            curse_max=1,
+            tier_weights=None,
+        )
+        build_defaults = _make_build(required=[eff_id])
+        assert scorer.score_relic(relic, build_explicit_none) == scorer.score_relic(relic, build_defaults)
+
+
 class TestGetBreakdown:
     def test_returns_list_of_dicts(
         self, scorer: BuildScorer, all_effects: list[dict]

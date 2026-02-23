@@ -3,7 +3,7 @@ from nrplanner.constants import EMPTY_EFFECT
 from nrplanner.data import SourceDataHandler
 from nrplanner.models import (
     BuildDefinition, OwnedRelic,
-    CURSE_EXCESS_PENALTY, MAGNITUDE_TIERS, SCORED_TIERS, TIER_BONUS, TIER_WEIGHTS,
+    CURSE_EXCESS_PENALTY, MAGNITUDE_TIERS, SCORED_TIERS, TIER_BONUS,
 )
 
 
@@ -44,17 +44,19 @@ class BuildScorer:
         if not tier:
             name = self.data_source.get_effect_name(eff_id)
             tier = self._get_name_cache(build).get(name)
+        effective_weights = build.get_effective_weights()
         if tier:
-            return tier, TIER_WEIGHTS.get(tier, 0)
+            return tier, effective_weights.get(tier, 0)
 
         family = self.data_source.get_effect_family(eff_id)
         if family:
             ftier = build.get_tier_for_family(family)
             if ftier:
                 if ftier in MAGNITUDE_TIERS:
-                    weight = self.data_source.get_family_magnitude_weight(eff_id, TIER_WEIGHTS[ftier])
+                    weight = self.data_source.get_family_magnitude_weight(
+                        eff_id, effective_weights.get(ftier, 0))
                     return ftier, weight
-                return ftier, TIER_WEIGHTS.get(ftier, 0)
+                return ftier, effective_weights.get(ftier, 0)
         return None, 0
 
     # ------------------------------------------------------------------

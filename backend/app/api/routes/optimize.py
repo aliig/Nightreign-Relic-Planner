@@ -125,6 +125,8 @@ def run_optimize(
             family_tiers=db_build.family_tiers,
             include_deep=db_build.include_deep,
             curse_max=db_build.curse_max,
+            tier_weights=db_build.tier_weights,
+            pinned_relics=db_build.pinned_relics or [],
         )
 
         db_relics = session.exec(

@@ -1,7 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router"
 import { useMutation, useSuspenseQuery } from "@tanstack/react-query"
 import { Suspense, useState } from "react"
-import { ChevronDown, ChevronUp, CheckCircle2, XCircle } from "lucide-react"
+import { ChevronDown, ChevronUp, CheckCircle2, XCircle, Trophy } from "lucide-react"
 
 import { BuildsService, OptimizeService, SavesService } from "@/client"
 import { Badge } from "@/components/ui/badge"
@@ -34,7 +34,7 @@ const COLOR_HEX: Record<string, string> = {
 
 const TIER_COLORS: Record<string, string> = {
   required: "#FF4444", preferred: "#4488FF", nice_to_have: "#44BB88",
-  avoid: "#888888", blacklist: "#FF8C00",
+  bonus: "#9966CC", avoid: "#888888", blacklist: "#FF8C00",
 }
 
 type VesselResult = Awaited<ReturnType<typeof OptimizeService.runOptimize>>[number]
@@ -88,17 +88,30 @@ function SlotCard({ slot }: { slot: SlotAssignment }) {
   )
 }
 
-function VesselCard({ vessel }: { vessel: VesselResult }) {
-  const [expanded, setExpanded] = useState(false)
+function VesselCard({
+  vessel,
+  defaultExpanded = false,
+  highlighted = false,
+}: {
+  vessel: VesselResult
+  defaultExpanded?: boolean
+  highlighted?: boolean
+}) {
+  const [expanded, setExpanded] = useState(defaultExpanded)
 
   return (
-    <Card>
+    <Card
+      className={highlighted ? "ring-2 ring-primary/40 shadow-lg border-primary/30" : undefined}
+    >
       <CardHeader
         className="cursor-pointer pb-3"
         onClick={() => setExpanded((v) => !v)}
       >
         <div className="flex items-center justify-between flex-wrap gap-2">
-          <CardTitle className="text-base">{vessel.vessel_name}</CardTitle>
+          <div className="flex items-center gap-2">
+            {highlighted && <Trophy className="h-4 w-4 text-yellow-500 shrink-0" />}
+            <CardTitle className="text-base">{vessel.vessel_name}</CardTitle>
+          </div>
           <div className="flex items-center gap-2">
             {vessel.meets_requirements ? (
               <CheckCircle2 className="h-4 w-4 text-green-500" />
@@ -216,8 +229,13 @@ function AuthOptimizeForm() {
           <h2 className="text-lg font-medium">
             Top {results.length} vessel{results.length !== 1 ? "s" : ""}
           </h2>
-          {results.map((vessel) => (
-            <VesselCard key={`${vessel.vessel_id}-${vessel.total_score}`} vessel={vessel} />
+          {results.map((vessel, index) => (
+            <VesselCard
+              key={`${vessel.vessel_id}-${vessel.total_score}`}
+              vessel={vessel}
+              defaultExpanded={index === 0}
+              highlighted={index === 0}
+            />
           ))}
         </div>
       )}
@@ -270,6 +288,8 @@ function AnonOptimizeForm() {
             family_tiers: build.family_tiers,
             include_deep: build.include_deep,
             curse_max: build.curse_max,
+            tier_weights: build.tier_weights ?? null,
+            pinned_relics: build.pinned_relics ?? [],
           } as any,
           relics: relics as any,
         },
@@ -340,8 +360,13 @@ function AnonOptimizeForm() {
           <h2 className="text-lg font-medium">
             Top {results.length} vessel{results.length !== 1 ? "s" : ""}
           </h2>
-          {results.map((vessel) => (
-            <VesselCard key={`${vessel.vessel_id}-${vessel.total_score}`} vessel={vessel} />
+          {results.map((vessel, index) => (
+            <VesselCard
+              key={`${vessel.vessel_id}-${vessel.total_score}`}
+              vessel={vessel}
+              defaultExpanded={index === 0}
+              highlighted={index === 0}
+            />
           ))}
         </div>
       )}

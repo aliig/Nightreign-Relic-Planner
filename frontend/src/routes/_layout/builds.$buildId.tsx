@@ -1,7 +1,7 @@
 import { createFileRoute, useParams } from "@tanstack/react-router"
-import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query"
-import { Suspense, useCallback, useEffect, useRef, useState } from "react"
-import { X, Search, Pencil } from "lucide-react"
+import { useMutation, useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query"
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { X, Search, Pencil, ChevronDown, ChevronUp, Pin } from "lucide-react"
 import {
   DndContext,
   DragEndEvent,
@@ -14,10 +14,13 @@ import {
   useSensors,
 } from "@dnd-kit/core"
 
-import { BuildsService, GameService } from "@/client"
+import { BuildsService, GameService, SavesService } from "@/client"
+import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Separator } from "@/components/ui/separator"
 import { cn } from "@/lib/utils"
@@ -33,40 +36,61 @@ export const Route = createFileRoute("/_layout/builds/$buildId")({
   }),
 })
 
-const TIER_DISPLAY: Record<string, { label: string; color: string }> = {
-  required:     { label: "Essential",    color: "#FF4444" },
-  preferred:    { label: "Preferred",    color: "#4488FF" },
-  nice_to_have: { label: "Nice-to-Have", color: "#44BB88" },
-  avoid:        { label: "Avoid",        color: "#888888" },
-  blacklist:    { label: "Excluded",     color: "#FF8C00" },
-}
-const TIER_ORDER = ["required", "preferred", "nice_to_have", "avoid", "blacklist"]
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
 
 type EffectMeta = { id: number; name: string; family?: string; is_debuff?: boolean }
 type FamilyMeta = { name: string; member_names: string[]; member_ids: number[] }
+type TierConfig = {
+  key: string
+  display_name: string
+  color: string
+  weight: number
+  scored: boolean
+  is_exclusion: boolean
+}
+type RelicForPicker = {
+  ga_handle: number
+  name: string
+  color: string
+  is_deep: boolean
+}
 type DragData =
   | { type: "effect"; effectId: number; sourceTier: string | null }
   | { type: "family"; familyName: string; sourceTier: string | null }
 
-// --- DnD sub-components ---
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+const COLOR_HEX: Record<string, string> = {
+  Red: "#FF4444", Blue: "#4488FF", Yellow: "#B8860B", Green: "#44BB44", White: "#AAAAAA",
+}
+
+function weightToLabel(weight: number, isBlacklist: boolean): string {
+  if (isBlacklist) return "Excluded"
+  if (weight >= 80) return "Essential"
+  if (weight >= 50) return "Preferred"
+  if (weight >= 25) return "Nice-to-Have"
+  if (weight >= 1) return "Bonus"
+  if (weight === 0) return "Neutral"
+  if (weight >= -50) return "Avoid"
+  return "Strongly Avoid"
+}
+
+// ---------------------------------------------------------------------------
+// DnD sub-components
+// ---------------------------------------------------------------------------
 
 function DraggableChip({
-  dragId,
-  name,
-  tierKey,
-  dragData,
-  onRemove,
+  dragId, name, color, dragData, onRemove,
 }: {
-  dragId: string
-  name: string
-  tierKey: string
-  dragData: DragData
-  onRemove: () => void
+  dragId: string; name: string; color: string
+  dragData: DragData; onRemove: () => void
 }) {
-  const { color } = TIER_DISPLAY[tierKey] ?? { color: "#888" }
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
-    id: dragId,
-    data: dragData,
+    id: dragId, data: dragData,
   })
   return (
     <span
@@ -91,14 +115,11 @@ function DraggableChip({
 }
 
 function DroppableTierZone({
-  tierKey,
-  children,
+  tierKey, color, children,
 }: {
-  tierKey: string
-  children: React.ReactNode
+  tierKey: string; color: string; children: React.ReactNode
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: `tier:${tierKey}` })
-  const { color } = TIER_DISPLAY[tierKey]
   return (
     <div
       ref={setNodeRef}
@@ -111,19 +132,12 @@ function DroppableTierZone({
 }
 
 function DraggableBrowserRow({
-  dragId,
-  data,
-  onClick,
-  children,
+  dragId, data, onClick, children,
 }: {
-  dragId: string
-  data: DragData
-  onClick: () => void
-  children: React.ReactNode
+  dragId: string; data: DragData; onClick: () => void; children: React.ReactNode
 }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
-    id: dragId,
-    data,
+    id: dragId, data,
   })
   return (
     <div
@@ -141,7 +155,205 @@ function DraggableBrowserRow({
   )
 }
 
-// --- Shared editor UI (works for both auth and anon) ---
+// ---------------------------------------------------------------------------
+// Pinned relic picker dialog
+// ---------------------------------------------------------------------------
+
+function PinnedRelicPickerContent({
+  characterId, onSelect,
+}: {
+  characterId: string; onSelect: (relic: RelicForPicker) => void
+}) {
+  const { data } = useSuspenseQuery({
+    queryKey: ["relics", characterId],
+    queryFn: () => SavesService.getCharacterRelics({ characterId }),
+    staleTime: 5 * 60 * 1000,
+  })
+  const [search, setSearch] = useState("")
+  const relics = (data.data ?? []).filter((r) =>
+    !search || r.name.toLowerCase().includes(search.toLowerCase()),
+  )
+
+  return (
+    <>
+      <div className="relative mb-2">
+        <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+        <Input
+          autoFocus
+          placeholder="Search relics…"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          className="pl-8"
+        />
+      </div>
+      <div className="space-y-1 max-h-64 overflow-y-auto">
+        {relics.map((r) => (
+          <button
+            key={r.id}
+            type="button"
+            onClick={() =>
+              onSelect({ ga_handle: r.ga_handle, name: r.name, color: r.color, is_deep: r.is_deep })
+            }
+            className="w-full text-left rounded px-2 py-1.5 hover:bg-muted/50 flex items-center gap-2 text-sm"
+          >
+            <span
+              className="w-2 h-2 rounded-full shrink-0"
+              style={{ background: COLOR_HEX[r.color] ?? "#888" }}
+            />
+            <span className="truncate" style={{ color: COLOR_HEX[r.color] ?? undefined }}>
+              {r.name}
+            </span>
+            <span className="ml-auto text-xs text-muted-foreground shrink-0">
+              {r.tier} {r.is_deep ? "· Deep" : ""}
+            </span>
+          </button>
+        ))}
+        {relics.length === 0 && (
+          <p className="text-xs text-muted-foreground text-center py-4">No relics match.</p>
+        )}
+      </div>
+    </>
+  )
+}
+
+function AuthPinnedRelicDialog({
+  pinnedHandles, onAdd, disabled,
+}: {
+  pinnedHandles: number[]
+  onAdd: (relic: RelicForPicker) => void
+  disabled: boolean
+}) {
+  const [open, setOpen] = useState(false)
+  const [charId, setCharId] = useState<string | null>(null)
+
+  const { data: charsData } = useQuery({
+    queryKey: ["characters"],
+    queryFn: () => SavesService.listCharacters(),
+    staleTime: 5 * 60 * 1000,
+  })
+  const chars = charsData?.data ?? []
+  const selectedCharId = charId ?? chars[0]?.id ?? null
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button type="button" size="sm" variant="outline" disabled={disabled}>
+          <Pin className="h-3.5 w-3.5 mr-1" /> Pin Relic
+        </Button>
+      </DialogTrigger>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Pin a Relic</DialogTitle>
+        </DialogHeader>
+        {chars.length > 1 && (
+          <Select value={selectedCharId ?? ""} onValueChange={setCharId}>
+            <SelectTrigger className="w-full">
+              <SelectValue placeholder="Select character" />
+            </SelectTrigger>
+            <SelectContent>
+              {chars.map((c) => (
+                <SelectItem key={c.id} value={c.id}>
+                  {c.name} (Slot {c.slot_index})
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
+        {selectedCharId ? (
+          <Suspense fallback={<Skeleton className="h-40 w-full" />}>
+            <PinnedRelicPickerContent
+              characterId={selectedCharId}
+              onSelect={(relic) => {
+                if (!pinnedHandles.includes(relic.ga_handle)) {
+                  onAdd(relic)
+                }
+                setOpen(false)
+              }}
+            />
+          </Suspense>
+        ) : (
+          <p className="text-sm text-muted-foreground py-4 text-center">
+            No characters found. Upload a save file first.
+          </p>
+        )}
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function AnonPinnedRelicDialog({
+  pinnedHandles, onAdd, disabled,
+}: {
+  pinnedHandles: number[]
+  onAdd: (relic: RelicForPicker) => void
+  disabled: boolean
+}) {
+  const [open, setOpen] = useState(false)
+  const [search, setSearch] = useState("")
+
+  const raw = sessionStorage.getItem("selectedCharacter")
+  const char = raw ? JSON.parse(raw) : null
+  const relics: RelicForPicker[] = (char?.relics ?? []).filter(
+    (r: RelicForPicker) =>
+      !search || r.name.toLowerCase().includes(search.toLowerCase()),
+  )
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button type="button" size="sm" variant="outline" disabled={disabled}>
+          <Pin className="h-3.5 w-3.5 mr-1" /> Pin Relic
+        </Button>
+      </DialogTrigger>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Pin a Relic</DialogTitle>
+        </DialogHeader>
+        <div className="relative mb-2">
+          <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+          <Input
+            autoFocus
+            placeholder="Search relics…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="pl-8"
+          />
+        </div>
+        <div className="space-y-1 max-h-64 overflow-y-auto">
+          {relics.map((r) => (
+            <button
+              key={r.ga_handle}
+              type="button"
+              onClick={() => {
+                if (!pinnedHandles.includes(r.ga_handle)) onAdd(r)
+                setOpen(false)
+              }}
+              className="w-full text-left rounded px-2 py-1.5 hover:bg-muted/50 flex items-center gap-2 text-sm"
+            >
+              <span
+                className="w-2 h-2 rounded-full shrink-0"
+                style={{ background: COLOR_HEX[r.color] ?? "#888" }}
+              />
+              <span className="truncate" style={{ color: COLOR_HEX[r.color] ?? undefined }}>
+                {r.name}
+              </span>
+              <span className="ml-auto text-xs text-muted-foreground shrink-0">
+                {r.is_deep ? "Deep" : "Standard"}
+              </span>
+            </button>
+          ))}
+          {relics.length === 0 && (
+            <p className="text-xs text-muted-foreground text-center py-4">No relics match.</p>
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Shared editor UI
+// ---------------------------------------------------------------------------
 
 interface EditorUIProps {
   name: string
@@ -150,29 +362,73 @@ interface EditorUIProps {
   familyTiers: Record<string, string[]>
   includeDeep: boolean
   curseMax: number
+  tierConfigs: TierConfig[]
+  tierWeights: Record<string, number> | null | undefined
+  pinnedRelics: number[]
+  pinnedRelicMeta: Map<number, RelicForPicker>
   saving: boolean
   effects: EffectMeta[]
   families: FamilyMeta[]
+  isAuth: boolean
   onTiersChange: (tiers: Record<string, number[]>) => void
   onFamilyTiersChange: (ft: Record<string, string[]>) => void
   onIncludeDeepChange: (v: boolean) => void
   onCurseMaxChange: (v: number) => void
+  onTierWeightsChange: (w: Record<string, number> | null) => void
+  onPinnedRelicsChange: (handles: number[], meta: Map<number, RelicForPicker>) => void
   onRename: (newName: string) => void
 }
 
 function BuildEditorUI({
   name, character, tiers, familyTiers, includeDeep, curseMax,
-  saving, effects, families,
-  onTiersChange, onFamilyTiersChange, onIncludeDeepChange, onCurseMaxChange, onRename,
+  tierConfigs, tierWeights, pinnedRelics, pinnedRelicMeta,
+  saving, effects, families, isAuth,
+  onTiersChange, onFamilyTiersChange, onIncludeDeepChange, onCurseMaxChange,
+  onTierWeightsChange, onPinnedRelicsChange, onRename,
 }: EditorUIProps) {
   const [effectSearch, setEffectSearch] = useState("")
   const [isRenaming, setIsRenaming] = useState(false)
   const [draftName, setDraftName] = useState(name)
   const [activeDragName, setActiveDragName] = useState<string | null>(null)
+  const [weightEditorOpen, setWeightEditorOpen] = useState(false)
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
   )
+
+  // Compute effective weights (server defaults merged with build overrides)
+  const effectiveWeights = useMemo(() => {
+    const defaults = Object.fromEntries(tierConfigs.map((t) => [t.key, t.weight]))
+    return tierWeights ? { ...defaults, ...tierWeights } : defaults
+  }, [tierConfigs, tierWeights])
+
+  // Sort tiers: non-blacklist by weight desc, blacklist always last
+  const sortedTierKeys = useMemo(() => {
+    const nonBlacklist = tierConfigs
+      .filter((t) => !t.is_exclusion)
+      .map((t) => t.key)
+      .sort((a, b) => (effectiveWeights[b] ?? 0) - (effectiveWeights[a] ?? 0))
+    const blacklistKeys = tierConfigs.filter((t) => t.is_exclusion).map((t) => t.key)
+    return [...nonBlacklist, ...blacklistKeys]
+  }, [tierConfigs, effectiveWeights])
+
+  // Build display info per tier (dynamic label + color)
+  const tierDisplay = useMemo(() => {
+    return Object.fromEntries(
+      tierConfigs.map((t) => [
+        t.key,
+        {
+          label: weightToLabel(effectiveWeights[t.key] ?? t.weight, t.is_exclusion),
+          color: t.color,
+          weight: effectiveWeights[t.key] ?? t.weight,
+          scored: t.scored,
+          is_exclusion: t.is_exclusion,
+        },
+      ]),
+    )
+  }, [tierConfigs, effectiveWeights])
+
+  const allTierKeys = tierConfigs.map((t) => t.key)
 
   function commitRename() {
     const trimmed = draftName.trim()
@@ -188,13 +444,13 @@ function BuildEditorUI({
   const assignEffect = useCallback(
     (effectId: number, targetTier: string) => {
       const next = { ...tiers }
-      for (const key of TIER_ORDER) {
+      for (const key of allTierKeys) {
         next[key] = (next[key] ?? []).filter((id) => id !== effectId)
       }
       next[targetTier] = [...(next[targetTier] ?? []), effectId]
       onTiersChange(next)
     },
-    [tiers, onTiersChange],
+    [tiers, allTierKeys, onTiersChange],
   )
 
   const removeEffect = useCallback(
@@ -210,13 +466,13 @@ function BuildEditorUI({
   const assignFamily = useCallback(
     (familyName: string, targetTier: string) => {
       const next = { ...familyTiers }
-      for (const key of TIER_ORDER) {
+      for (const key of allTierKeys) {
         next[key] = (next[key] ?? []).filter((n) => n !== familyName)
       }
       next[targetTier] = [...(next[targetTier] ?? []), familyName]
       onFamilyTiersChange(next)
     },
-    [familyTiers, onFamilyTiersChange],
+    [familyTiers, allTierKeys, onFamilyTiersChange],
   )
 
   const removeFamily = useCallback(
@@ -267,6 +523,17 @@ function BuildEditorUI({
     }
   }
 
+  function handleWeightChange(tierKey: string, value: number) {
+    const defaults = Object.fromEntries(tierConfigs.map((t) => [t.key, t.weight]))
+    const next = { ...defaults, ...(tierWeights ?? {}), [tierKey]: value }
+    // If all weights match defaults, clear the override (null = use defaults)
+    const isAllDefault = tierConfigs.every((t) => next[t.key] === t.weight)
+    onTierWeightsChange(isAllDefault ? null : next)
+  }
+
+  const maxPins = includeDeep ? 6 : 3
+  const atPinLimit = pinnedRelics.length >= maxPins
+
   return (
     <DndContext
       sensors={sensors}
@@ -309,34 +576,150 @@ function BuildEditorUI({
         </div>
 
         {/* Settings */}
-        <div className="flex flex-wrap items-center gap-6 p-4 rounded-lg border bg-muted/30">
-          <div className="flex items-center gap-2">
-            <Checkbox
-              id="include-deep"
-              checked={includeDeep}
-              onCheckedChange={(v: boolean) => onIncludeDeepChange(v)}
-            />
-            <Label htmlFor="include-deep">Include deep relics</Label>
+        <div className="p-4 rounded-lg border bg-muted/30 space-y-4">
+          <div className="flex flex-wrap items-center gap-6">
+            <div className="flex items-center gap-2">
+              <Checkbox
+                id="include-deep"
+                checked={includeDeep}
+                onCheckedChange={(v: boolean) => onIncludeDeepChange(v)}
+              />
+              <Label htmlFor="include-deep">Include deep relics</Label>
+            </div>
+            <div className="flex items-center gap-2">
+              <Label htmlFor="curse-max">Max curse stacks</Label>
+              <Input
+                id="curse-max"
+                type="number"
+                min={0}
+                max={3}
+                value={curseMax}
+                onChange={(e) => onCurseMaxChange(Number(e.target.value))}
+                className="w-16"
+              />
+            </div>
           </div>
-          <div className="flex items-center gap-2">
-            <Label htmlFor="curse-max">Max curse stacks</Label>
-            <Input
-              id="curse-max"
-              type="number"
-              min={0}
-              max={3}
-              value={curseMax}
-              onChange={(e) => onCurseMaxChange(Number(e.target.value))}
-              className="w-16"
-            />
+
+          {/* Weight editor */}
+          <div>
+            <button
+              type="button"
+              onClick={() => setWeightEditorOpen((v) => !v)}
+              className="flex items-center gap-1.5 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
+            >
+              {weightEditorOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+              Customize Tier Weights
+            </button>
+            {weightEditorOpen && (
+              <div className="mt-3 grid grid-cols-2 sm:grid-cols-3 gap-3">
+                {tierConfigs
+                  .filter((t) => t.scored && !t.is_exclusion)
+                  .map((t) => {
+                    const eff = effectiveWeights[t.key] ?? t.weight
+                    return (
+                      <div key={t.key} className="flex items-center gap-2">
+                        <Label
+                          htmlFor={`weight-${t.key}`}
+                          className="text-xs w-28 shrink-0"
+                          style={{ color: t.color }}
+                        >
+                          {weightToLabel(eff, false)}
+                        </Label>
+                        <Input
+                          id={`weight-${t.key}`}
+                          type="number"
+                          min={-100}
+                          max={100}
+                          value={eff}
+                          onChange={(e) => handleWeightChange(t.key, Number(e.target.value))}
+                          className="w-20"
+                        />
+                      </div>
+                    )
+                  })}
+                {tierWeights && (
+                  <button
+                    type="button"
+                    onClick={() => onTierWeightsChange(null)}
+                    className="text-xs text-muted-foreground underline col-span-full"
+                  >
+                    Reset to defaults
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Pinned relics */}
+          <div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-sm font-medium">Pinned Relics</span>
+              <span className="text-xs text-muted-foreground">
+                {pinnedRelics.length}/{maxPins}
+              </span>
+              {isAuth ? (
+                <AuthPinnedRelicDialog
+                  pinnedHandles={pinnedRelics}
+                  onAdd={(relic) => {
+                    const nextMeta = new Map(pinnedRelicMeta)
+                    nextMeta.set(relic.ga_handle, relic)
+                    onPinnedRelicsChange([...pinnedRelics, relic.ga_handle], nextMeta)
+                  }}
+                  disabled={atPinLimit}
+                />
+              ) : (
+                <AnonPinnedRelicDialog
+                  pinnedHandles={pinnedRelics}
+                  onAdd={(relic) => {
+                    const nextMeta = new Map(pinnedRelicMeta)
+                    nextMeta.set(relic.ga_handle, relic)
+                    onPinnedRelicsChange([...pinnedRelics, relic.ga_handle], nextMeta)
+                  }}
+                  disabled={atPinLimit}
+                />
+              )}
+            </div>
+            {pinnedRelics.length > 0 && (
+              <div className="flex flex-wrap gap-2 mt-2">
+                {pinnedRelics.map((handle) => {
+                  const relic = pinnedRelicMeta.get(handle)
+                  const color = relic ? (COLOR_HEX[relic.color] ?? "#888") : "#888"
+                  const label = relic ? relic.name : `#${handle}`
+                  return (
+                    <span
+                      key={handle}
+                      className="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium border"
+                      style={{ borderColor: color, color }}
+                    >
+                      {label}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const nextMeta = new Map(pinnedRelicMeta)
+                          nextMeta.delete(handle)
+                          onPinnedRelicsChange(
+                            pinnedRelics.filter((h) => h !== handle),
+                            nextMeta,
+                          )
+                        }}
+                        className="hover:opacity-70 ml-0.5"
+                        aria-label={`Unpin ${label}`}
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </span>
+                  )
+                })}
+              </div>
+            )}
           </div>
         </div>
 
         <div className="grid lg:grid-cols-[1fr_320px] gap-6">
           {/* Tier columns */}
           <div className="space-y-4">
-            {TIER_ORDER.map((tierKey) => {
-              const { label, color } = TIER_DISPLAY[tierKey]
+            {sortedTierKeys.map((tierKey) => {
+              const { label, color } = tierDisplay[tierKey] ?? { label: tierKey, color: "#888" }
               const tierEffects = (tiers[tierKey] ?? [])
                 .map((id) => effectMap.get(id))
                 .filter(Boolean) as EffectMeta[]
@@ -344,8 +727,16 @@ function BuildEditorUI({
               const isEmpty = tierEffects.length === 0 && tierFamilies.length === 0
 
               return (
-                <DroppableTierZone key={tierKey} tierKey={tierKey}>
-                  <h3 className="text-sm font-semibold" style={{ color }}>{label}</h3>
+                <DroppableTierZone key={tierKey} tierKey={tierKey} color={color}>
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-sm font-semibold" style={{ color }}>{label}</h3>
+                    {!tierDisplay[tierKey]?.is_exclusion && (
+                      <span className="text-xs text-muted-foreground">
+                        {(effectiveWeights[tierKey] ?? 0) >= 0 ? "+" : ""}
+                        {effectiveWeights[tierKey] ?? 0} pts
+                      </span>
+                    )}
+                  </div>
                   {isEmpty ? (
                     <p className="text-xs text-muted-foreground italic">
                       Drop effects here, or click in the browser to add to Essential
@@ -357,7 +748,7 @@ function BuildEditorUI({
                           key={`family:${familyName}`}
                           dragId={`family:${familyName}`}
                           name={`${familyName} (group)`}
-                          tierKey={tierKey}
+                          color={color}
                           dragData={{ type: "family", familyName, sourceTier: tierKey }}
                           onRemove={() => removeFamily(familyName, tierKey)}
                         />
@@ -367,7 +758,7 @@ function BuildEditorUI({
                           key={e.id}
                           dragId={`effect:${e.id}`}
                           name={e.name}
-                          tierKey={tierKey}
+                          color={color}
                           dragData={{ type: "effect", effectId: e.id, sourceTier: tierKey }}
                           onRemove={() => removeEffect(e.id, tierKey)}
                         />
@@ -402,7 +793,7 @@ function BuildEditorUI({
                       key={`family:${family.name}`}
                       dragId={`family:${family.name}`}
                       data={{ type: "family", familyName: family.name, sourceTier: null }}
-                      onClick={() => assignFamily(family.name, "required")}
+                      onClick={() => assignFamily(family.name, sortedTierKeys[0] ?? "required")}
                     >
                       <span
                         className="text-sm truncate italic flex-1"
@@ -423,7 +814,7 @@ function BuildEditorUI({
                   key={effect.id}
                   dragId={`effect:${effect.id}`}
                   data={{ type: "effect", effectId: effect.id, sourceTier: null }}
-                  onClick={() => assignEffect(effect.id, "required")}
+                  onClick={() => assignEffect(effect.id, sortedTierKeys[0] ?? "required")}
                 >
                   <span className="text-sm truncate flex-1" title={effect.name}>
                     {effect.name}
@@ -454,7 +845,9 @@ function BuildEditorUI({
   )
 }
 
-// --- Authenticated editor (API-backed) ---
+// ---------------------------------------------------------------------------
+// Authenticated editor (API-backed)
+// ---------------------------------------------------------------------------
 
 function AuthBuildEditorContent({ buildId }: { buildId: string }) {
   const { showErrorToast } = useCustomToast()
@@ -474,9 +867,15 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
     queryFn: () => GameService.getFamilies(),
     staleTime: Infinity,
   })
+  const { data: tiersData } = useSuspenseQuery({
+    queryKey: ["game", "tiers"],
+    queryFn: () => GameService.getTiers(),
+    staleTime: Infinity,
+  })
 
   const effects = (effectsData ?? []) as EffectMeta[]
   const families = (familiesData ?? []) as FamilyMeta[]
+  const tierConfigs = (tiersData ?? []) as TierConfig[]
 
   const [tiers, setTiers] = useState<Record<string, number[]>>(
     () => (build.tiers as Record<string, number[]>) ?? {},
@@ -486,16 +885,24 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
   )
   const [includeDeep, setIncludeDeep] = useState(build.include_deep)
   const [curseMax, setCurseMax] = useState(build.curse_max)
+  const [tierWeights, setTierWeights] = useState<Record<string, number> | null | undefined>(
+    build.tier_weights ?? null,
+  )
+  const [pinnedRelics, setPinnedRelics] = useState<number[]>(build.pinned_relics ?? [])
+  const [pinnedRelicMeta, setPinnedRelicMeta] = useState<Map<number, RelicForPicker>>(new Map())
 
-  // Refs always hold the latest values — safe to read inside the debounced timer
   const tiersRef = useRef(tiers)
   const familyTiersRef = useRef(familyTiers)
   const includeDeepRef = useRef(includeDeep)
   const curseMaxRef = useRef(curseMax)
+  const tierWeightsRef = useRef(tierWeights)
+  const pinnedRelicsRef = useRef(pinnedRelics)
   tiersRef.current = tiers
   familyTiersRef.current = familyTiers
   includeDeepRef.current = includeDeep
   curseMaxRef.current = curseMax
+  tierWeightsRef.current = tierWeights
+  pinnedRelicsRef.current = pinnedRelics
 
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -504,6 +911,8 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
     setFamilyTiers((build.family_tiers as Record<string, string[]>) ?? {})
     setIncludeDeep(build.include_deep)
     setCurseMax(build.curse_max)
+    setTierWeights(build.tier_weights ?? null)
+    setPinnedRelics(build.pinned_relics ?? [])
   }, [build])
 
   useEffect(() => {
@@ -519,6 +928,8 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
           family_tiers: familyTiersRef.current,
           include_deep: includeDeepRef.current,
           curse_max: curseMaxRef.current,
+          tier_weights: tierWeightsRef.current ?? null,
+          pinned_relics: pinnedRelicsRef.current,
         },
       }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["builds"] }),
@@ -545,19 +956,32 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
       familyTiers={familyTiers}
       includeDeep={includeDeep}
       curseMax={curseMax}
+      tierConfigs={tierConfigs}
+      tierWeights={tierWeights}
+      pinnedRelics={pinnedRelics}
+      pinnedRelicMeta={pinnedRelicMeta}
       saving={saveMutation.isPending}
       effects={effects}
       families={families}
+      isAuth={true}
       onTiersChange={(t) => { setTiers(t); scheduleAutoSave() }}
       onFamilyTiersChange={(ft) => { setFamilyTiers(ft); scheduleAutoSave() }}
       onIncludeDeepChange={(v) => { setIncludeDeep(v); scheduleAutoSave() }}
       onCurseMaxChange={(v) => { setCurseMax(v); scheduleAutoSave() }}
+      onTierWeightsChange={(w) => { setTierWeights(w); scheduleAutoSave() }}
+      onPinnedRelicsChange={(handles, meta) => {
+        setPinnedRelics(handles)
+        setPinnedRelicMeta(meta)
+        scheduleAutoSave()
+      }}
       onRename={(name) => renameMutation.mutate(name)}
     />
   )
 }
 
-// --- Anonymous editor (localStorage-backed) ---
+// ---------------------------------------------------------------------------
+// Anonymous editor (localStorage-backed)
+// ---------------------------------------------------------------------------
 
 function LocalBuildEditorContent({ buildId }: { buildId: string }) {
   const { getById, update } = useLocalBuilds()
@@ -572,9 +996,15 @@ function LocalBuildEditorContent({ buildId }: { buildId: string }) {
     queryFn: () => GameService.getFamilies(),
     staleTime: Infinity,
   })
+  const { data: tiersData } = useSuspenseQuery({
+    queryKey: ["game", "tiers"],
+    queryFn: () => GameService.getTiers(),
+    staleTime: Infinity,
+  })
 
   const effects = (effectsData ?? []) as EffectMeta[]
   const families = (familiesData ?? []) as FamilyMeta[]
+  const tierConfigs = (tiersData ?? []) as TierConfig[]
   const build = getById(buildId)
 
   const [tiers, setTiers] = useState<Record<string, number[]>>(
@@ -585,15 +1015,24 @@ function LocalBuildEditorContent({ buildId }: { buildId: string }) {
   )
   const [includeDeep, setIncludeDeep] = useState(build?.include_deep ?? false)
   const [curseMax, setCurseMax] = useState(build?.curse_max ?? 0)
+  const [tierWeights, setTierWeights] = useState<Record<string, number> | null | undefined>(
+    build?.tier_weights ?? null,
+  )
+  const [pinnedRelics, setPinnedRelics] = useState<number[]>(build?.pinned_relics ?? [])
+  const [pinnedRelicMeta, setPinnedRelicMeta] = useState<Map<number, RelicForPicker>>(new Map())
 
   const tiersRef = useRef(tiers)
   const familyTiersRef = useRef(familyTiers)
   const includeDeepRef = useRef(includeDeep)
   const curseMaxRef = useRef(curseMax)
+  const tierWeightsRef = useRef(tierWeights)
+  const pinnedRelicsRef = useRef(pinnedRelics)
   tiersRef.current = tiers
   familyTiersRef.current = familyTiers
   includeDeepRef.current = includeDeep
   curseMaxRef.current = curseMax
+  tierWeightsRef.current = tierWeights
+  pinnedRelicsRef.current = pinnedRelics
 
   const updateRef = useRef(update)
   updateRef.current = update
@@ -612,6 +1051,8 @@ function LocalBuildEditorContent({ buildId }: { buildId: string }) {
         family_tiers: familyTiersRef.current,
         include_deep: includeDeepRef.current,
         curse_max: curseMaxRef.current,
+        tier_weights: tierWeightsRef.current ?? null,
+        pinned_relics: pinnedRelicsRef.current,
       })
     }, 400)
   }, [buildId])
@@ -632,19 +1073,32 @@ function LocalBuildEditorContent({ buildId }: { buildId: string }) {
       familyTiers={familyTiers}
       includeDeep={includeDeep}
       curseMax={curseMax}
+      tierConfigs={tierConfigs}
+      tierWeights={tierWeights}
+      pinnedRelics={pinnedRelics}
+      pinnedRelicMeta={pinnedRelicMeta}
       saving={false}
       effects={effects}
       families={families}
+      isAuth={false}
       onTiersChange={(t) => { setTiers(t); scheduleAutoSave() }}
       onFamilyTiersChange={(ft) => { setFamilyTiers(ft); scheduleAutoSave() }}
       onIncludeDeepChange={(v) => { setIncludeDeep(v); scheduleAutoSave() }}
       onCurseMaxChange={(v) => { setCurseMax(v); scheduleAutoSave() }}
+      onTierWeightsChange={(w) => { setTierWeights(w); scheduleAutoSave() }}
+      onPinnedRelicsChange={(handles, meta) => {
+        setPinnedRelics(handles)
+        setPinnedRelicMeta(meta)
+        scheduleAutoSave()
+      }}
       onRename={(name) => updateRef.current(buildId, { name })}
     />
   )
 }
 
-// --- Page ---
+// ---------------------------------------------------------------------------
+// Page
+// ---------------------------------------------------------------------------
 
 function BuildEditorPage() {
   const { buildId } = useParams({ from: "/_layout/builds/$buildId" })

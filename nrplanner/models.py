@@ -45,6 +45,7 @@ TIERS: list[TierConfig] = [
     TierConfig(key="required",     display_name="Essential",    color="#FF4444", weight=100, scored=True,  magnitude_weighted=True,  is_must_have=True,  is_exclusion=False),
     TierConfig(key="preferred",    display_name="Preferred",    color="#4488FF", weight=50,  scored=True,  magnitude_weighted=True,  is_must_have=False, is_exclusion=False),
     TierConfig(key="nice_to_have", display_name="Nice-to-Have", color="#44BB88", weight=25,  scored=True,  magnitude_weighted=True,  is_must_have=False, is_exclusion=False),
+    TierConfig(key="bonus",        display_name="Bonus",        color="#9966CC", weight=10,  scored=True,  magnitude_weighted=True,  is_must_have=False, is_exclusion=False),
     TierConfig(key="avoid",        display_name="Avoid",        color="#888888", weight=-20, scored=True,  magnitude_weighted=False, is_must_have=False, is_exclusion=False),
     TierConfig(key="blacklist",    display_name="Excluded",     color="#FF8C00", weight=0,   scored=False, magnitude_weighted=False, is_must_have=False, is_exclusion=True, show_debuffs_first=True),
 ]
@@ -168,6 +169,14 @@ class BuildDefinition(BaseModel):
         default_factory=lambda: {k: [] for k in ALL_TIER_KEYS})
     include_deep: bool = True
     curse_max: int = 1  # max times the same curse is tolerated (0=avoid all)
+    tier_weights: dict[str, int] | None = None  # per-build overrides; None = use defaults
+    pinned_relics: list[int] = Field(default_factory=list)  # ga_handle IDs to force-assign
+
+    def get_effective_weights(self) -> dict[str, int]:
+        """Return tier weights merged with any per-build overrides."""
+        if self.tier_weights:
+            return {**TIER_WEIGHTS, **self.tier_weights}
+        return dict(TIER_WEIGHTS)
 
     def all_prioritized_effects(self) -> set[int]:
         result: set[int] = set()

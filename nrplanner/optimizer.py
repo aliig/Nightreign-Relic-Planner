@@ -27,22 +27,51 @@ class VesselOptimizer:
         slot_colors = vessel_data["Colors"]
         num_slots = 6 if build.include_deep else 3
 
-        candidates_per_slot = []
-        for i in range(num_slots):
+        # Pre-assign pinned relics; returns (None, ...) if any can't fit this vessel.
+        pinned_map, slot_owner = self._pre_assign_pinned(
+            build, inventory, slot_colors, num_slots)
+        if pinned_map is None:
+            return []  # vessel incompatible with pinned relics — exclude
+
+        pinned_handles: set[int] = set(pinned_map.keys())
+        free_slot_indices = [i for i in range(num_slots) if slot_owner[i] is None]
+
+        candidates_per_free_slot = []
+        for i in free_slot_indices:
             is_deep = i >= 3
             candidates = inventory.get_candidates(slot_colors[i], is_deep)
-            candidates = [r for r in candidates if not self.scorer.has_blacklisted_effect(r, build)]
+            candidates = [
+                r for r in candidates
+                if not self.scorer.has_blacklisted_effect(r, build)
+                and r.ga_handle not in pinned_handles
+            ]
             scored = sorted(
                 ((self.scorer.score_relic(r, build), r) for r in candidates),
                 key=lambda x: x[0], reverse=True,
             )
-            candidates_per_slot.append(scored)
+            candidates_per_free_slot.append(scored)
 
-        total = sum(len(c) for c in candidates_per_slot)
-        if total <= 200 and num_slots <= 6:
-            raw = self._backtrack_solve(candidates_per_slot, num_slots, build, top_n)
+        num_free = len(free_slot_indices)
+
+        if num_free == 0:
+            raw_free: list[list] = [[]]
         else:
-            raw = self._greedy_solve(candidates_per_slot, num_slots, build, top_n)
+            total = sum(len(c) for c in candidates_per_free_slot)
+            if total <= 200 and num_free <= 6:
+                raw_free = self._backtrack_solve(candidates_per_free_slot, num_free, build, top_n)
+            else:
+                raw_free = self._greedy_solve(candidates_per_free_slot, num_free, build, top_n)
+
+        # Merge free-slot results back into full num_slots assignments
+        raw: list[list] = []
+        for free_assignment in raw_free:
+            full: list = [(None, 0)] * num_slots
+            for j, i in enumerate(free_slot_indices):
+                full[i] = free_assignment[j]
+            for i in range(num_slots):
+                if slot_owner[i] is not None:
+                    full[i] = (pinned_map[slot_owner[i]], 0)
+            raw.append(full)
 
         return [
             self._build_vessel_result(assignment, num_slots, slot_colors, vessel_data, build)
@@ -267,6 +296,58 @@ class VesselOptimizer:
 
         backtrack(0, [(None, 0)] * num_slots, set(), set(), set(), set(), {}, 0)
         return [assignment for _, assignment in top] or [[(None, 0)] * num_slots]
+
+    # ------------------------------------------------------------------
+    # Pinned relic pre-assignment
+    # ------------------------------------------------------------------
+
+    def _pre_assign_pinned(
+        self, build: BuildDefinition, inventory: RelicInventory,
+        slot_colors: tuple, num_slots: int,
+    ) -> tuple[dict[int, OwnedRelic] | None, list[int | None]]:
+        """Try to pre-assign pinned relics to vessel slots.
+
+        Returns:
+            (pinned_map, slot_owner) on success, where pinned_map maps
+            ga_handle→OwnedRelic and slot_owner[i] is the ga_handle assigned
+            to slot i (or None if the slot is free).
+            Returns (None, []) if any pinned relic cannot fit any available slot
+            (meaning this vessel should be excluded from results).
+        """
+        slot_owner: list[int | None] = [None] * num_slots
+        if not build.pinned_relics:
+            return {}, slot_owner
+
+        pinned_map: dict[int, OwnedRelic] = {
+            r.ga_handle: r
+            for r in inventory.relics
+            if r.ga_handle in build.pinned_relics
+        }
+        used_slots: set[int] = set()
+
+        for ga_handle in build.pinned_relics:
+            relic = pinned_map.get(ga_handle)
+            if relic is None:
+                continue  # pinned relic not in this character's inventory — skip
+
+            assigned = False
+            for i in range(num_slots):
+                if i in used_slots:
+                    continue
+                is_deep = i >= 3
+                if relic.is_deep != is_deep:
+                    continue
+                if slot_colors[i] != "White" and relic.color != slot_colors[i]:
+                    continue
+                slot_owner[i] = ga_handle
+                used_slots.add(i)
+                assigned = True
+                break
+
+            if not assigned:
+                return None, []  # cannot fit — exclude vessel
+
+        return pinned_map, slot_owner
 
     # ------------------------------------------------------------------
     # Stacking state helpers

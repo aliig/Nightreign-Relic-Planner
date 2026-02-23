@@ -113,6 +113,8 @@ export interface BuildPublic {
   family_tiers: Record<string, string[]>
   include_deep: boolean
   curse_max: number
+  tier_weights?: Record<string, number> | null
+  pinned_relics?: number[]
   is_featured: boolean
   created_at?: string | null
   updated_at?: string | null
@@ -131,6 +133,8 @@ export interface FeaturedBuildPublic {
   family_tiers: Record<string, string[]>
   include_deep: boolean
   curse_max: number
+  tier_weights?: Record<string, number> | null
+  pinned_relics?: number[]
   owner_name?: string | null
   created_at?: string | null
 }
@@ -152,6 +156,8 @@ export interface BuildUpdate {
   family_tiers?: Record<string, string[]> | null
   include_deep?: boolean | null
   curse_max?: number | null
+  tier_weights?: Record<string, number> | null
+  pinned_relics?: number[] | null
 }
 
 export interface SlotAssignment {

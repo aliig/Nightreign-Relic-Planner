@@ -57,7 +57,7 @@ class TestGameEndpoints:
         data = response.json()
         assert isinstance(data, list)
         tier_keys = {t["key"] for t in data}
-        assert tier_keys == {"required", "preferred", "nice_to_have", "avoid", "blacklist"}
+        assert tier_keys == {"required", "preferred", "nice_to_have", "bonus", "avoid", "blacklist"}
 
     def test_get_colors_ok(self, client: TestClient) -> None:
         response = client.get("/api/v1/game/colors")
