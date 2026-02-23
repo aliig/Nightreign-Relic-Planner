@@ -1,12 +1,14 @@
 import { createFileRoute, Link } from "@tanstack/react-router"
-import { useMutation, useSuspenseQuery } from "@tanstack/react-query"
+import { useSuspenseQuery } from "@tanstack/react-query"
 import { Suspense, useState } from "react"
 import { ChevronDown, ChevronUp, CheckCircle2, XCircle, Trophy, Pin } from "lucide-react"
 
-import { BuildsService, OptimizeService, SavesService } from "@/client"
+import { BuildsService, SavesService } from "@/client"
+import type { VesselResult } from "@/client"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Progress } from "@/components/ui/progress"
 import {
   Select,
   SelectContent,
@@ -19,7 +21,6 @@ import { Separator } from "@/components/ui/separator"
 import { isLoggedIn } from "@/hooks/useAuth"
 import { useLocalBuilds } from "@/hooks/useLocalBuilds"
 import useCustomToast from "@/hooks/useCustomToast"
-import { handleError } from "@/utils"
 
 export const Route = createFileRoute("/_layout/optimize")({
   component: OptimizePage,
@@ -37,8 +38,63 @@ const TIER_COLORS: Record<string, string> = {
   bonus: "#9966CC", avoid: "#888888", blacklist: "#FF8C00",
 }
 
-type VesselResult = Awaited<ReturnType<typeof OptimizeService.runOptimize>>[number]
 type SlotAssignment = VesselResult["assignments"][number]
+
+interface OptimizeProgress {
+  vessel: number
+  total: number
+  name: string
+}
+
+async function runOptimizeStream(
+  requestBody: Record<string, unknown>,
+  onProgress: (p: OptimizeProgress) => void,
+): Promise<VesselResult[]> {
+  const token = localStorage.getItem("access_token")
+  const headers: HeadersInit = { "Content-Type": "application/json" }
+  if (token) (headers as Record<string, string>)["Authorization"] = `Bearer ${token}`
+
+  const response = await fetch("/api/v1/optimize/stream", {
+    method: "POST",
+    headers,
+    body: JSON.stringify(requestBody),
+  })
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({ detail: "Optimization failed" }))
+    throw new Error(err.detail ?? "Optimization failed")
+  }
+
+  const reader = response.body!.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ""
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+
+    // SSE events are separated by double newlines
+    const parts = buffer.split("\n\n")
+    buffer = parts.pop() ?? ""
+
+    for (const part of parts) {
+      const dataLine = part.split("\n").find((l) => l.startsWith("data: "))
+      if (!dataLine) continue
+      const payload = JSON.parse(dataLine.slice(6))
+
+      if (payload.type === "progress") {
+        onProgress({ vessel: payload.vessel, total: payload.total, name: payload.name })
+      } else if (payload.type === "result") {
+        return payload.data as VesselResult[]
+      } else if (payload.type === "error") {
+        throw new Error(payload.detail ?? "Optimization failed")
+      }
+    }
+  }
+
+  throw new Error("Stream ended without a result")
+}
 
 function SlotCard({ slot, isPinned = false }: { slot: SlotAssignment; isPinned?: boolean }) {
   const relic = slot.relic
@@ -175,18 +231,29 @@ function AuthOptimizeForm() {
   const [buildId, setBuildId] = useState(builds[0]?.id ?? "")
   const [characterId, setCharacterId] = useState(chars[0]?.id ?? "")
   const [results, setResults] = useState<VesselResult[]>([])
+  const [isPending, setIsPending] = useState(false)
+  const [progress, setProgress] = useState<OptimizeProgress | null>(null)
 
   const selectedBuild = builds.find((b) => b.id === buildId)
   const pinnedHandles = new Set<number>(selectedBuild?.pinned_relics ?? [])
 
-  const optimizeMutation = useMutation({
-    mutationFn: () =>
-      OptimizeService.runOptimize({
-        requestBody: { build_id: buildId, character_id: characterId },
-      }),
-    onSuccess: (data) => setResults(data),
-    onError: handleError.bind(showErrorToast),
-  })
+  const handleOptimize = async () => {
+    setIsPending(true)
+    setProgress(null)
+    setResults([])
+    try {
+      const data = await runOptimizeStream(
+        { build_id: buildId, character_id: characterId },
+        setProgress,
+      )
+      setResults(data)
+    } catch (err) {
+      showErrorToast(err instanceof Error ? err.message : "Optimization failed")
+    } finally {
+      setIsPending(false)
+      setProgress(null)
+    }
+  }
 
   return (
     <div className="space-y-6">
@@ -218,12 +285,23 @@ function AuthOptimizeForm() {
           </Select>
         </div>
         <Button
-          onClick={() => optimizeMutation.mutate()}
-          disabled={!buildId || !characterId || optimizeMutation.isPending}
+          onClick={handleOptimize}
+          disabled={!buildId || !characterId || isPending}
         >
-          {optimizeMutation.isPending ? "Optimizing…" : "Optimize"}
+          {isPending ? "Optimizing…" : "Optimize"}
         </Button>
       </div>
+
+      {isPending && (
+        <div className="space-y-2">
+          <p className="text-sm text-muted-foreground">
+            {progress
+              ? `Checking vessel ${progress.vessel} of ${progress.total}: ${progress.name}…`
+              : "Starting…"}
+          </p>
+          <Progress value={progress ? (progress.vessel / progress.total) * 100 : 0} />
+        </div>
+      )}
 
       {builds.length === 0 && (
         <p className="text-sm text-muted-foreground">
@@ -291,30 +369,35 @@ function AnonOptimizeForm() {
 
   const [buildId, setBuildId] = useState(builds[0]?.id ?? "")
   const [results, setResults] = useState<VesselResult[]>([])
+  const [isPending, setIsPending] = useState(false)
+  const [progress, setProgress] = useState<OptimizeProgress | null>(null)
 
   const selectedBuild = builds.find((b) => b.id === buildId)
   const pinnedHandles = new Set<number>(selectedBuild?.pinned_relics ?? [])
 
-  const optimizeMutation = useMutation({
-    mutationFn: () => {
-      const build = builds.find((b) => b.id === buildId)
-      if (!build || !char) throw new Error("Missing build or character data")
+  const handleOptimize = async () => {
+    const build = builds.find((b) => b.id === buildId)
+    if (!build || !char) return
 
-      // ParsedRelicData uses flat effect_1/2/3 fields; OwnedRelic expects arrays
-      const relics = char.relics.map((r: any) => ({
-        ga_handle: r.ga_handle,
-        item_id: r.item_id,
-        real_id: r.real_id,
-        color: r.color,
-        effects: [r.effect_1, r.effect_2, r.effect_3],
-        curses: [r.curse_1, r.curse_2, r.curse_3],
-        is_deep: r.is_deep,
-        name: r.name,
-        tier: r.tier,
-      }))
+    // ParsedRelicData uses flat effect_1/2/3 fields; OwnedRelic expects arrays
+    const relics = char.relics.map((r: any) => ({
+      ga_handle: r.ga_handle,
+      item_id: r.item_id,
+      real_id: r.real_id,
+      color: r.color,
+      effects: [r.effect_1, r.effect_2, r.effect_3],
+      curses: [r.curse_1, r.curse_2, r.curse_3],
+      is_deep: r.is_deep,
+      name: r.name,
+      tier: r.tier,
+    }))
 
-      return OptimizeService.runOptimize({
-        requestBody: {
+    setIsPending(true)
+    setProgress(null)
+    setResults([])
+    try {
+      const data = await runOptimizeStream(
+        {
           build: {
             id: build.id,
             name: build.name,
@@ -325,14 +408,19 @@ function AnonOptimizeForm() {
             curse_max: build.curse_max,
             tier_weights: build.tier_weights ?? null,
             pinned_relics: build.pinned_relics ?? [],
-          } as any,
-          relics: relics as any,
+          },
+          relics,
         },
-      })
-    },
-    onSuccess: (data) => setResults(data),
-    onError: handleError.bind(showErrorToast),
-  })
+        setProgress,
+      )
+      setResults(data)
+    } catch (err) {
+      showErrorToast(err instanceof Error ? err.message : "Optimization failed")
+    } finally {
+      setIsPending(false)
+      setProgress(null)
+    }
+  }
 
   if (allChars.length === 0) {
     return (
@@ -386,12 +474,23 @@ function AnonOptimizeForm() {
           </div>
         )}
         <Button
-          onClick={() => optimizeMutation.mutate()}
-          disabled={!buildId || optimizeMutation.isPending}
+          onClick={handleOptimize}
+          disabled={!buildId || isPending}
         >
-          {optimizeMutation.isPending ? "Optimizing…" : "Optimize"}
+          {isPending ? "Optimizing…" : "Optimize"}
         </Button>
       </div>
+
+      {isPending && (
+        <div className="space-y-2">
+          <p className="text-sm text-muted-foreground">
+            {progress
+              ? `Checking vessel ${progress.vessel} of ${progress.total}: ${progress.name}…`
+              : "Starting…"}
+          </p>
+          <Progress value={progress ? (progress.vessel / progress.total) * 100 : 0} />
+        </div>
+      )}
 
       <p className="text-xs text-muted-foreground border rounded-md px-3 py-2 bg-muted/40">
         Running in session mode with data from your uploaded save.{" "}

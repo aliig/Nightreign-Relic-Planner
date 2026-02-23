@@ -6,10 +6,12 @@ Supports two modes:
 
 The character class used for vessel filtering is always taken from build_def.character.
 """
+import json
 import uuid
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlmodel import select
 
@@ -169,4 +171,120 @@ def run_optimize(
     return _run_optimizer(
         build_def, owned_relics, build_def.character,
         req.top_n, req.max_per_vessel, ds,
+    )
+
+
+@router.post("/stream")
+def run_optimize_stream(
+    req: OptimizeRequest,
+    ds: GameDataDep,
+    current_user: OptionalUser,
+    session: SessionDep,
+) -> StreamingResponse:
+    """Same as POST /optimize/ but streams SSE progress events while running.
+
+    Emits ``data:`` lines in the format::
+
+        {"type": "progress", "vessel": 3, "total": 12, "name": "Iron Sentinel"}
+        {"type": "result",   "data": [...VesselResult...]}
+        {"type": "error",    "detail": "..."}   (on optimizer failure)
+
+    HTTP-level errors (auth, bad request, not found) are raised normally
+    before streaming begins.
+    """
+    # --- Resolve build_def + owned_relics (may raise HTTPException) ---
+    using_db = req.build_id is not None or req.character_id is not None
+    using_inline = req.build is not None or req.relics is not None
+
+    if using_db and using_inline:
+        raise HTTPException(
+            status_code=422,
+            detail="Provide either (build_id + character_id) or (build + relics), not both.",
+        )
+
+    if using_db:
+        if current_user is None:
+            raise HTTPException(status_code=401, detail="Authentication required for DB mode")
+        if req.build_id is None or req.character_id is None:
+            raise HTTPException(
+                status_code=422,
+                detail="DB mode requires both build_id and character_id.",
+            )
+
+        db_build = session.get(Build, req.build_id)
+        if not db_build or db_build.owner_id != current_user.id:
+            raise HTTPException(status_code=404, detail="Build not found")
+
+        char_slot = session.get(CharacterSlot, req.character_id)
+        if not char_slot or char_slot.owner_id != current_user.id:
+            raise HTTPException(status_code=404, detail="Character not found")
+
+        build_def = BuildDefinition(
+            id=str(db_build.id),
+            name=db_build.name,
+            character=db_build.character,
+            tiers=db_build.tiers,
+            family_tiers=db_build.family_tiers,
+            include_deep=db_build.include_deep,
+            curse_max=db_build.curse_max,
+            tier_weights=db_build.tier_weights,
+            pinned_relics=db_build.pinned_relics or [],
+        )
+
+        db_relics = session.exec(
+            select(Relic).where(Relic.character_id == req.character_id)
+        ).all()
+        owned_relics: list[OwnedRelic] = [
+            OwnedRelic(
+                ga_handle=r.ga_handle,
+                item_id=r.item_id,
+                real_id=r.real_id,
+                color=r.color,
+                effects=[r.effect_1, r.effect_2, r.effect_3],
+                curses=[r.curse_1, r.curse_2, r.curse_3],
+                is_deep=r.is_deep,
+                name=r.name,
+                tier=r.tier,
+            )
+            for r in db_relics
+        ]
+    else:
+        if req.build is None or req.relics is None:
+            raise HTTPException(
+                status_code=422,
+                detail="Inline mode requires build and relics.",
+            )
+        if len(req.relics) > settings.MAX_RELICS_PER_OPTIMIZE:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Too many relics (max {settings.MAX_RELICS_PER_OPTIMIZE}).",
+            )
+        build_def = req.build
+        owned_relics = req.relics
+
+    # --- Streaming generator ---
+    def _generate():
+        try:
+            hero_type = _resolve_hero_type(build_def.character)
+            inventory = RelicInventory.from_owned_relics(owned_relics)
+            scorer = BuildScorer(ds)
+            optimizer = VesselOptimizer(ds, scorer)
+            for event in optimizer.optimize_vessels_streaming(
+                build_def, inventory, hero_type, req.top_n, req.max_per_vessel,
+            ):
+                if event["type"] == "result":
+                    payload = {
+                        "type": "result",
+                        "data": [r.model_dump(mode="json") for r in event["data"]],
+                    }
+                    yield f"data: {json.dumps(payload)}\n\n"
+                else:
+                    yield f"data: {json.dumps(event)}\n\n"
+        except Exception as exc:
+            yield f"data: {json.dumps({'type': 'error', 'detail': str(exc)})}\n\n"
+
+    return StreamingResponse(
+        _generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

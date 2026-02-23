@@ -78,6 +78,36 @@ class VesselOptimizer:
             for assignment in raw
         ]
 
+    def optimize_vessels_streaming(
+        self,
+        build: BuildDefinition,
+        inventory: RelicInventory,
+        hero_type: int,
+        top_n: int = 10,
+        max_per_vessel: int = 3,
+    ):
+        """Like optimize_all_vessels but yields events for SSE streaming.
+
+        Yields dicts:
+            {"type": "progress", "vessel": i, "total": n, "name": vessel_name}
+            {"type": "result", "data": list[VesselResult]}   (final event)
+        """
+        vessels = list(self.data_source.get_all_vessels_for_hero(hero_type))
+        total = len(vessels)
+        all_results: list[VesselResult] = []
+
+        for i, v in enumerate(vessels):
+            vessel_data = dict(v)
+            vessel_data["_id"] = v["vessel_id"]
+            results = self.optimize(build, inventory, vessel_data, max_per_vessel)
+            for r in results:
+                r.vessel_id = v["vessel_id"]
+            all_results.extend(results)
+            yield {"type": "progress", "vessel": i + 1, "total": total, "name": v["Name"]}
+
+        all_results.sort(key=lambda r: (not r.meets_requirements, -r.total_score))
+        yield {"type": "result", "data": all_results[:top_n]}
+
     def optimize_all_vessels(self, build: BuildDefinition, inventory: RelicInventory,
                              hero_type: int, top_n: int = 10,
                              max_per_vessel: int = 3) -> list[VesselResult]:
