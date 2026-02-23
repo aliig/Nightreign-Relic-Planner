@@ -115,3 +115,43 @@ def test_get_effect_stacking_type(
 def test_get_support_languages_includes_en_us(ds: SourceDataHandler) -> None:
     languages = ds.get_support_languages()
     assert "en_US" in languages
+
+
+def test_effect_families_require_at_least_two_resolved_members(
+    ds: SourceDataHandler,
+) -> None:
+    """Every family returned by get_all_families_list() must have 2+ members with IDs.
+
+    Regression: stacking_rules.json entries like 'Improved Damage Negation at Low HP'
+    have +1/+2 variants that lack effect params, so after ID resolution those members
+    are pruned to nothing — leaving a single-member 'family'. The fix ensures such
+    entries are excluded from the families list entirely.
+    """
+    families = ds.get_all_families_list()
+    for fam in families:
+        assert len(fam["member_names"]) >= 2, (
+            f"Family '{fam['name']}' has only {len(fam['member_names'])} resolved member(s); "
+            "expected 2+. Single-member families should not be exposed as families."
+        )
+
+
+def test_effect_families_known_single_member_effects_are_not_families(
+    ds: SourceDataHandler,
+) -> None:
+    """Specific effects known to have no real magnitude variants must not be families.
+
+    These had +1/+2 entries in stacking_rules.json but no matching effect params,
+    so only the base variant resolves — making them singletons, not families.
+    """
+    known_non_families = [
+        "Improved Damage Negation at Low HP",
+        "Improved Roar & Breath Attacks",
+        "Reduced FP Consumption",
+        "Critical Hits Earn Runes",
+        "Taking attacks improves attack power",
+    ]
+    family_names = {fam["name"] for fam in ds.get_all_families_list()}
+    for name in known_non_families:
+        assert name not in family_names, (
+            f"'{name}' should not appear as an effect family (no resolved magnitude variants)"
+        )

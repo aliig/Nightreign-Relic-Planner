@@ -521,10 +521,12 @@ class SourceDataHandler:
         for fam in self._effect_families.values():
             fam["members"] = [m for m in fam["members"] if m["effect_ids"]]
 
-        # Build reverse lookup; prune empty families
+        # Build reverse lookup; prune families with fewer than 2 resolved members
+        # (single-member families arise when +1/+2 variants in stacking_rules.json
+        # have no corresponding effect params, leaving only the base entry)
         to_remove = []
         for base, fam in self._effect_families.items():
-            if not any(m["effect_ids"] for m in fam["members"]):
+            if len(fam["members"]) < 2:
                 to_remove.append(base)
                 continue
             total = len(fam["members"])
