@@ -190,6 +190,7 @@ function BuildCard({
   build,
   onDelete,
   onRename,
+  onChangeCharacter,
   onDuplicate,
   onToggleFeatured,
   isDeleting,
@@ -197,6 +198,7 @@ function BuildCard({
   build: BuildCardData
   onDelete: (id: string) => void
   onRename: (id: string, newName: string) => void
+  onChangeCharacter: (id: string, character: string) => void
   onDuplicate?: (id: string) => void
   onToggleFeatured?: (id: string) => void
   isDeleting?: boolean
@@ -265,8 +267,21 @@ function BuildCard({
         </div>
       </CardHeader>
       <CardContent>
-        <CardDescription>
-          {build.character} · {effectCount} effect{effectCount !== 1 ? "s" : ""} prioritized
+        <CardDescription className="flex items-center gap-1">
+          <Select
+            value={build.character}
+            onValueChange={(value) => onChangeCharacter(build.id, value)}
+          >
+            <SelectTrigger className="h-auto border-none bg-transparent p-0 shadow-none text-muted-foreground text-sm font-normal hover:text-foreground transition-colors [&>svg]:h-3 [&>svg]:w-3 [&>svg]:opacity-50 hover:[&>svg]:opacity-100 w-auto gap-1">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {CHARACTER_NAMES.map((c) => (
+                <SelectItem key={c} value={c}>{c}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <span>· {effectCount} effect{effectCount !== 1 ? "s" : ""} prioritized</span>
         </CardDescription>
         {build.updated_at && (
           <p className="text-xs text-muted-foreground mt-1">
@@ -446,6 +461,13 @@ function AuthBuildList() {
     onError: handleError.bind(showErrorToast),
   })
 
+  const changeCharacterMutation = useMutation({
+    mutationFn: ({ buildId, character }: { buildId: string; character: string }) =>
+      BuildsService.updateBuild({ buildId, requestBody: { character } }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["builds"] }),
+    onError: handleError.bind(showErrorToast),
+  })
+
   const duplicateMutation = useMutation({
     mutationFn: (buildId: string) => BuildsService.cloneBuild({ buildId }),
     onSuccess: () => {
@@ -490,6 +512,7 @@ function AuthBuildList() {
           }}
           onDelete={(id) => deleteMutation.mutate(id)}
           onRename={(id, name) => renameMutation.mutate({ buildId: id, name })}
+          onChangeCharacter={(id, character) => changeCharacterMutation.mutate({ buildId: id, character })}
           onDuplicate={(id) => duplicateMutation.mutate(id)}
           onToggleFeatured={user?.is_superuser ? (id) => toggleFeaturedMutation.mutate(id) : undefined}
           isDeleting={deleteMutation.isPending && deleteMutation.variables === build.id}
@@ -576,6 +599,7 @@ function AnonBuildsSection() {
               build={build}
               onDelete={remove}
               onRename={(id, name) => update(id, { name })}
+              onChangeCharacter={(id, character) => update(id, { character })}
               onDuplicate={handleDuplicate}
             />
           ))}
