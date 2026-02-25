@@ -274,17 +274,25 @@ class SourceDataHandler:
         if effect_id in (-1, 0, 4294967295):
             return "Empty"
         try:
-            row = self.effect_name[self.effect_name["id"] == effect_id]
-            if not row.empty:
-                text = str(row["text"].values[0]).strip()
-                if text != "%null%":
-                    return text
+            # Prefer attachTextId → FMG (matches game engine display logic).
+            # The effect_id and FMG text-id namespaces overlap, so a direct
+            # FMG hit on effect_id may be the *text label* of a different effect
+            # (e.g. effect 6001400 has attachTextId=7001403 "+3", but the FMG
+            # also has id=6001400 = "+4" which is the label for effect 6001401).
             if effect_id in self.effect_params.index:
                 text_id = int(self.effect_params.loc[effect_id, "attachTextId"])
                 if text_id != -1:
                     row = self.effect_name[self.effect_name["id"] == text_id]
                     if not row.empty:
-                        return str(row["text"].values[0]).strip()
+                        text = str(row["text"].values[0]).strip()
+                        if text != "%null%":
+                            return text
+            # Fallback: direct FMG lookup by effect_id
+            row = self.effect_name[self.effect_name["id"] == effect_id]
+            if not row.empty:
+                text = str(row["text"].values[0]).strip()
+                if text != "%null%":
+                    return text
         except Exception:
             pass
         return f"Effect {effect_id}"
@@ -551,12 +559,18 @@ class SourceDataHandler:
                 normed = _norm(member["name"])
                 family_name_norm.setdefault(normed, []).append((base, idx))
 
-        # Pass 1: direct FMG match
+        # Pass 1: direct FMG match — only for canonical effects where attachTextId
+        # equals the effect_id itself.  When a FMG text-id happens to equal an
+        # effect_id but that effect's attachTextId points elsewhere, it means
+        # the FMG entry is the *display label* for a different effect (id-namespace
+        # collision).  Skip those here; pass 2 will resolve them via get_effect_name.
         matched: set[int] = set()
         for _, row in self.effect_name.iterrows():
             eff_id = int(row["id"])
             name = str(row["text"])
             if name == "%null%" or eff_id not in self.effect_params.index:
+                continue
+            if int(self.effect_params.loc[eff_id, "attachTextId"]) != eff_id:
                 continue
             normed = _norm(name)
             hits = family_name_norm.get(normed) or family_name_norm.get(normed.rsplit("(", 1)[0].strip())
