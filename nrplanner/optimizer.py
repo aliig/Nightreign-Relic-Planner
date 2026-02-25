@@ -141,6 +141,7 @@ class VesselOptimizer:
         vessel_eff: set[int] = set()
         vessel_excl: set[int] = set()
         vessel_no_stack_excl: set[int] = set()
+        vessel_no_stack_compat: set[int] = set()
         vessel_curse_counts: dict[int, int] = {}
         total_score = 0
 
@@ -148,15 +149,18 @@ class VesselOptimizer:
             relic = assignments[i][0]
             if relic:
                 score = self.scorer.score_relic_in_context(
-                    relic, build, vessel_eff, vessel_excl, vessel_no_stack_excl, vessel_curse_counts)
-                breakdown = self.scorer.get_breakdown(relic, build, vessel_eff, vessel_excl, vessel_no_stack_excl)
+                    relic, build, vessel_eff, vessel_excl, vessel_no_stack_excl,
+                    vessel_curse_counts, vessel_no_stack_compat)
+                breakdown = self.scorer.get_breakdown(
+                    relic, build, vessel_eff, vessel_excl, vessel_no_stack_excl, vessel_no_stack_compat)
                 assigned_effect_ids.update(relic.all_effects)
                 for eff in relic.all_effects:
                     text_id = self.data_source.get_effect_text_id(eff)
                     if text_id != -1:
                         assigned_effect_ids.add(text_id)
-                e, c, ns = self._get_relic_stacking_adds(relic)
+                e, c, ns, nsc = self._get_relic_stacking_adds(relic)
                 vessel_eff.update(e); vessel_excl.update(c); vessel_no_stack_excl.update(ns)
+                vessel_no_stack_compat.update(nsc)
                 for curse in self._get_relic_curse_ids(relic):
                     vessel_curse_counts[curse] = vessel_curse_counts.get(curse, 0) + 1
             else:
@@ -250,6 +254,7 @@ class VesselOptimizer:
         vessel_eff: set[int] = set()
         vessel_excl: set[int] = set()
         vessel_no_stack_excl: set[int] = set()
+        vessel_no_stack_compat: set[int] = set()
         vessel_curse_counts: dict[int, int] = {}
 
         for slot_idx in range(num_slots):
@@ -258,7 +263,8 @@ class VesselOptimizer:
                 if relic.ga_handle in used:
                     continue
                 score = self.scorer.score_relic_in_context(
-                    relic, build, vessel_eff, vessel_excl, vessel_no_stack_excl, vessel_curse_counts)
+                    relic, build, vessel_eff, vessel_excl, vessel_no_stack_excl,
+                    vessel_curse_counts, vessel_no_stack_compat)
                 if best is None or score > best[0]:
                     best = (score, relic)
 
@@ -269,8 +275,9 @@ class VesselOptimizer:
             score, relic = best
             assigned[slot_idx] = (relic, score)
             used.add(relic.ga_handle)
-            e, c, ns = self._get_relic_stacking_adds(relic)
+            e, c, ns, nsc = self._get_relic_stacking_adds(relic)
             vessel_eff.update(e); vessel_excl.update(c); vessel_no_stack_excl.update(ns)
+            vessel_no_stack_compat.update(nsc)
             for curse in self._get_relic_curse_ids(relic):
                 vessel_curse_counts[curse] = vessel_curse_counts.get(curse, 0) + 1
 
@@ -285,6 +292,7 @@ class VesselOptimizer:
 
         def backtrack(slot_idx: int, current: list, used: set[int],
                       v_eff: set, v_excl: set, v_no_stack_excl: set,
+                      v_no_stack_compat: set,
                       curse_counts: dict[int, int], score: int) -> None:
             nonlocal min_threshold
             if time.time() > deadline:
@@ -306,7 +314,8 @@ class VesselOptimizer:
 
             # Try empty slot
             current[slot_idx] = (None, 0)
-            backtrack(slot_idx + 1, current, used, v_eff, v_excl, v_no_stack_excl, curse_counts, score)
+            backtrack(slot_idx + 1, current, used, v_eff, v_excl, v_no_stack_excl,
+                      v_no_stack_compat, curse_counts, score)
 
             remaining_max = sum(
                 candidates_per_slot[s][0][0] if candidates_per_slot[s] else 0
@@ -319,30 +328,33 @@ class VesselOptimizer:
                     continue  # upper-bound prune
 
                 ctx_score = self.scorer.score_relic_in_context(
-                    relic, build, v_eff, v_excl, v_no_stack_excl, curse_counts)
+                    relic, build, v_eff, v_excl, v_no_stack_excl,
+                    curse_counts, v_no_stack_compat)
                 if score + ctx_score + remaining_max <= min_threshold:
                     continue  # actual-score prune
 
-                added_eff, added_excl, added_ns = self._get_relic_stacking_adds(relic)
+                added_eff, added_excl, added_ns, added_nsc = self._get_relic_stacking_adds(relic)
                 added_curses = self._get_relic_curse_ids(relic)
 
                 current[slot_idx] = (relic, ctx_score)
                 used.add(relic.ga_handle)
                 v_eff.update(added_eff); v_excl.update(added_excl); v_no_stack_excl.update(added_ns)
+                v_no_stack_compat.update(added_nsc)
                 for cid in added_curses:
                     curse_counts[cid] = curse_counts.get(cid, 0) + 1
 
                 backtrack(slot_idx + 1, current, used, v_eff, v_excl, v_no_stack_excl,
-                          curse_counts, score + ctx_score)
+                          v_no_stack_compat, curse_counts, score + ctx_score)
 
                 used.discard(relic.ga_handle)
                 v_eff -= added_eff; v_excl -= added_excl; v_no_stack_excl -= added_ns
+                v_no_stack_compat -= added_nsc
                 for cid in added_curses:
                     curse_counts[cid] -= 1
                     if curse_counts[cid] == 0:
                         del curse_counts[cid]
 
-        backtrack(0, [(None, 0)] * num_slots, set(), set(), set(), set(), {}, 0)
+        backtrack(0, [(None, 0)] * num_slots, set(), set(), set(), set(), set(), {}, 0)
         return [assignment for _, assignment in top] or [[(None, 0)] * num_slots]
 
     # ------------------------------------------------------------------
@@ -401,21 +413,32 @@ class VesselOptimizer:
     # Stacking state helpers
     # ------------------------------------------------------------------
 
-    def _get_relic_stacking_adds(self, relic: OwnedRelic) -> tuple[set, set, set]:
+    def _get_relic_stacking_adds(self, relic: OwnedRelic) -> tuple[set, set, set, set]:
         effect_ids: set[int] = set()
         exclusivity_ids: set[int] = set()
         no_stack_exclusivity_ids: set[int] = set()
+        no_stack_compat_ids: set[int] = set()
         for eff in relic.all_effects:
             effect_ids.add(eff)
             text_id = self.data_source.get_effect_text_id(eff)
             if text_id != -1 and text_id != eff:
                 effect_ids.add(text_id)
+            compat = self.data_source.get_effect_conflict_id(eff)
+            stype = self.data_source.get_effect_stacking_type(eff)
             excl = self.data_source.get_effect_exclusivity_id(eff)
             if excl != -1:
                 exclusivity_ids.add(excl)
-                if self.data_source.get_effect_stacking_type(eff) == "no_stack":
+                if stype == "no_stack":
                     no_stack_exclusivity_ids.add(excl)
-        return effect_ids, exclusivity_ids, no_stack_exclusivity_ids
+            # Tier-family compat tracking for no_stack mutual exclusion:
+            # Rule 1: no_stack base placed (compat == eff_id, self-referencing)
+            if stype == "no_stack" and compat != -1 and compat == eff:
+                no_stack_compat_ids.add(compat)
+            # Rule 2: variant placed that points to a no_stack base
+            elif compat != -1 and compat != eff:
+                if self.data_source.get_effect_stacking_type(compat) == "no_stack":
+                    no_stack_compat_ids.add(compat)
+        return effect_ids, exclusivity_ids, no_stack_exclusivity_ids, no_stack_compat_ids
 
     @staticmethod
     def _get_relic_curse_ids(relic: OwnedRelic) -> list[int]:

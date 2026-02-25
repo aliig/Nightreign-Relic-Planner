@@ -111,14 +111,19 @@ class BuildScorer:
     def _effect_stacking_score(self, eff_id: int, tier: str, weight: int,
                                 vessel_effect_ids: set[int],
                                 vessel_exclusivity_ids: set[int],
-                                vessel_no_stack_exclusivity_ids: set[int]) -> int:
+                                vessel_no_stack_exclusivity_ids: set[int],
+                                vessel_no_stack_compat_ids: set[int] | None = None) -> int:
         """Weight of an effect given what's already in the vessel (0 if redundant).
 
-        Uses ``exclusivityId`` (not ``compatibilityId``) for mutual-exclusion
-        checks.  ``exclusivityId`` is a narrow group field that only links
-        effects that truly override each other (e.g. weapon imbues, ash-of-war
-        swaps).  Effects with ``exclusivityId == -1`` fall back to identity-
-        based conflict detection (same ``text_id`` or ``eff_id``).
+        Uses ``exclusivityId`` for mutual-exclusion between effects that truly
+        override each other (e.g. weapon imbues, ash-of-war swaps).  Effects
+        with ``exclusivityId == -1`` fall back to identity-based conflict
+        detection (same ``text_id`` or ``eff_id``).
+
+        Tier-family stacking (e.g. "HP Restoration +0/+1/+2") is handled via
+        ``compatibilityId``: when a ``no_stack`` base is placed, its compat ID
+        enters ``vessel_no_stack_compat_ids``, blocking ``unique`` tier variants
+        that share the same compat group.
         """
         stype    = self.data_source.get_effect_stacking_type(eff_id)
         excl     = self.data_source.get_effect_exclusivity_id(eff_id)
@@ -133,6 +138,11 @@ class BuildScorer:
                 return 0
             if excl != -1 and excl in vessel_no_stack_exclusivity_ids:
                 return 0
+            # Tier-family cross-check: unique variants blocked by no_stack base
+            if vessel_no_stack_compat_ids is not None:
+                compat = self.data_source.get_effect_conflict_id(eff_id)
+                if compat != -1 and compat in vessel_no_stack_compat_ids:
+                    return 0
             return weight
         # no_stack
         if excl != -1 and excl in vessel_exclusivity_ids:
@@ -141,13 +151,19 @@ class BuildScorer:
             return 0
         if eff_id in vessel_effect_ids:
             return 0
+        # Tier-family reverse: I'm a no_stack base and a variant is already placed
+        if vessel_no_stack_compat_ids is not None:
+            compat = self.data_source.get_effect_conflict_id(eff_id)
+            if compat != -1 and compat == eff_id and compat in vessel_no_stack_compat_ids:
+                return 0
         return weight
 
     def score_relic_in_context(self, relic: OwnedRelic, build: BuildDefinition,
                                 vessel_effect_ids: set[int],
                                 vessel_exclusivity_ids: set[int],
                                 vessel_no_stack_exclusivity_ids: set[int],
-                                vessel_curse_counts: dict[int, int] | None = None) -> int:
+                                vessel_curse_counts: dict[int, int] | None = None,
+                                vessel_no_stack_compat_ids: set[int] | None = None) -> int:
         """Score considering stacking state of already-assigned relics."""
         score = 0
         for eff in relic.effects:
@@ -157,7 +173,8 @@ class BuildScorer:
             if tier in SCORED_TIERS:
                 score += self._effect_stacking_score(
                     eff, tier, weight,
-                    vessel_effect_ids, vessel_exclusivity_ids, vessel_no_stack_exclusivity_ids)
+                    vessel_effect_ids, vessel_exclusivity_ids,
+                    vessel_no_stack_exclusivity_ids, vessel_no_stack_compat_ids)
         for curse in relic.curses:
             if curse in (EMPTY_EFFECT, 0):
                 continue
@@ -165,7 +182,8 @@ class BuildScorer:
             if tier in SCORED_TIERS:
                 score += self._effect_stacking_score(
                     curse, tier, weight,
-                    vessel_effect_ids, vessel_exclusivity_ids, vessel_no_stack_exclusivity_ids)
+                    vessel_effect_ids, vessel_exclusivity_ids,
+                    vessel_no_stack_exclusivity_ids, vessel_no_stack_compat_ids)
         if vessel_curse_counts is not None:
             for curse in relic.curses:
                 if curse in (EMPTY_EFFECT, 0):
@@ -180,24 +198,32 @@ class BuildScorer:
 
     def _classify_override(self, eff_id: int, vessel_effect_ids: set[int],
                            vessel_exclusivity_ids: set[int],
-                           vessel_no_stack_exclusivity_ids: set[int]) -> str:
+                           vessel_no_stack_exclusivity_ids: set[int],
+                           vessel_no_stack_compat_ids: set[int] | None = None) -> str:
         text_id = self.data_source.get_effect_text_id(eff_id)
         if eff_id in vessel_effect_ids:
             return "duplicate"
         if text_id != -1 and text_id in vessel_effect_ids:
             return "duplicate"
+        # Tier-family conflict (unique blocked by no_stack base via compat)
+        if vessel_no_stack_compat_ids is not None:
+            compat = self.data_source.get_effect_conflict_id(eff_id)
+            if compat != -1 and compat in vessel_no_stack_compat_ids:
+                return "overridden"
         return "overridden"
 
     def get_breakdown(self, relic: OwnedRelic, build: BuildDefinition,
                       other_effect_ids: set[int] | None = None,
                       other_exclusivity_ids: set[int] | None = None,
                       other_no_stack_exclusivity_ids: set[int] | None = None,
+                      other_no_stack_compat_ids: set[int] | None = None,
                       ) -> list[dict]:
         """Per-effect scoring detail for UI / API display."""
         breakdown = []
         _eff_ids  = other_effect_ids or set()
         _excl_ids = other_exclusivity_ids or set()
         _ns_ids   = other_no_stack_exclusivity_ids or set()
+        _ns_compat = other_no_stack_compat_ids
 
         for is_curse, effs in ((False, relic.effects), (True, relic.curses)):
             for eff in effs:
@@ -208,10 +234,10 @@ class BuildScorer:
                 override_status = None
                 if other_effect_ids is not None and tier in SCORED_TIERS:
                     ctx_score = self._effect_stacking_score(
-                        eff, tier, weight, _eff_ids, _excl_ids, _ns_ids)
+                        eff, tier, weight, _eff_ids, _excl_ids, _ns_ids, _ns_compat)
                     if ctx_score == 0 and base_score != 0:
                         override_status = self._classify_override(
-                            eff, _eff_ids, _excl_ids, _ns_ids)
+                            eff, _eff_ids, _excl_ids, _ns_ids, _ns_compat)
                 breakdown.append({
                     "effect_id": eff,
                     "name": self.data_source.get_effect_name(eff),
