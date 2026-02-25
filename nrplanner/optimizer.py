@@ -5,7 +5,7 @@ from nrplanner.constants import EMPTY_EFFECT
 from nrplanner.data import SourceDataHandler
 from nrplanner.models import (
     BuildDefinition, OwnedRelic, RelicInventory,
-    SlotAssignment, VesselResult,
+    SlotAssignment, VesselResult, SCORED_TIERS,
 )
 from nrplanner.scoring import BuildScorer
 
@@ -167,6 +167,14 @@ class VesselOptimizer:
                 score, breakdown = 0, []
             slot_results[i] = (relic, score, breakdown)
             total_score += score
+
+        # Post-process: tier-family direction correction.
+        # Per game rules, unique variants (+1/+2) always override the no_stack
+        # base (+0) — the base is redundant whenever any variant is present.
+        # The left-to-right slot loop above may have assigned the base first
+        # (e.g. standard slot 0-2 before deep slot 3-5), causing the variants
+        # to be falsely blocked.  Detect and fix that here.
+        total_score = self._fix_tier_family_direction(slot_results, build, total_score)
 
         slot_assignments = [
             SlotAssignment(
@@ -408,6 +416,96 @@ class VesselOptimizer:
                 return None, []  # cannot fit — exclude vessel
 
         return pinned_map, slot_owner
+
+    # ------------------------------------------------------------------
+    # Tier-family direction correction
+    # ------------------------------------------------------------------
+
+    def _fix_tier_family_direction(
+        self, slot_results: list, build: BuildDefinition, total_score: int,
+    ) -> int:
+        """Correct the no_stack-base vs. unique-variant scoring direction.
+
+        The scoring loop assigns relics left-to-right (standard slots before
+        deep slots).  If a no_stack base lands in an earlier slot it blocks
+        all unique variants that arrive later, even though the game says the
+        variant always overrides the base.
+
+        For each tier-family compat group that contains BOTH a no_stack base
+        AND at least one unique variant in the same vessel:
+          1. Mark the base redundant (score → 0).
+          2. Re-score variants in slot order: each unique eff_id scores once
+             (the first occurrence wins); subsequent identical eff_ids stay
+             redundant as duplicates.
+        """
+        # Collect all scored effects that belong to a real tier-family group.
+        # Key: compat_id (the no_stack base's eff_id, which is self-referencing)
+        # Value: list of (slot_i, bk_j, eff_id, stype)
+        family_map: dict[int, list[tuple[int, int, int, str]]] = {}
+        for slot_i, (relic, _score, breakdown) in enumerate(slot_results):
+            if not relic:
+                continue
+            for bk_j, entry in enumerate(breakdown):
+                tier = entry.get("tier")
+                if tier not in SCORED_TIERS:
+                    continue
+                eff_id = entry["effect_id"]
+                compat = self.data_source.get_effect_conflict_id(eff_id)
+                # Only real tier-family groups: compat is self-referencing
+                if compat == -1 or self.data_source.get_effect_conflict_id(compat) != compat:
+                    continue
+                stype = self.data_source.get_effect_stacking_type(eff_id)
+                if stype in ("no_stack", "unique"):
+                    family_map.setdefault(compat, []).append((slot_i, bk_j, eff_id, stype))
+
+        for compat, members in family_map.items():
+            has_base    = any(s == "no_stack" for _, _, _, s in members)
+            has_variant = any(s == "unique"   for _, _, _, s in members)
+            if not (has_base and has_variant):
+                continue
+
+            # Step 1: mark all no_stack bases as redundant.
+            for slot_i, bk_j, eff_id, stype in members:
+                if stype != "no_stack":
+                    continue
+                relic, slot_score, breakdown = slot_results[slot_i]
+                entry = breakdown[bk_j]
+                old = entry["score"]
+                if old > 0:
+                    entry["score"] = 0
+                    entry["redundant"] = True
+                    entry["override_status"] = "overridden"
+                    slot_results[slot_i] = (relic, slot_score - old, breakdown)
+                    total_score -= old
+
+            # Step 2: re-score variants in slot order.
+            # Each unique eff_id may score once; identical eff_ids after the
+            # first are duplicates and stay redundant.
+            placed_variant_effs: set[int] = set()
+            for slot_i, bk_j, eff_id, stype in sorted(members, key=lambda m: m[0]):
+                if stype != "unique":
+                    continue
+                if eff_id in placed_variant_effs:
+                    # Duplicate of an already-scored variant — stays redundant.
+                    continue
+                placed_variant_effs.add(eff_id)
+                relic, slot_score, breakdown = slot_results[slot_i]
+                entry = breakdown[bk_j]
+                if not entry["redundant"]:
+                    # Already scoring correctly (e.g. variant was placed before
+                    # the base in the original loop).
+                    continue
+                # This variant was wrongly blocked by the base — restore its score.
+                _, weight = self.scorer._resolve_tier_and_weight(eff_id, build)
+                if weight <= 0:
+                    continue
+                entry["score"] = weight
+                entry["redundant"] = False
+                entry["override_status"] = None
+                slot_results[slot_i] = (relic, slot_score + weight, breakdown)
+                total_score += weight
+
+        return total_score
 
     # ------------------------------------------------------------------
     # Stacking state helpers

@@ -455,6 +455,52 @@ class TestFullPipelineTierFamilyStacking:
             f"total_score={best.total_score} (expected ≤50)"
         )
 
+    def test_base_is_redundant_not_variant_when_both_assigned(
+        self, optimizer: VesselOptimizer,
+    ) -> None:
+        """Direction test: when both base (+0) and variant (+1) end up in the
+        same vessel, the BASE must be marked redundant — not the variant.
+
+        Regression: the left-to-right slot loop assigns standard slots before
+        deep slots, so the base could be scored first (blocking the variant).
+        _fix_tier_family_direction() corrects this post-hoc.
+        """
+        build = _make_build(preferred=[_HP_RESTORE_BASE, _HP_RESTORE_PLUS1])
+        inventory = RelicInventory.from_owned_relics([
+            _make_relic([_HP_RESTORE_BASE, EMPTY, EMPTY], ga_handle=1),
+            _make_relic([_HP_RESTORE_PLUS1, EMPTY, EMPTY], ga_handle=2),
+        ])
+        results = optimizer.optimize_all_vessels(build, inventory, 1)
+        assert results
+
+        for result in results:
+            assigned_effects = {
+                eff
+                for a in result.assignments
+                if a.relic is not None
+                for eff in a.relic.all_effects
+            }
+            if _HP_RESTORE_BASE not in assigned_effects or _HP_RESTORE_PLUS1 not in assigned_effects:
+                continue  # both not in same vessel — skip
+            # Both in same vessel: base must be the redundant one
+            base_redundant = False
+            variant_redundant = False
+            for assignment in result.assignments:
+                for entry in assignment.breakdown:
+                    if entry["effect_id"] == _HP_RESTORE_BASE and entry["redundant"]:
+                        base_redundant = True
+                    if entry["effect_id"] == _HP_RESTORE_PLUS1 and entry["redundant"]:
+                        variant_redundant = True
+            assert base_redundant, (
+                f"Base (+0) must be marked redundant when variant (+1) is also present "
+                f"in '{result.vessel_name}'"
+            )
+            assert not variant_redundant, (
+                f"Variant (+1) must NOT be marked redundant when it overrides the base "
+                f"in '{result.vessel_name}'"
+            )
+            return  # found and verified a vessel with both — done
+
     def test_mega_group_100_effects_coexist_in_pipeline(
         self, optimizer: VesselOptimizer,
     ) -> None:
