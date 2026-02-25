@@ -185,3 +185,179 @@ class TestGetBreakdown:
         build = _make_build()
         relic = _make_relic([EMPTY, EMPTY, EMPTY])
         assert scorer.get_breakdown(relic, build) == []
+
+
+# ---------------------------------------------------------------------------
+# Stacking / exclusivity tests
+#
+# These use real effect IDs from the game data to verify that the
+# exclusivityId-based mutual-exclusion logic works correctly:
+#
+# - Different no_stack offensive buffs (compat=100, excl=-1) must NOT
+#   conflict — they only conflict with copies of themselves.
+# - Weapon imbues (compat=200, excl=100) truly override each other.
+# - Ash-of-war swaps (compat=300, excl=200) truly override each other.
+# ---------------------------------------------------------------------------
+
+# Real effect IDs confirmed from AttachEffectParam.csv
+_TAKING_ATTACKS_UP = 7032200       # compat=100, excl=-1, no_stack
+_GUARD_COUNTER_HP  = 7150000       # compat=100, excl=-1, no_stack
+_IMBUE_MAGIC       = 7120000       # compat=200, excl=100, no_stack
+_IMBUE_FIRE        = 7120100       # compat=200, excl=100, no_stack
+_SKILL_PHALANX     = 7122700       # compat=300, excl=200, no_stack
+_SKILL_GRAVITAS    = 7122800       # compat=300, excl=200, no_stack
+
+
+def _vessel_state_from_effects(
+    ds: SourceDataHandler, effect_ids: list[int],
+) -> tuple[set[int], set[int], set[int]]:
+    """Build (vessel_effect_ids, vessel_exclusivity_ids, vessel_no_stack_excl_ids)
+    as if relics with *effect_ids* were already placed in earlier slots."""
+    eff_ids: set[int] = set()
+    excl_ids: set[int] = set()
+    ns_excl_ids: set[int] = set()
+    for eid in effect_ids:
+        eff_ids.add(eid)
+        text_id = ds.get_effect_text_id(eid)
+        if text_id != -1 and text_id != eid:
+            eff_ids.add(text_id)
+        excl = ds.get_effect_exclusivity_id(eid)
+        if excl != -1:
+            excl_ids.add(excl)
+            if ds.get_effect_stacking_type(eid) == "no_stack":
+                ns_excl_ids.add(excl)
+    return eff_ids, excl_ids, ns_excl_ids
+
+
+class TestExclusivityStacking:
+    """Verify exclusivityId-based conflict detection."""
+
+    # -- Different no_stack offensive buffs (compat=100) coexist -------------
+
+    def test_different_no_stack_offensive_buffs_coexist(
+        self, scorer: BuildScorer, ds: SourceDataHandler,
+    ) -> None:
+        """'Taking attacks improves attack power' should NOT be redundant
+        when 'Guard counter boost based on HP' is already placed.
+        Both share compatibilityId=100 but have exclusivityId=-1."""
+        build = _make_build(required=[_TAKING_ATTACKS_UP, _GUARD_COUNTER_HP])
+        relic = _make_relic([_TAKING_ATTACKS_UP, EMPTY, EMPTY])
+        v_eff, v_excl, v_ns = _vessel_state_from_effects(ds, [_GUARD_COUNTER_HP])
+
+        score = scorer.score_relic_in_context(relic, build, v_eff, v_excl, v_ns)
+        assert score > 0, (
+            "Different offensive buffs with excl=-1 must score positively"
+        )
+
+    def test_different_no_stack_offensive_buffs_not_redundant_in_breakdown(
+        self, scorer: BuildScorer, ds: SourceDataHandler,
+    ) -> None:
+        """Breakdown should not mark 'Taking attacks improves attack power'
+        as redundant when a different compat=100 effect is already placed."""
+        build = _make_build(required=[_TAKING_ATTACKS_UP, _GUARD_COUNTER_HP])
+        relic = _make_relic([_TAKING_ATTACKS_UP, EMPTY, EMPTY])
+        v_eff, v_excl, v_ns = _vessel_state_from_effects(ds, [_GUARD_COUNTER_HP])
+
+        breakdown = scorer.get_breakdown(relic, build, v_eff, v_excl, v_ns)
+        for entry in breakdown:
+            if entry["effect_id"] == _TAKING_ATTACKS_UP:
+                assert not entry["redundant"], (
+                    f"Effect should NOT be redundant: {entry}"
+                )
+                assert entry["score"] > 0
+                break
+        else:
+            pytest.fail("Expected effect not found in breakdown")
+
+    # -- Same no_stack effect IS blocked (self-stacking) ---------------------
+
+    def test_duplicate_no_stack_effect_is_redundant(
+        self, scorer: BuildScorer, ds: SourceDataHandler,
+    ) -> None:
+        """Two copies of 'Taking attacks improves attack power' should NOT
+        stack — the second one scores 0."""
+        build = _make_build(required=[_TAKING_ATTACKS_UP])
+        relic = _make_relic([_TAKING_ATTACKS_UP, EMPTY, EMPTY])
+        v_eff, v_excl, v_ns = _vessel_state_from_effects(ds, [_TAKING_ATTACKS_UP])
+
+        score = scorer.score_relic_in_context(relic, build, v_eff, v_excl, v_ns)
+        assert score == 0, "Duplicate no_stack effect must score 0"
+
+    def test_duplicate_no_stack_effect_marked_redundant_in_breakdown(
+        self, scorer: BuildScorer, ds: SourceDataHandler,
+    ) -> None:
+        build = _make_build(required=[_TAKING_ATTACKS_UP])
+        relic = _make_relic([_TAKING_ATTACKS_UP, EMPTY, EMPTY])
+        v_eff, v_excl, v_ns = _vessel_state_from_effects(ds, [_TAKING_ATTACKS_UP])
+
+        breakdown = scorer.get_breakdown(relic, build, v_eff, v_excl, v_ns)
+        for entry in breakdown:
+            if entry["effect_id"] == _TAKING_ATTACKS_UP:
+                assert entry["redundant"], "Duplicate should be redundant"
+                assert entry["override_status"] == "duplicate"
+                break
+        else:
+            pytest.fail("Expected effect not found in breakdown")
+
+    # -- Weapon imbues (excl=100) override each other ------------------------
+
+    def test_different_weapon_imbues_override(
+        self, scorer: BuildScorer, ds: SourceDataHandler,
+    ) -> None:
+        """'Starting armament deals fire' should be redundant when 'starting
+        armament deals magic' is already placed. Both have exclusivityId=100."""
+        build = _make_build(required=[_IMBUE_MAGIC, _IMBUE_FIRE])
+        relic = _make_relic([_IMBUE_FIRE, EMPTY, EMPTY])
+        v_eff, v_excl, v_ns = _vessel_state_from_effects(ds, [_IMBUE_MAGIC])
+
+        score = scorer.score_relic_in_context(relic, build, v_eff, v_excl, v_ns)
+        assert score == 0, (
+            "Different imbues with same exclusivityId must conflict"
+        )
+
+    def test_different_weapon_imbues_marked_redundant_in_breakdown(
+        self, scorer: BuildScorer, ds: SourceDataHandler,
+    ) -> None:
+        build = _make_build(required=[_IMBUE_MAGIC, _IMBUE_FIRE])
+        relic = _make_relic([_IMBUE_FIRE, EMPTY, EMPTY])
+        v_eff, v_excl, v_ns = _vessel_state_from_effects(ds, [_IMBUE_MAGIC])
+
+        breakdown = scorer.get_breakdown(relic, build, v_eff, v_excl, v_ns)
+        for entry in breakdown:
+            if entry["effect_id"] == _IMBUE_FIRE:
+                assert entry["redundant"], "Second imbue should be redundant"
+                assert entry["override_status"] == "overridden"
+                break
+        else:
+            pytest.fail("Expected effect not found in breakdown")
+
+    # -- Ash-of-war swaps (excl=200) override each other ---------------------
+
+    def test_different_ash_of_war_skills_override(
+        self, scorer: BuildScorer, ds: SourceDataHandler,
+    ) -> None:
+        """'Skill to Gravitas' should be redundant when 'Skill to Glintblade
+        Phalanx' is already placed. Both have exclusivityId=200."""
+        build = _make_build(required=[_SKILL_PHALANX, _SKILL_GRAVITAS])
+        relic = _make_relic([_SKILL_GRAVITAS, EMPTY, EMPTY])
+        v_eff, v_excl, v_ns = _vessel_state_from_effects(ds, [_SKILL_PHALANX])
+
+        score = scorer.score_relic_in_context(relic, build, v_eff, v_excl, v_ns)
+        assert score == 0, (
+            "Different ash-of-war skills with same exclusivityId must conflict"
+        )
+
+    # -- Stack-type effects always score (sanity check) ----------------------
+
+    def test_stack_type_effects_always_score(
+        self, scorer: BuildScorer, ds: SourceDataHandler,
+    ) -> None:
+        """'Fire Attack Power Up' (stack type) should score even when another
+        compat=100 effect is already placed."""
+        fire_atk_up = 7001600  # compat=100, stacking type: stack
+        build = _make_build(required=[fire_atk_up, _GUARD_COUNTER_HP])
+        relic = _make_relic([fire_atk_up, EMPTY, EMPTY])
+        v_eff, v_excl, v_ns = _vessel_state_from_effects(ds, [_GUARD_COUNTER_HP])
+
+        score = scorer.score_relic_in_context(relic, build, v_eff, v_excl, v_ns)
+        assert score > 0, "Stack-type effects must always score positively"

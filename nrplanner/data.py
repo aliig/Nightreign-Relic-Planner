@@ -58,7 +58,7 @@ class SourceDataHandler:
 
         self.effect_params: pd.DataFrame = (
             pd.read_csv(self._param_dir / "AttachEffectParam.csv")
-            [["ID", "compatibilityId", "attachTextId", "overrideEffectId"]]
+            [["ID", "compatibilityId", "attachTextId", "overrideEffectId", "exclusivityId"]]
             .set_index("ID")
         )
         self.effect_table: pd.DataFrame = (
@@ -305,6 +305,15 @@ class SourceDataHandler:
             if effect_id in (-1, 4294967295):
                 return -1
             return int(self.effect_params.loc[effect_id, "compatibilityId"])
+        except KeyError:
+            return -1
+
+    def get_effect_exclusivity_id(self, effect_id: int) -> int:
+        """Return exclusivityId for an effect, or -1."""
+        try:
+            if effect_id in (-1, 4294967295):
+                return -1
+            return int(self.effect_params.loc[effect_id, "exclusivityId"])
         except KeyError:
             return -1
 
