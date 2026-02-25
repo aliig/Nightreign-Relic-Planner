@@ -24,7 +24,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@/components/ui/skeleton"
 import { Separator } from "@/components/ui/separator"
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip"
-import { buildEffectMap, EffectList, EMPTY_EFFECT } from "@/components/RelicDisplay"
+import { buildEffectMap, DEEP_COLOR, EffectList, EMPTY_EFFECT } from "@/components/RelicDisplay"
 import { cn } from "@/lib/utils"
 import { isLoggedIn } from "@/hooks/useAuth"
 import { useLocalBuilds } from "@/hooks/useLocalBuilds"
@@ -42,7 +42,7 @@ export const Route = createFileRoute("/_layout/builds/$buildId")({
 // Types
 // ---------------------------------------------------------------------------
 
-type EffectMeta = { id: number; name: string; family?: string; is_debuff?: boolean }
+type EffectMeta = { id: number; name: string; family?: string; is_debuff?: boolean; source?: string | null }
 type FamilyMeta = { name: string; member_names: string[]; member_ids: number[] }
 type TierConfig = {
   key: string
@@ -732,7 +732,7 @@ function BuildEditorUI({
                           <DraggableChip
                             key={e.id}
                             dragId={`effect:${e.id}`}
-                            name={e.name}
+                            name={e.source === "deep" ? `${e.name} (deep)` : e.name}
                             color={color}
                             dragData={{ type: "effect", effectId: e.id, sourceTier: tierKey }}
                             onRemove={() => removeEffect(e.id, tierKey)}
@@ -794,6 +794,9 @@ function BuildEditorUI({
                 >
                   <span className="text-sm truncate flex-1" title={effect.name}>
                     {effect.name}
+                    {effect.source === "deep" && (
+                      <span className="ml-1.5 text-xs" style={{ color: DEEP_COLOR }}>(deep)</span>
+                    )}
                     {effect.is_debuff && (
                       <span className="ml-1.5 text-xs text-muted-foreground">(debuff)</span>
                     )}

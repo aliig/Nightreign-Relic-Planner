@@ -1,0 +1,119 @@
+Category,Relic Description,Effect,Stackable with self?,Notes
+Stat,Vigor +1/2/3,Self-explanatory,Yes,+20 / +40 / +60 Max HP
+Stat,Mind +1/2/3,Self-explanatory,Yes,+5 / +10 / +15 Max FP
+Stat,Endurance +1/2/3,Self-explanatory,Yes,+2 / +4 / +6 Max Stamina
+Stat,Strength/Dexterity/Intelligence/Faith/Arcane +1/2/3,Self-explanatory,Yes,3 Arc adds ~5.4% of base bleed
+Stat,Poise +1/2/3,Reduces incoming poise damage by 0.95x/0.9x/0.85x,Yes,
+Stat,Increased maximum HP/FP/Stamina,Increases vigor/mind/endurance by 5,No,"+100 Max HP / 25 Max FP / 10 Max Stamina. Exclusive to (Dark) Night of the Fathom, Wise, Champion respectively"
+Stat,Improved [Status] Resistance,Increases specified status resistance by 75,Yes,
+Stat,Max FP Up with 3+ Staves/Sacred Seals Equipped,Increases mind by 10 ,No,+50 Max FP
+Stat,Max HP Up with 3+ Small/Medium/Greatshields Equipped,Increases vigor by 10,No,+200 Max HP
+Start of game,Starting Weapon deals [element] Damage,Decreases starting weapon's physical AP by 30/40/50/60 and adds 33/44/55/66 elemental AP,No,"The amount of damage taken away and added depends on weapon type. Does not affect weapon scaling. Does not stack with ""Stating armament inflicts ""x"" status"""
+Start of game,"Stating armament inflicts ""x"" status",Decreases starting weapon's damage by 0.85x and adds 25 (blood) or 35 (poison/frost) buildup,No,"Does not stack with ""Starting Weapon deals [element] Damage"""
+Start of game,Change compatible armament skill to [xxx] at start of expedition,Self explanatory,No,
+Start of game,[Consumable] in possession at start of expedition,Self explanatory,Yes,
+Start of game,Small pouch in possession at start of expedition,Self explanatory,Yes,
+Start of game,Stonesword in possession at start of expedition,Self explanatory,No,
+Exploration,Flask Also Heals Allies,Heals allies for 50% of flask HP in a radius,No,Currently bugged; sometimes has a chance to not heal the wearer. Will not heal teammates in iframes.
+Exploration,Item confer effect to all nearby allies,Self explanatory,No,
+Exploration,Increase rune acquisition for self and allies,1.035x rune gain for self and allies,Yes,
+Exploration,Critical Hits Earn Runes,Gain 600 runes on critical hits,No,
+Exploration,Attack power permanently increased for each evergaol prisoner defeated,Increases damage by 1.05x per Evergaol boss,No,
+Exploration,Max FP increased for each Sorcerer's Rise unlocked,Increases max FP by 1.18x for each Sorcerer's Rise unlocked,No,
+Exploration,Attack power up after defeating a Night Invader,Increases damage by 1.07x per invader,No,
+Exploration,(Huge) Rune discount for shop purchases while on expedition,Provides a 10/20% discount at merchants,No,"Different versions stack together. The same version does not stack with itself. ""Huge"" exclusive to Night of the Demon"
+Exploration,Treasure marked upon map,Reveals hidden chest locations ,No,
+Offensive,Taking attacks improves attack power,"15% damage buff after taking a hit, for 10s. Duration refresh when getting hit again. Does not work if blocked",No,
+Offensive,Physical Attack Up +0/1/2,Increases physical damage by 1.04x/1.05x/1.06x,Yes,
+Offensive,Improved Melee Attack Power,Increases all attack power by 1.05x. Affects both weapon and skills.,Yes,Exclusive to Will of the Balancers and Will of Balance
+Offensive,Improved Skill Attack Power,Increases skill attack power by 1.15x,Yes,Exclusive to Will of the Balancers and Will of Balance
+Offensive,Magic/Fire/Lightning/Holy Attack Up +0/1/2,Increases magic/fire/lightning/holy damage by 1.045x/1.055x/1.065x,Yes,
+Offensive,Improved stance breaking when two handing,Increases poise damage by 1.05x when 2 handing the weapon,Yes,Does not apply to bows.
+Offensive,Improved stance breaking while wielding two armaments,Increases poise damage by 1.05x when powerstancing (dual wielding 2 weapons of the same type),Yes,Can confirm applies to ground L1 attack and jump L1.
+Offensive,Switching Weapons Adds an Affinity Attack,Adds 12 magic/fire/lightning/holy AP for 10 seconds,No,The element that is chosen is random. Exclusive to Night of the Lord.
+Offensive,Boosts Attack Power of Added Affinity Attacks,Increases magic/fire/lightning/holy AP by 1.1x,Yes,"Rounds up. Exclusive to Night of the Lord, Golden Dew, and Dark Night of the Champion. Does not affect sorceries/incants. Works for any elemental damage on weapon, not just weapon buffs"
+Offensive,Switching Weapons Boosts Attack Power,Increases physical damage by 1.1x for 10 seconds,No,Exclusive to Night of the Lord and Fell Omen Fetish. 
+Offensive,Successive Attacks Boosts Attack Power,Increases damage by 1.05x / 1.065x / 1.09x on successive attacks,N/A,Exclusive to Glass Necklace
+Offensive,Attack power increases after using grease items,Increases physical damage by 1.1x for 30 seconds,No,Same duration as grease
+Offensive,Improved Initial Standard Attack,Increases the damage of the first light attack by 1.15x,Yes,Applies to 1H/2H R1 chain or paired weapon L1. Does not work for shield poke / rolling attack / jump attack
+Offensive,Improved Guard Counters,Increases guard counter damage by 1.17x,Yes,
+Offensive,Guard counter is given a boost based on current HP,"Damage boost varies linearly with % health remaining, but potency varies greatly between character, level and weapons.",No," Buff seems to scale off amount of HP, and is a flat amount per weapon type. Despite the confusing behaviour, this is an extremely potent buff for Guardian: ~30% buff at max level for commander's standard, and ~21.5% for Godfrey's Axe. For Raider, ~25.7% buff for commander's standard, and ~16.8% for Godfrey's Axe"
+Offensive,Improved Critical Hits +0/1,Increases critical hit damage by 1.18x/1.23x,See Notes,"Only applies to certain parts of critical hit. E.g. on colossal weapon, it only buffs the (stronger) second hit.
+ +0 stack with +1 and +0 can stack with another +0 but +1 can not stack with itself as +1 exclusive to (Dark) Night of the Baron"
+Offensive,Improved Throwing Pot/Knife/Stone/Perfuming Arts Damage,Increases pot/knife/stone/Perfuming Arts damage by 1.15x,Yes,
+Offensive,Improved [Spell School] Sorcery/Incantation,Increases damage of specified school by 1.12x,Yes,
+Offensive,Improves Roar and Breath attacks,Increases roar / breath damage by 1.15x.,Yes,Does not work for Raider character skill.
+Offensive,Improve [Weapon Type] attack power,Increase damage dealt by the specified weapon type by 1.09x (1.06x for bows),Yes,"Applies to weapon hit AoW (using said weapon). Does not apply to projectile AoW like thunderbolt, even when cast with said weapon type."
+Offensive,Improved Attack Power with 3 [Weapon Type] Equipped,Increases damage by the specified weapon type by 1.2x (1.1x for bows),No,Works for damage from all sources. E.g. spells
+Offensive,Attack power up when facing frostbite/poison/rot afflicted enemy,Increases damage by 1.1x towards targets suffering specified status effect,No,
+Offensive,Frostbite in Vicinity Conceals Self,Self explanatory,No,Exclusive to (Dark) Night of the Miasma
+Offensive,Poison & Rot in Vicinity Increases Attack Power,Increases damage by 1.12x for 20 seconds when poison or rot is triggered in the vicinity,No,Exclusive to Night of the Wise
+Offensive,Status Ailment Gauges Slowly Increase Attack Power,"Having any amount of status ailment gauge increases damage by 1.04x every 20 seconds (10 stacks). Resets after 30 seconds 
+of no status gauge.",N/A,Exclusive to Night of Dregs
+Offensive,Attacks Inflict Rot When Damage Is Taken,Adds 25 rot buildup to the weapon for 12 seconds after taking damage,N/A,Exclusive to Night of Dregs
+Defensive,Improved Physical Damage Negation,Increases physical damage negation by 10%,Yes,Exclusive to Dark Night of the Miasma
+Defensive,Magic/Fire/Lightning/Holy Damage Negation Up,Increases magic/fire/lightning/holy damage negation by 10%,Yes,
+Defensive,Improved Damage Negation at Low HP,Increases damage negation by 16% when HP is below 40%,Yes,
+Defensive,Draw enemy attention while guarding,Increases aggro when holding the block button,No,Does not guarantee aggro
+Defensive,Improved Poise & Damage Negation When Knocked Back by Damage,Increases damage negation by 20% and reduces incoming poise damage by 0.8x for 20 seconds,No,
+Defensive,Occasionally Nullify Attacks When Damage Negation is Lowered,Self explanatory. Chance of activation currently unknown,No,"Exclusive to the Will of Balance (ED Balancer relic, unreleased)"
+Regen,Character Skill Cooldown +1/2/3,Reduces skill cooldown by 0.95x/0.925x/0.9x,Yes,
+Regen,Ultimate Art Gauge +1/2/3,Increases ultimate gauge gain by 1.05x/1.075x/1.1x,Yes,Only affects passive Ultimate gauge gain during combat
+Regen,Partial HP Restoration upon Post-Damage Attacks,Replenishes HP on hit for a short period of time after taking damage,No,Much stronger healing than other heal on hit effects. Amount of healing varies by attack performed. Does not stack with Hand of Malenia (which will take priority and has great healing effects). 
+Regen,Slowly restore HP for self and nearby allies when HP is low,Restores [MaxHP * 0.005] + 1 HP/s for 50 seconds when HP is below 20%,No,Regen stays even after you go above 20% HP
+Regen,Art gauge fills moderately upon critical hit,Increases Ultimate Art Gauge by 5,No,
+Regen,"HP restored when using cured meats, medicinal boluses, etc.",Restores 50 HP on consumption,No,
+Regen,Art gauge charged from successful guarding,Increases Ultimate Art Gauge by 1,No,
+Regen,Critical Hit Boosts Stamina Recovery Speed,Increases stamina recovery by 10/s for 15 seconds,No,
+Regen,"Gesture ""Crossed Legs"" Builds Up Madness",Inflicts 10 madness buildup every 2 seconds,No,Exclusive to (Dark) Night of the Demon
+Regen,Madness Continually Recovers FP,Recovers 2 FP/s for 25 seconds ,No,Exclusive to (Dark) Night of the Demon
+Regen,Continuous HP recovery ,Recovers 2 HP/s,No,Exclusive to Blessed Iron Coin and Dark Night of the Fathom
+Regen,Continuous FP Recovery,Recovers 1 FP/5s,Yes,Exclusive to Will of the Balancers
+Regen,Rot in Vicinity Causes Continuous HP Recovery,Recovers 0.15% of max HP + 15 HP/s for 15 seconds after rot procs,N/A,Exclusive to Night of Dregs
+Regen,"Raised stamina recovery for nearby allies, but not for self",Increases allies' stamina recovery speed by 4/s,,
+Regen,FP Restoration upon Successive Attacks,Recovers [MaxFP * 0.05] with continuous attacks,Yes,
+Regen,HP Recovery From Successful Guarding,Recovers 8 HP after blocking an attack,No,
+Regen,Defeating enemies fills more of the Art gauge,Increases Ultimate Art Gauge by 5 on each enemy kill,No,
+Regen,Defeating enemies restores HP for allies but not for self,Allies recover 20 HP on each enemy kill,,
+Regen,Stamina Recovery upon Landing Attacks +0/+1,Restores 2/3 stamina with continuous attacks,No,Stack with the weaker version. +1 Exclusive to (Dark) Night of the Beast
+Regen,HP restoration after [Weapon type] attacks,Restores 15 HP with continuous attacks,No,Amount of healing doesn't seem to change based on attack / weapon type.
+Regen,FP restoration after [Weapon type] attacks,Restores 2 FP with continuous attacks,No,Amount of healing doesn't seem to change based on attack / weapon type.
+Regen,HP Restoration upon Thrusting Counterattack,Restores [MaxHP * 0.025] HP on counterhits,No,
+Character,Wylder: Art gauge is greatly filled when ability is activated,Increased characterSkillGauge by 18,No,
+Character,[Wylder] Art activation spreads fire in the area,Ultimate art leaves behind a small area of fire that does DoT. ,No,
+Character,[Wylder] Standard attacks enhanced with fiery follow-ups when using Character Skill (greatsword only),Allows you to perform a light attack follow up after using claw shot. Adds 12 fire AP to the weapon,No,
+Character,[Wylder] +1 additional character skill use,Self-explanatory,No,
+Character,[Guardian] Increased skill duration,Allows you to briefly charge this skill to trigger a much bigger AoE and longer lasting tornado. Can block projectile attacks.,No,
+Character,[Guardian] Slowly restores nearby allies HP while Art is active,Allies restore [MaxHP * 0.1] + 12 HP/0.5s when ultimate is held,No,
+Character,[Guardian] Creates whirlwind when charging halberd attacks,Performs a whirlwind attack after using halberd charged heavies,No,
+Character,[Guardian] Successful guards send out shockwaves while ability is active,Sends out a shockwave when blocking an attack in the Iron Guard stance. 100 base physical attack,No,
+Character,[Ironeye] Art Charge Activation Adds Poison Effect,Charged ultimate deals 300 poison buildup,No,
+Character,[Ironeye] Boosts thrusting counterattacks after executing Art,Increases counterhit damage by 1.2x for 30 seconds,No,
+Character,[Ironeye] Extends duration of weak point,Extends weak point duration from 17.5s to 22s,No,
+Character,[Ironeye] +1 additional character skill use,Self explanatory,No,
+Character,[Duchess] Defeating enemies while Art is active ups attack power,Increases damage by 1.15x for 30 seconds for each enemy killed while Ultimate is active,No,
+Character,[Duchess] Improved Character Skill Attack Power,Duchess' Restage does 60% of total damage instead of 50%,No,In game testing suggest 20% damage increase
+Character,[Duchess] Become difficult to spot and silence footsteps after landing critical from behind,Self explanatory,No,
+Character,[Duchess] Successive dagger attack reprises event upon nearby enemies,Deals extra DoT damage after completing a full light attack chain. ,No,~36/39/39% extra damage from 1h/ 2h/ powerstance attack chain
+Character,[Raider] Duration of Ultimate Art extended,Increases duration of the ultimate from 20 to 30 seconds,No,
+Character,[Raider] Damage taken while using Character Skill improves attack power and stamina,Increases damage by 1.1x and maximum stamina by 1.2x for 20 seconds,No,
+Character,Defeating enemies near Totem Stela restores HP,Restores [MaxHP * 0.5] on each enemy kill in the vicinity of Raider's ultimate,No,
+Character,Improved Poise Near Totem Stela,Reduces incoming poise damage by 0.1x while in the vicinity of Raider's ultimate,No,
+Character,[Revenant] Expend own HP to fully heal nearby allies when activating Art,Decreases current HP by 50% on ultimate usage to fully heal allies' HP,No,
+Character,[Revenant] Trigger ghostflame explosion during Ultimate Art activation,Performs a ghostflame explosion on ultimate. 20 base magic damage,No,
+Character,[Revenant] Strengthens family and allies when Ultimate Art is activated,Increases ally damage by 1.25x for 30 seconds after ultimate art usage,No,
+Character,[Revenant] Power up while fighting alongside family,"Helen provides 1 HP/s, Frederick provides 1.1x damage, and Sebastian provides 20% elemental damage negation",No,
+Character,[Recluse] Collecting affinity residue activates Terra Magica,"Creates a sigil that increases magic damage by 1.15x when standing inside, lasts 30 seconds",No,Cannot spawn a new terra magica while previous one is still active 
+Character,[Recluse] Suffer blood loss and increase attack power upon Art activation,Ultimate deals [MaxHP * 0.2] damage to the player and increases damage by 1.16x for 30s,No,Applies on top of the built in ~15% damage increase from her Ultimate art
+Character,[Recluse] Activating Ultimate Art raises Max HP,"Increases maximum HP by 1.5x for 30 seconds. After 30 seconds, buff stays until hit",No,
+Character,[Executor] Character Skill Boosts Attack but Lowers Damage Negation While Attacking,Increases damage by 1.35x for 6 seconds and lowers damage negation by 40% for 5 seconds,No,
+Character,"[Executor] While Character Skill is active, unlocking use of cursed sword restores HP",Restores [MaxHP * 0.05] + 100 HP,No,
+Character,[Executor] Roaring restores HP while art is active,Restores [MaxHP * 0.15] after using the roar attack in the ultimate,No,
+Character,[Scholar] Prevent slowing of Character Skill,Slows the decay rate of the Analyze meter,No,
+Character,[Scholar] Allies targeted by Character Skill gain boosted attack,"Upon usage of the skill, allies targeted will gain 1.2x (physical) / 1.15x (elemental) damage for 30 seconds",No,
+Character,[Scholar] Continuous damage inflicted on targets threaded by Ultimate Art,Enemies affected by the ultimate takes 15 dps for 20 seconds,No,
+Character,[Scholar] Earn runes for each additional specimen acquired with Character Skill,Gain 1300 runes when analyzing a new enemy type (works like a bestiary). Scanning the same enemy type at a different location will not provide the runes. (needs additional confirmation),No,
+Character,[Undertaker] Activating Ultimate Art increases attack power,Increases damage by 1.18x for 40 seconds after activating ultimate,No,
+Character,[Undertaker] Attack power increases by landing the final blow of a chain attack,Increases damage by 1.16x for 20 seconds after hitting final hit of R1/L1 chain,,
+Character,[Undertaker] Physical attacks boosted while assist effect from incantation is active for self,Increases physical damage by 1.19x for 60 seconds after applying an incant buff,,
+Character,[Undertaker] Contact with allies restores their HP while Ultimate Art is activated,Allies restore 30% of max HP + 100 HP if they make contact with the ultimate,,

@@ -276,7 +276,7 @@ class SourceDataHandler:
         try:
             row = self.effect_name[self.effect_name["id"] == effect_id]
             if not row.empty:
-                text = row["text"].values[0]
+                text = str(row["text"].values[0]).strip()
                 if text != "%null%":
                     return text
             if effect_id in self.effect_params.index:
@@ -284,7 +284,7 @@ class SourceDataHandler:
                 if text_id != -1:
                     row = self.effect_name[self.effect_name["id"] == text_id]
                     if not row.empty:
-                        return row["text"].values[0]
+                        return str(row["text"].values[0]).strip()
         except Exception:
             pass
         return f"Effect {effect_id}"
@@ -314,11 +314,31 @@ class SourceDataHandler:
         except KeyError:
             return -1
 
+    def _get_source_override_names(self) -> set[str]:
+        """Lazy-load the set of effect names that have source overrides."""
+        if hasattr(self, "_source_override_names"):
+            return self._source_override_names
+        import orjson
+        rules_path = self._resources_dir / "json" / "stacking_rules.json"
+        try:
+            if rules_path.exists():
+                rules = orjson.loads(rules_path.read_bytes())
+                self._source_override_names = set(rules.get("_source_overrides", {}).keys())
+            else:
+                self._source_override_names = set()
+        except Exception:
+            self._source_override_names = set()
+        return self._source_override_names
+
     def get_all_effects_list(self) -> list[dict]:
         """All effects with metadata for the build UI.
 
         Deduplicates by display name, preferring entries where param_id == text_id.
+        Effects with source overrides (different stacking for deep vs regular
+        pools) are kept as separate entries with source='deep'.
         """
+        source_override_names = self._get_source_override_names()
+
         full = pd.read_csv(self._param_dir / "AttachEffectParam.csv")
         char_cols = ["allowWylder", "allowGuardian", "allowIroneye", "allowDuchess",
                      "allowRaider", "allowRevenant", "allowRecluse", "allowExecutor",
@@ -334,8 +354,16 @@ class SourceDataHandler:
             name = self.get_effect_name(eff_id).strip()
             if name == "Empty" or name.startswith("Effect "):
                 continue
-            if name in seen:
-                idx = seen[name]
+
+            # For source-overridden names, deep-pool effects get a separate entry
+            source = None
+            dedup_key = name
+            if name in source_override_names and self.is_deep_pool_effect(eff_id):
+                source = "deep"
+                dedup_key = f"{name}||deep"
+
+            if dedup_key in seen:
+                idx = seen[dedup_key]
                 if eff_id == int(row["attachTextId"]):
                     # New canonical: demote old canonical ID to alias list
                     results[idx]["alias_ids"].append(results[idx]["id"])
@@ -343,7 +371,7 @@ class SourceDataHandler:
                 else:
                     results[idx]["alias_ids"].append(eff_id)
                 continue
-            seen[name] = len(results)
+            seen[dedup_key] = len(results)
             allow = {k: bool(row.get(c, 1)) for c, k in zip(char_cols, char_keys)}
             results.append({
                 "id": eff_id,
@@ -352,6 +380,7 @@ class SourceDataHandler:
                 "compatibility_id": int(row["compatibilityId"]),
                 "is_debuff": bool(row.get("isDebuff", 0)),
                 "allow_per_character": allow,
+                "source": source,
             })
         return results
 
@@ -363,6 +392,7 @@ class SourceDataHandler:
         import orjson
         rules_path = self._resources_dir / "json" / "stacking_rules.json"
         self._stacking_cache: dict[int, str] = {}
+        self._source_override_names: set[str] = set()
         if not rules_path.exists():
             return
         try:
@@ -375,8 +405,24 @@ class SourceDataHandler:
 
         name_to_type = {_norm(k): v for k, v in rules.items() if not k.startswith("_")}
 
+        # Source overrides: same display name, different stacking for deep vs regular
+        raw_overrides = rules.get("_source_overrides", {})
+        source_overrides: dict[str, dict[str, str]] = {
+            _norm(k): v for k, v in raw_overrides.items()
+        }
+        self._source_override_names = set(raw_overrides.keys())
+
         if self.effect_name is None:
             self._load_text()
+
+        def _resolve(eff_id: int, normed: str) -> Optional[str]:
+            """Resolve stacking type, checking source overrides first."""
+            if normed in source_overrides:
+                source_key = "deep" if self.is_deep_pool_effect(eff_id) else "regular"
+                stype = source_overrides[normed].get(source_key)
+                if stype:
+                    return stype
+            return name_to_type.get(normed) or name_to_type.get(normed.rsplit("(", 1)[0].strip())
 
         # Pass 1: direct FMG match
         for _, row in self.effect_name.iterrows():
@@ -385,7 +431,7 @@ class SourceDataHandler:
             if name == "%null%" or eff_id not in self.effect_params.index:
                 continue
             normed = _norm(name)
-            stype = name_to_type.get(normed) or name_to_type.get(normed.rsplit("(", 1)[0].strip())
+            stype = _resolve(eff_id, normed)
             if stype:
                 self._stacking_cache[eff_id] = stype
 
@@ -397,7 +443,7 @@ class SourceDataHandler:
             if not name or name in ("Empty",) or name.startswith("Effect "):
                 continue
             normed = _norm(name)
-            stype = name_to_type.get(normed) or name_to_type.get(normed.rsplit("(", 1)[0].strip())
+            stype = _resolve(eff_id, normed)
             if stype:
                 self._stacking_cache[eff_id] = stype
 
@@ -641,6 +687,13 @@ class SourceDataHandler:
             return False
         deep_pools = {2000000, 2100000, 2200000}
         return all(p in deep_pools or p == effect_id for p in self.get_effect_pools(effect_id))
+
+    def is_deep_pool_effect(self, effect_id: int) -> bool:
+        """True if the effect appears in any deep relic pool."""
+        if effect_id in (-1, 0, 4294967295):
+            return False
+        deep_pools = {2000000, 2100000, 2200000}
+        return bool(deep_pools & set(self.get_effect_pools(effect_id)))
 
     def effect_needs_curse(self, effect_id: int) -> bool:
         """True if effect can ONLY roll from pool 2000000 (curse-required pool)."""

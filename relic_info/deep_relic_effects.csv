@@ -1,0 +1,81 @@
+Category,Relic Description,Effect,Stackable with self?,Notes
+Stat,Increased Maximum HP,Increases maximum HP by 1.1x,Yes,
+Stat,Increased Maximum FP,Increases maximum FP by 1.15x,Yes,
+Stat,Increased Maximum Stamina,Increases maximum stamina by 1.12x,Yes,
+Start of game,[Item] in possession at start of expedition,Starts the game with the specified item,Yes,Lists contains all crystal tears and perfume items
+Exploration,Max HP increased for each great enemy defeated at a Great Church,Increases maximum HP by 1.05x for each boss killed at a great church,No,
+Exploration,Runes and Item Discovery increased for each great enemy defeated at a Fort,Increases discovery by 16 and rune gain by 1.055x for each boss killed at a fort,No,
+Exploration,Arcane increased for each great enemy defeated at a Ruin,Increases arcane by 4 for each boss killed at a ruin,No,
+Exploration,Max stamina increased for each great enemy defeated at a Great Encampment,Increases maximum stamina by 1.075x for each boss killed at a camp,No,
+Exploration,Dormant Power Helps Discover [Weapon Class],"Changes the preferred weapon class to the specified class, making it more likely to obtain it",No,Priority is given to first one in order. Does not stack with character's preferred weapon type
+Offensive,Physical Attack Up +3/4,Increases physical damage by 1.105x / 1.12x,Yes,
+Offensive,[Element] Attack Up +3/4,Increases magic/fire/lightning/holy damage by 1.105x/1.12x,Yes,
+Offensive,Improved Affinity Attack Power +0/1/2,"Increases magic, fire, lightning, and holy damage by 1.05x/1.08x/1.1x",Yes,Affects spells
+Offensive,Physical attack power increases after using grease items +1/2,Increases physical damage by 1.17x/1.2x for 30 seconds after using grease,No,Different levels stack (ex. +1 stacks with +2)
+Offensive,Attack power up when facing poison/scarlet rot/frostbite-afflicted enemy +1/2,Increases damage by 1.16x/1.2x when attacking an enemy suffering from the specified status,No,Different levels stack (ex. +1 stacks with +2)
+Offensive,Sleep/Madness in Vicinity Improves Attack Power +0/+1,Increases damage by 1.12x/1.22x after sleep/madness procs,No,+0 stacks with +1
+Offensive,Improved Guard Counters +1/2,Increases guard counter damage by 1.25x/1.29x,Yes,
+Offensive,Improved [Consumable] Damage +1/2,Increases pot/knife/stone/perfume damage by 1.3x/1.35x,Yes,
+Offensive,Art gauge charged from successful guarding +1,Increases characterSkillGauge by 1.5 upon blocking an attack,No,+0 stacks with +1
+Offensive,Art gauge fills moderately upon critical hit +1,Increases characterSkillGauge by 6.5 upon riposte,No,+0 stacks with +1
+Offensive,Defeating enemies fills more of the Art gauge +1,Increases characterSkillGauge by 6.5 upon killing enemies,No,+0 stacks with +1
+Offensive,Improved Sorceries/Incantations +0/1/2,Increases sorcery/incant damage by 1.05x/1.085x/1.1x,Yes,
+Offensive,Reduced FP Consumption +0/1/2,Reduces FP consumption by 0.92x/0.87x/0.84x,Yes,Higher tier (+1/2) does not seem to appear on random relics
+Defensive,Improved Physical Damage Negation +1/2,Increases physical damage negation by 10.5%/12%,Yes,
+Defensive,Improved [Element] Damage Negation +1/2,Increases magic/fire/lightning/holy damage negation by 15%/16%,Yes,
+Defensive,Improved Affinity Damage Negation +0/1/2,"Increases magic, fire, lightning, and holy damage negation by 6/10.5/12%",Yes,
+Defensive,Improved [Status] Resistance +1/2,Increases specified status resistance by 110/130,Yes,
+Regen,Partial HP Restoration upon Post-Damage Attacks +1/2,"Same as original, but increases HP gained per hit by 25%/35%",No,"+1 stacks with +2, but neither stack with +0"
+Regen,HP Restoration upon Thrusting Counterattack +1,Restores [MaxHP * 0.033] on counterhits,No,Different levels stack (ex. +1 stacks with +2)
+Regen,"HP restored when using medicinal boluses, etc. +1",Replenish 80 HP from certain consumables,No,+0 stacks with +1
+Regen,Improved Flask HP Restoration,Increases HP gained from flasks by 1.1x,Yes,
+Character,[Wylder] Character Skill inflicts Blood Loss,Skill inflicts 60 (impact) / 55 (pull) bleed on hit,No,
+Character,[Guardian] Character Skill Boosts Damage Negation of Nearby Allies,Increases damage negation for self and allies by 12% for 30 seconds after using skill,No,
+Character,[Ironeye] Character Skill Inflicts Heavy Poison Damage on Poisoned Enemies,Skill inflicts 70 poison. Deals [MaxHP * 0.0025] + 250 damage on poison-afflicted enemies,No,Testing suggests its still based on max HP
+Character,[Duchess] Use Character Skill for Brief Invulnerability,Makes you immune to damage for 0.4 seconds after using skill,No,Translates to 24 iframes at 60FPS
+Character,[Raider] Hit With Character Skill to Reduce Enemy Attack Power,Decreases enemy damage dealt by 0.87x after hitting them with skill for 13 seconds,No,
+Character,[Revenant] Increases Max FP upon Ability Activation,"Permanently increases maximum FP by 1.0075x from 0 to 20 stacks
+Permanently increases maximum FP by 1.0085x from 21 to 40 stacks
+Permanently increases maximum FP by 1.0095x from 41 to 60 stacks (cap, total 51% increased max FP)",No,
+Character,[Recluse] Collect Affinity Residues to Negate Affinity,Increases magic/fire/lightning/holy damage negation by 20% upon absorbing respective residue for 30 seconds,No,
+Character,[Executor] Slowly Restore HP upon Ability Activation,Restores [MaxHP * 0.0027] + 3 for 30 seconds after passive activates (recovering from status effect),No,
+Character,[Scholar] Reduced FP consumption when using Character Skill on self,Reduces FP consumption by 0.85x for 40 seconds after using character skill self buff,No,
+Character,[Undertaker] Executing Art readies Character Skill,Allows you to perform Trance immediately after activating ultimate. Works with temporary ultimate use.,No,
+Character,"[Wylder] Improved Mind, Reduced Vigor","Decreases vigor by 5, increases mind by 10",No,"Stat changes assumes level 15 (same applies to the effects below); -100 HP, +50 FP"
+Character,"[Wylder] Improved Intelligence and Faith, Reduced Strength and Dexterity","Decreases strength by 7 and dexterity by 5, increases intelligence and faith by 15",No,
+Character,"[Guardian] Improved Strength and Dexterity, Reduced Vigor","Decreases vigor by 8, increases strength by 9 and dexterity by 19",No,"~16% AP increase for halberds, ~20% increase for heavy thrusting swords; -160 HP"
+Character,"[Guardian] Improved Mind and Faith, Reduced Vigor","Decreases vigor by 6, increases mind by 8 and faith by 17",No,"-120 HP, +40 FP"
+Character,"[Ironeye] Improved Arcane, Reduced Dexterity","Decreases dexterity by 9, increases arcane by 15",No,"~26% increase in status build up, ~ -6% reduction to bow attack"
+Character,"[Ironeye] Improved Vigor and Strength, Reduced Dexterity","Decreases dexterity by 13, increases strength by 20 and vigor by 5",No,+100 HP
+Character,"[Duchess] Improved Vigor and Strength, Reduced Mind","Decreases mind by 14, increases strength by 24 and vigor by 3",No,"-70 FP, +60 HP"
+Character,"[Duchess] Improved Mind and Faith, Reduced Intelligence","Decreases intelligence by 5, increases faith by 13 and mind by 3",No,"+15 FP; 14% increase to incant damage vs base duchess, but still 10% lower than Revenant"
+Character,"[Raider] Improved Mind and Intelligence, Reduced Vigor and Endurance","Decreases vigor by 8 and endurance by 4, increases intelligence by 35 and mind by 9",No,"-160 HP, +45 FP"
+Character,"[Raider] Improved Arcane, Reduced Vigor","Decreases vigor by 4, increases arcane by 17",No,-80 HP
+Character,"[Revenant] Improved Vigor and Endurance, Reduced Mind","Decreases mind by 11, increases vigor by 5 and endurance by 5",No,"-55 FP, +100 HP"
+Character,"[Revenant] Improved Strength, Reduced Faith","Decreases faith by 6, increases strength by 25",No,
+Character,"[Recluse] Improved Vigor, Endurance, and Dexterity, Reduced Intelligence and Faith","Decreases intelligence and faith by 10, increases dexterity by 20, endurance by 5, and vigor by 4",No,+80 HP
+Character,"[Recluse] Improved Intelligence and Faith, Reduced Mind","Decreases mind by 13, increases intelligence and faith by 12",No,"-65 FP, ~10% increase in spell damage"
+Character,"[Executor] Improved Vigor and Endurance, Reduced Arcane","Decreases arcane by 13, increases vigor by 5 and endurance by 6",No,+100 HP
+Character,"[Executor] Improved Dexterity and Arcane, Reduced Vigor","Decreases vigor by 7, increases arcane by 9 and dexterity by 12",No,"-140 HP, ~11% increase in status build up, ~6.3% increase in AP for katana"
+Character,"[Scholar] Improved Mind, Reduced Vigor","Decreases vigor by 3, increases mind by 9",No,
+Character,"[Scholar] Improved Endurance and Dexterity, Reduced Intelligence and Arcane","Decreases intelligence by 4 and arcane by 20, increases endurance by 6 and dexterity by 40",No,
+Character,"[Undertaker] Improved Dexterity, Reduced Vigor and Faith","Decreases vigor by 5 and faith by 13, increases dexterity by 19",No,
+Character,"[Undertaker] Improved Mind and Faith, Reduced Strength","Decreases strength by 15, increases mind by 9 and faith by 12",No,
+Curse,Taking Damage Causes [Status] Buildup,"Taking damage inflicts 32 (deathblight) / 40 (madness, sleep) / 44 (bleed, rot, frostbite) / 52 (poison) buildup on the user",Yes,Poison / Rot / Frost does not trigger executor ability Tenacity until the status is recovered
+Curse,Reduced Strength and Intelligence,Decreases strength and intelligence by 3,Yes,
+Curse,Reduced Dexterity and Faith,Decreases dexterity and faith by 3,Yes,
+Curse,Reduced Dexterity and Intelligence,Decreases dexterity and intelligence by 3,Yes,
+Curse,Reduced Strength and Faith,Decreases strength and faith by 3,Yes,
+Curse,Reduced Vigor and Arcane,Decreases vigor and arcane by 3,Yes,-60 HP
+Curse,Reduced Rune Acquisition,Decreases rune gain by 0.9x,Yes,
+Curse,Reduced Flask HP Restoration,Reduces HP gained from flasks by 0.85x,Yes,
+Curse,Ultimate Art Charging Impaired,Decreases ultimate gauge gain by 0.85x,Yes,"Unlike Ultimate Art Gauge, affects both passive ult gain and ult gain from attacking"
+Curse,All Resistances Down,Decreases all status resist by 80,Yes,
+Curse,Continuous HP Loss,Decreases HP by 2/s,Yes,
+Curse,More Damage Taken After Evasion,Decreases damage negations by 45% right after rolling,Yes,
+Curse,Repeated Evasions Lower Damage Negation,Decreases damage negations by 23% / 35% for 15 seconds on repeat rolls,Yes,
+Curse,Reduced Damage Negation for Flask Usages,Decreases damage negations by 45% while using flasks,Yes,
+Curse,Lower Attack When Below Max HP,Decreases damage by 0.915x when HP is below 85%,Yes,
+Curse,Poison Buildup When Below Max HP,Inflicts the user with 2 poison buildup per 0.22s when HP is below 85%,Yes,Does not trigger executor ability Tenacity until the status is recovered
+Curse,Rot Buildup When Below Max HP,Inflicts the user with 2 rot buildup per 0.24s when HP is below 85%,Yes,Does not trigger executor ability Tenacity until the status is recovered
+Curse,Near Death Reduces Max HP,Reduces maximum HP by 0.75x for 60 seconds after being downed,Yes,
