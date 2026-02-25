@@ -233,10 +233,13 @@ def _vessel_state_from_effects(
         # Rule 1: no_stack base placed (self-referencing compat)
         if stype == "no_stack" and compat != -1 and compat == eid:
             ns_compat_ids.add(compat)
-        # Rule 2: variant placed that points to a no_stack base
+        # Rule 2: variant placed that points to a real no_stack tier-family base.
+        # Guard: compat must be self-referencing (not a mega-group sentinel).
+        # Mirror optimizer.py: add base's eff_id to eff_ids (not ns_compat_ids).
         elif compat != -1 and compat != eid:
-            if ds.get_effect_stacking_type(compat) == "no_stack":
-                ns_compat_ids.add(compat)
+            if (ds.get_effect_conflict_id(compat) == compat
+                    and ds.get_effect_stacking_type(compat) == "no_stack"):
+                eff_ids.add(compat)
     return eff_ids, excl_ids, ns_excl_ids, ns_compat_ids
 
 
@@ -451,6 +454,35 @@ class TestTierFamilyStacking:
                 break
         else:
             pytest.fail("Expected effect not found in breakdown")
+
+    # -- HP Restore +1 and +2 coexist (sibling variants) --------------------
+
+    def test_hp_restore_plus1_and_plus2_coexist(
+        self, scorer: BuildScorer, ds: SourceDataHandler,
+    ) -> None:
+        """+1 (unique) placed first → +2 (unique) must NOT be blocked.
+        Both are variants of the same tier family but are not mutually exclusive.
+        Regression test: Rule 2 previously added compat to no_stack_compat_ids,
+        which incorrectly blocked sibling variants."""
+        build = _make_build(required=[_HP_RESTORE_PLUS1, _HP_RESTORE_PLUS2])
+        relic = _make_relic([_HP_RESTORE_PLUS2, EMPTY, EMPTY])
+        v_eff, v_excl, v_ns, v_nsc = _vessel_state_from_effects(ds, [_HP_RESTORE_PLUS1])
+
+        score = scorer.score_relic_in_context(
+            relic, build, v_eff, v_excl, v_ns, vessel_no_stack_compat_ids=v_nsc)
+        assert score > 0, "+2 must not be blocked when only +1 is placed (no base)"
+
+    def test_hp_restore_plus2_and_plus1_coexist_reverse_order(
+        self, scorer: BuildScorer, ds: SourceDataHandler,
+    ) -> None:
+        """+2 placed first → +1 must also be unblocked (order symmetric)."""
+        build = _make_build(required=[_HP_RESTORE_PLUS2, _HP_RESTORE_PLUS1])
+        relic = _make_relic([_HP_RESTORE_PLUS1, EMPTY, EMPTY])
+        v_eff, v_excl, v_ns, v_nsc = _vessel_state_from_effects(ds, [_HP_RESTORE_PLUS2])
+
+        score = scorer.score_relic_in_context(
+            relic, build, v_eff, v_excl, v_ns, vessel_no_stack_compat_ids=v_nsc)
+        assert score > 0, "+1 must not be blocked when only +2 is placed (no base)"
 
     # -- Art gauge: both unique → should coexist -----------------------------
 

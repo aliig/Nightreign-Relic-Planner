@@ -434,10 +434,16 @@ class VesselOptimizer:
             # Rule 1: no_stack base placed (compat == eff_id, self-referencing)
             if stype == "no_stack" and compat != -1 and compat == eff:
                 no_stack_compat_ids.add(compat)
-            # Rule 2: variant placed that points to a no_stack base
+            # Rule 2: variant placed that points to a real no_stack tier-family base.
+            # Guard: compat must be self-referencing (a real tier-family base ID, not a
+            # mega-group sentinel like 100).  Add the base's eff_id to effect_ids so the
+            # base is blocked via the identity check (eff_id in vessel_effect_ids).
+            # Do NOT add to no_stack_compat_ids — that would incorrectly block sibling
+            # variants (e.g. HP Restore +2 blocked when +1 is placed).
             elif compat != -1 and compat != eff:
-                if self.data_source.get_effect_stacking_type(compat) == "no_stack":
-                    no_stack_compat_ids.add(compat)
+                if (self.data_source.get_effect_conflict_id(compat) == compat
+                        and self.data_source.get_effect_stacking_type(compat) == "no_stack"):
+                    effect_ids.add(compat)
         return effect_ids, exclusivity_ids, no_stack_exclusivity_ids, no_stack_compat_ids
 
     @staticmethod

@@ -151,11 +151,6 @@ class BuildScorer:
             return 0
         if eff_id in vessel_effect_ids:
             return 0
-        # Tier-family reverse: I'm a no_stack base and a variant is already placed
-        if vessel_no_stack_compat_ids is not None:
-            compat = self.data_source.get_effect_conflict_id(eff_id)
-            if compat != -1 and compat == eff_id and compat in vessel_no_stack_compat_ids:
-                return 0
         return weight
 
     def score_relic_in_context(self, relic: OwnedRelic, build: BuildDefinition,
