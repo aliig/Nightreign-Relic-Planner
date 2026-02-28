@@ -1,6 +1,7 @@
 """Save file upload, character discovery, and relic inventory endpoints."""
 import tempfile
 import uuid
+from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +12,7 @@ from app.api.deps import CurrentUser, GameDataDep, OptionalUser, SessionDep
 from app.core.config import settings
 from app.core.game_data import get_items_json
 from app.models import (
+    Build,
     CharacterPublic,
     CharactersPublic,
     CharacterSlot,
@@ -32,6 +34,43 @@ from nrplanner import (
 )
 
 router = APIRouter(prefix="/saves", tags=["saves"])
+
+
+def _compute_handle_remap(
+    old_relics: list[Relic],
+    new_characters: list[ParsedCharacterData],
+) -> dict[int, int]:
+    """Return a mapping {old_ga_handle: new_ga_handle} based on relic content.
+
+    Relics are matched by fingerprint (real_id + effects + curses).  When
+    multiple relics share the same fingerprint they are paired in encounter
+    order so each old handle maps to a distinct new handle.  Old handles whose
+    relic is absent from the new save are simply omitted — callers should drop
+    any pinned references to missing handles.
+    """
+    _Fp = tuple  # (real_id, e1, e2, e3, c1, c2, c3)
+
+    def _fp(real_id: int, e1: int, e2: int, e3: int, c1: int, c2: int, c3: int) -> _Fp:
+        return (real_id, e1, e2, e3, c1, c2, c3)
+
+    old_fp: dict[_Fp, list[int]] = defaultdict(list)
+    for r in old_relics:
+        old_fp[_fp(r.real_id, r.effect_1, r.effect_2, r.effect_3,
+                   r.curse_1, r.curse_2, r.curse_3)].append(r.ga_handle)
+
+    new_fp: dict[_Fp, list[int]] = defaultdict(list)
+    for char in new_characters:
+        for r in char.relics:
+            new_fp[_fp(r.real_id, r.effect_1, r.effect_2, r.effect_3,
+                       r.curse_1, r.curse_2, r.curse_3)].append(r.ga_handle)
+
+    remap: dict[int, int] = {}
+    for fp, old_handles in old_fp.items():
+        new_handles = new_fp.get(fp, [])
+        for old_h, new_h in zip(old_handles, new_handles):
+            remap[old_h] = new_h
+
+    return remap
 
 _ALLOWED_EXTENSIONS = {".sl2", ".dat"}
 
@@ -170,6 +209,28 @@ async def upload_save(
             characters=characters,
             persisted=False,
         )
+
+    # Remap pinned relic handles in the user's builds before old data is deleted.
+    # ga_handle values are assigned by the game engine and can change between saves
+    # (e.g. when relics are acquired or the inventory is reorganised).  We match
+    # relics by content fingerprint so pinned relics survive re-uploads.
+    # Pins for relics no longer present in the new save are silently dropped.
+    old_relics = session.exec(
+        select(Relic).where(Relic.owner_id == current_user.id)
+    ).all()
+    handle_remap = _compute_handle_remap(list(old_relics), characters)
+    if old_relics:
+        db_builds = session.exec(
+            select(Build).where(Build.owner_id == current_user.id)
+        ).all()
+        for build in db_builds:
+            if not build.pinned_relics:
+                continue
+            new_pinned = [handle_remap[h] for h in build.pinned_relics if h in handle_remap]
+            if new_pinned != build.pinned_relics:
+                build.pinned_relics = new_pinned
+                session.add(build)
+        session.flush()
 
     # Authenticated — delete old upload and persist fresh data
     old_uploads = session.exec(

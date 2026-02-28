@@ -13,7 +13,8 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
-from app.models import SaveUpload
+from app.core.config import settings
+from app.models import Build, SaveUpload, User
 from nrplanner.constants import EMPTY_EFFECT
 from nrplanner.save import RawRelic
 
@@ -34,6 +35,21 @@ MOCK_RELIC = RawRelic(
     size=64,
 )
 
+# Same relic content as MOCK_RELIC but a different ga_handle (simulates the game
+# reassigning handles between saves).
+MOCK_RELIC_NEW_HANDLE = RawRelic(
+    ga_handle=0xC0000099,
+    item_id=MOCK_RELIC.item_id,
+    effect_1=MOCK_RELIC.effect_1,
+    effect_2=MOCK_RELIC.effect_2,
+    effect_3=MOCK_RELIC.effect_3,
+    sec_effect1=MOCK_RELIC.sec_effect1,
+    sec_effect2=MOCK_RELIC.sec_effect2,
+    sec_effect3=MOCK_RELIC.sec_effect3,
+    offset=0,
+    size=64,
+)
+
 
 def _discover_side_effect(decrypt_dir: Path, mode: str = "PC") -> list:
     """Side effect for discover_characters mock: creates a real USERDATA_00 file."""
@@ -46,8 +62,10 @@ def _upload_sl2(
     client: TestClient,
     headers: dict | None = None,
     filename: str = "NR0000.sl2",
+    relics: list[RawRelic] | None = None,
 ) -> object:
     """POST a dummy .sl2 upload with all nrplanner parsing mocked."""
+    raw = relics if relics is not None else [MOCK_RELIC]
     dummy_bytes = b"\x00" * 32
     files = {"file": (filename, io.BytesIO(dummy_bytes), "application/octet-stream")}
     kwargs: dict = {"files": files}
@@ -56,7 +74,7 @@ def _upload_sl2(
     with (
         patch("app.api.routes.saves.decrypt_sl2"),
         patch("app.api.routes.saves.discover_characters", side_effect=_discover_side_effect),
-        patch("app.api.routes.saves.parse_relics", return_value=([MOCK_RELIC], None)),
+        patch("app.api.routes.saves.parse_relics", return_value=(raw, None)),
     ):
         return client.post("/api/v1/saves/upload", **kwargs)
 
@@ -177,3 +195,107 @@ class TestGetCharacterRelics:
             headers=normal_user_token_headers,
         )
         assert response.status_code == 403
+
+
+@pytest.mark.usefixtures("override_game_data")
+class TestHandleRemapOnReupload:
+    """Pinned relic ga_handles in builds must be remapped when a save is re-uploaded.
+
+    The game can reassign ga_handle values between saves (e.g. when relics are
+    acquired or the inventory is reorganised).  On re-upload we match relics by
+    content fingerprint and update pinned_relics so builds remain valid.
+    """
+
+    def _superuser(self, db: Session) -> User:
+        return db.exec(
+            select(User).where(User.email == settings.FIRST_SUPERUSER)
+        ).one()
+
+    def _make_build(self, db: Session, owner_id: uuid.UUID, pinned: list[int]) -> Build:
+        build = Build(
+            owner_id=owner_id,
+            name="Remap test build",
+            character="Wylder",
+            pinned_relics=pinned,
+        )
+        db.add(build)
+        db.commit()
+        db.refresh(build)
+        return build
+
+    def test_pin_remapped_when_handle_changes(
+        self,
+        client: TestClient,
+        superuser_token_headers: dict[str, str],
+        db: Session,
+    ) -> None:
+        """Pin pointing to old ga_handle is updated to the new ga_handle."""
+        # Upload save with the original relic (handle 0xC0000001).
+        _upload_sl2(client, headers=superuser_token_headers, relics=[MOCK_RELIC])
+
+        user = self._superuser(db)
+        build = self._make_build(db, user.id, [MOCK_RELIC.ga_handle])
+
+        # Re-upload: same relic content but the game assigned a new handle.
+        _upload_sl2(
+            client,
+            headers=superuser_token_headers,
+            relics=[MOCK_RELIC_NEW_HANDLE],
+        )
+
+        db.expire(build)
+        updated = db.get(Build, build.id)
+        assert updated is not None
+        assert updated.pinned_relics == [MOCK_RELIC_NEW_HANDLE.ga_handle]
+
+    def test_pin_dropped_when_relic_gone(
+        self,
+        client: TestClient,
+        superuser_token_headers: dict[str, str],
+        db: Session,
+    ) -> None:
+        """Pin for a relic that no longer exists in the new save is removed."""
+        _upload_sl2(client, headers=superuser_token_headers, relics=[MOCK_RELIC])
+
+        user = self._superuser(db)
+        build = self._make_build(db, user.id, [MOCK_RELIC.ga_handle])
+
+        # Re-upload with an entirely different relic — the pinned one is gone.
+        other_relic = RawRelic(
+            ga_handle=0xC0000002,
+            item_id=200 + 2147483648,  # different item
+            effect_1=EMPTY,
+            effect_2=EMPTY,
+            effect_3=EMPTY,
+            sec_effect1=EMPTY,
+            sec_effect2=EMPTY,
+            sec_effect3=EMPTY,
+            offset=0,
+            size=64,
+        )
+        _upload_sl2(client, headers=superuser_token_headers, relics=[other_relic])
+
+        db.expire(build)
+        updated = db.get(Build, build.id)
+        assert updated is not None
+        assert updated.pinned_relics == []
+
+    def test_pin_unchanged_when_handle_stable(
+        self,
+        client: TestClient,
+        superuser_token_headers: dict[str, str],
+        db: Session,
+    ) -> None:
+        """When the handle stays the same across uploads the pin is untouched."""
+        _upload_sl2(client, headers=superuser_token_headers, relics=[MOCK_RELIC])
+
+        user = self._superuser(db)
+        build = self._make_build(db, user.id, [MOCK_RELIC.ga_handle])
+
+        # Re-upload with the exact same relic (handle unchanged).
+        _upload_sl2(client, headers=superuser_token_headers, relics=[MOCK_RELIC])
+
+        db.expire(build)
+        updated = db.get(Build, build.id)
+        assert updated is not None
+        assert updated.pinned_relics == [MOCK_RELIC.ga_handle]
