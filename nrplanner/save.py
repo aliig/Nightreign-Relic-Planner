@@ -246,17 +246,61 @@ def _parse_items(data: bytes, start_offset: int,
     return items, offset
 
 
+_ITEM_ENTRY_SIZE = 14       # bytes per ItemEntry record
+_ITEM_ENTRY_SLOT_COUNT = 3065  # max entries in the table
+
+
+def _parse_active_handles(data: bytes, items_end_offset: int) -> set[int]:
+    """Parse the ItemEntry table to get handles of items actually in inventory.
+
+    The save file has two inventory layers:
+      Layer 1 — ItemState: 5120 variable-size item slots (parsed by _parse_items).
+                Contains ALL items ever created, including run-session ghosts.
+      Layer 2 — ItemEntry: 3065 fixed-size (14-byte) metadata records.
+                Only items with a non-zero ga_handle here are truly owned.
+
+    ItemEntry layout (14 bytes):
+        0x00  uint32  ga_handle
+        0x04  uint32  item_amount
+        0x08  uint32  acquisition_id
+        0x0C  uint8   is_favorite
+        0x0D  uint8   is_new
+
+    Location: items_end + 0x94 (char name region) + 0x5B8 (stats/misc)
+              → 4-byte entry count, then 3065 × 14-byte records.
+    """
+    table_offset = items_end_offset + 0x94 + 0x5B8
+    entries_start = table_offset + 4  # skip the stored count field
+
+    active: set[int] = set()
+    for i in range(_ITEM_ENTRY_SLOT_COUNT):
+        off = entries_start + i * _ITEM_ENTRY_SIZE
+        if off + 4 > len(data):
+            break
+        handle = struct.unpack_from("<I", data, off)[0]
+        if handle != 0:
+            active.add(handle)
+    return active
+
+
 def parse_relics(data: bytes) -> tuple[list[RawRelic], int]:
     """Parse relic inventory from a USERDATA binary blob.
 
     Returns (relics, items_end_offset).
     items_end_offset is needed to locate the character name:
         name_offset = items_end_offset + 0x94
+
+    Relics are filtered against the ItemEntry table so that only items
+    the player actually owns are returned.  Run-session ghosts (items
+    that exist in the ItemState array but have no ItemEntry) are excluded.
     """
     items, end_offset = _parse_items(data, start_offset=0x14, slot_count=5120)
+    active_handles = _parse_active_handles(data, end_offset)
     relics = []
     for item in items:
         if (item.gaitem_handle & 0xF0000000) == ITEM_TYPE_RELIC:
+            if item.gaitem_handle not in active_handles:
+                continue
             relics.append(RawRelic(
                 ga_handle=item.gaitem_handle,
                 item_id=item.item_id,
