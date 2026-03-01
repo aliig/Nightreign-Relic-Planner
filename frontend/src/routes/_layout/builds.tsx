@@ -181,7 +181,8 @@ interface BuildCardData {
   id: string
   name: string
   character: string
-  tiers: Record<string, number[]>
+  groups?: { effects: number[]; families: string[] }[]
+  required_effects?: number[]
   updated_at?: string | null
   is_featured?: boolean
 }
@@ -204,7 +205,9 @@ function BuildCard({
   isDeleting?: boolean
 }) {
   const [draftName, setDraftName] = useState(build.name)
-  const effectCount = Object.values(build.tiers).reduce((acc, ids) => acc + ids.length, 0)
+  const effectCount =
+    (build.required_effects ?? []).length +
+    (build.groups ?? []).reduce((acc, g) => acc + g.effects.length, 0)
 
   function commitRename() {
     const trimmed = draftName.trim()
@@ -308,7 +311,10 @@ function FeaturedBuildCard({
   isSuperuser?: boolean
   onToggleFeatured?: (buildId: string) => void
 }) {
-  const effectCount = Object.values(build.tiers).reduce((acc, ids) => acc + ids.length, 0)
+  const b = build as any
+  const effectCount =
+    ((b.required_effects ?? []) as number[]).length +
+    ((b.groups ?? []) as { effects: number[] }[]).reduce((acc, g) => acc + g.effects.length, 0)
 
   return (
     <Card>
@@ -387,13 +393,18 @@ function SuggestedBuildsContent() {
     if (loggedIn) {
       cloneMutation.mutate(build.id)
     } else {
+      const b = build as any
       createFull({
         name: build.name,
         character: build.character,
-        tiers: build.tiers,
-        family_tiers: build.family_tiers as Record<string, unknown>,
+        groups: b.groups ?? [],
+        required_effects: b.required_effects ?? [],
+        required_families: b.required_families ?? [],
+        excluded_effects: b.excluded_effects ?? [],
+        excluded_families: b.excluded_families ?? [],
         include_deep: build.include_deep,
         curse_max: build.curse_max,
+        pinned_relics: b.pinned_relics ?? [],
       })
       showSuccessToast("Build saved to your browser.")
     }
@@ -506,7 +517,8 @@ function AuthBuildList() {
             id: build.id,
             name: build.name,
             character: build.character,
-            tiers: build.tiers as Record<string, number[]>,
+            groups: (build as any).groups,
+            required_effects: (build as any).required_effects,
             updated_at: build.updated_at,
             is_featured: build.is_featured,
           }}
