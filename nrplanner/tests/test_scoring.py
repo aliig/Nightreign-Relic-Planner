@@ -6,7 +6,7 @@ BuildDefinition tiers are populated with real effect IDs from game data.
 import pytest
 
 from nrplanner import BuildScorer, SourceDataHandler
-from nrplanner.models import BuildDefinition, OwnedRelic, WeightGroup
+from nrplanner.models import BuildDefinition, OwnedRelic, VesselState, WeightGroup
 
 EMPTY = 4294967295  # EMPTY_EFFECT sentinel
 
@@ -195,37 +195,14 @@ _SKILL_GRAVITAS    = 7122800       # compat=300, excl=200, no_stack
 
 def _vessel_state_from_effects(
     ds: SourceDataHandler, effect_ids: list[int],
-) -> tuple[set[int], set[int], set[int], set[int]]:
-    """Build (vessel_effect_ids, vessel_exclusivity_ids, vessel_no_stack_excl_ids,
-    vessel_no_stack_compat_ids) as if relics with *effect_ids* were already
+) -> VesselState:
+    """Build a VesselState as if relics with *effect_ids* were already
     placed in earlier slots."""
-    eff_ids: set[int] = set()
-    excl_ids: set[int] = set()
-    ns_excl_ids: set[int] = set()
-    ns_compat_ids: set[int] = set()
+    state = VesselState(ds)
     for eid in effect_ids:
-        eff_ids.add(eid)
-        text_id = ds.get_effect_text_id(eid)
-        if text_id != -1 and text_id != eid:
-            eff_ids.add(text_id)
-        compat = ds.get_effect_conflict_id(eid)
-        stype = ds.get_effect_stacking_type(eid)
-        excl = ds.get_effect_exclusivity_id(eid)
-        if excl != -1:
-            excl_ids.add(excl)
-            if stype == "no_stack":
-                ns_excl_ids.add(excl)
-        # Rule 1: no_stack base placed (self-referencing compat)
-        if stype == "no_stack" and compat != -1 and compat == eid:
-            ns_compat_ids.add(compat)
-        # Rule 2: variant placed that points to a real no_stack tier-family base.
-        # Guard: compat must be self-referencing (not a mega-group sentinel).
-        # Mirror optimizer.py: add base's eff_id to eff_ids (not ns_compat_ids).
-        elif compat != -1 and compat != eid:
-            if (ds.get_effect_conflict_id(compat) == compat
-                    and ds.get_effect_stacking_type(compat) == "no_stack"):
-                eff_ids.add(compat)
-    return eff_ids, excl_ids, ns_excl_ids, ns_compat_ids
+        relic = _make_relic([eid, EMPTY, EMPTY])
+        state.place(relic)
+    return state
 
 
 class TestExclusivityStacking:
@@ -241,9 +218,9 @@ class TestExclusivityStacking:
         Both share compatibilityId=100 but have exclusivityId=-1."""
         build = _make_build(required=[_TAKING_ATTACKS_UP, _GUARD_COUNTER_HP])
         relic = _make_relic([_TAKING_ATTACKS_UP, EMPTY, EMPTY])
-        v_eff, v_excl, v_ns, v_nsc = _vessel_state_from_effects(ds, [_GUARD_COUNTER_HP])
+        state = _vessel_state_from_effects(ds, [_GUARD_COUNTER_HP])
 
-        score = scorer.score_relic_in_context(relic, build, v_eff, v_excl, v_ns, vessel_no_stack_compat_ids=v_nsc)
+        score = scorer.score_relic_in_context(relic, build, state)
         assert score > 0, (
             "Different offensive buffs with excl=-1 must score positively"
         )
@@ -255,9 +232,9 @@ class TestExclusivityStacking:
         as redundant when a different compat=100 effect is already placed."""
         build = _make_build(required=[_TAKING_ATTACKS_UP, _GUARD_COUNTER_HP])
         relic = _make_relic([_TAKING_ATTACKS_UP, EMPTY, EMPTY])
-        v_eff, v_excl, v_ns, v_nsc = _vessel_state_from_effects(ds, [_GUARD_COUNTER_HP])
+        state = _vessel_state_from_effects(ds, [_GUARD_COUNTER_HP])
 
-        breakdown = scorer.get_breakdown(relic, build, v_eff, v_excl, v_ns, v_nsc)
+        breakdown = scorer.get_breakdown(relic, build, state)
         for entry in breakdown:
             if entry["effect_id"] == _TAKING_ATTACKS_UP:
                 assert not entry["redundant"], (
@@ -277,9 +254,9 @@ class TestExclusivityStacking:
         stack — the second one scores 0."""
         build = _make_build(required=[_TAKING_ATTACKS_UP])
         relic = _make_relic([_TAKING_ATTACKS_UP, EMPTY, EMPTY])
-        v_eff, v_excl, v_ns, v_nsc = _vessel_state_from_effects(ds, [_TAKING_ATTACKS_UP])
+        state = _vessel_state_from_effects(ds, [_TAKING_ATTACKS_UP])
 
-        score = scorer.score_relic_in_context(relic, build, v_eff, v_excl, v_ns, vessel_no_stack_compat_ids=v_nsc)
+        score = scorer.score_relic_in_context(relic, build, state)
         assert score == 0, "Duplicate no_stack effect must score 0"
 
     def test_duplicate_no_stack_effect_marked_redundant_in_breakdown(
@@ -287,9 +264,9 @@ class TestExclusivityStacking:
     ) -> None:
         build = _make_build(required=[_TAKING_ATTACKS_UP])
         relic = _make_relic([_TAKING_ATTACKS_UP, EMPTY, EMPTY])
-        v_eff, v_excl, v_ns, v_nsc = _vessel_state_from_effects(ds, [_TAKING_ATTACKS_UP])
+        state = _vessel_state_from_effects(ds, [_TAKING_ATTACKS_UP])
 
-        breakdown = scorer.get_breakdown(relic, build, v_eff, v_excl, v_ns, v_nsc)
+        breakdown = scorer.get_breakdown(relic, build, state)
         for entry in breakdown:
             if entry["effect_id"] == _TAKING_ATTACKS_UP:
                 assert entry["redundant"], "Duplicate should be redundant"
@@ -307,9 +284,9 @@ class TestExclusivityStacking:
         armament deals magic' is already placed. Both have exclusivityId=100."""
         build = _make_build(required=[_IMBUE_MAGIC, _IMBUE_FIRE])
         relic = _make_relic([_IMBUE_FIRE, EMPTY, EMPTY])
-        v_eff, v_excl, v_ns, v_nsc = _vessel_state_from_effects(ds, [_IMBUE_MAGIC])
+        state = _vessel_state_from_effects(ds, [_IMBUE_MAGIC])
 
-        score = scorer.score_relic_in_context(relic, build, v_eff, v_excl, v_ns, vessel_no_stack_compat_ids=v_nsc)
+        score = scorer.score_relic_in_context(relic, build, state)
         assert score == 0, (
             "Different imbues with same exclusivityId must conflict"
         )
@@ -319,9 +296,9 @@ class TestExclusivityStacking:
     ) -> None:
         build = _make_build(required=[_IMBUE_MAGIC, _IMBUE_FIRE])
         relic = _make_relic([_IMBUE_FIRE, EMPTY, EMPTY])
-        v_eff, v_excl, v_ns, v_nsc = _vessel_state_from_effects(ds, [_IMBUE_MAGIC])
+        state = _vessel_state_from_effects(ds, [_IMBUE_MAGIC])
 
-        breakdown = scorer.get_breakdown(relic, build, v_eff, v_excl, v_ns, v_nsc)
+        breakdown = scorer.get_breakdown(relic, build, state)
         for entry in breakdown:
             if entry["effect_id"] == _IMBUE_FIRE:
                 assert entry["redundant"], "Second imbue should be redundant"
@@ -339,9 +316,9 @@ class TestExclusivityStacking:
         Phalanx' is already placed. Both have exclusivityId=200."""
         build = _make_build(required=[_SKILL_PHALANX, _SKILL_GRAVITAS])
         relic = _make_relic([_SKILL_GRAVITAS, EMPTY, EMPTY])
-        v_eff, v_excl, v_ns, v_nsc = _vessel_state_from_effects(ds, [_SKILL_PHALANX])
+        state = _vessel_state_from_effects(ds, [_SKILL_PHALANX])
 
-        score = scorer.score_relic_in_context(relic, build, v_eff, v_excl, v_ns, vessel_no_stack_compat_ids=v_nsc)
+        score = scorer.score_relic_in_context(relic, build, state)
         assert score == 0, (
             "Different ash-of-war skills with same exclusivityId must conflict"
         )
@@ -356,9 +333,9 @@ class TestExclusivityStacking:
         fire_atk_up = 7001600  # compat=100, stacking type: stack
         build = _make_build(required=[fire_atk_up, _GUARD_COUNTER_HP])
         relic = _make_relic([fire_atk_up, EMPTY, EMPTY])
-        v_eff, v_excl, v_ns, v_nsc = _vessel_state_from_effects(ds, [_GUARD_COUNTER_HP])
+        state = _vessel_state_from_effects(ds, [_GUARD_COUNTER_HP])
 
-        score = scorer.score_relic_in_context(relic, build, v_eff, v_excl, v_ns, vessel_no_stack_compat_ids=v_nsc)
+        score = scorer.score_relic_in_context(relic, build, state)
         assert score > 0, "Stack-type effects must always score positively"
 
 
@@ -388,40 +365,37 @@ class TestTierFamilyStacking:
     def test_hp_restore_base_blocks_plus1(
         self, scorer: BuildScorer, ds: SourceDataHandler,
     ) -> None:
-        """HP Restoration +0 (no_stack) is already placed → +1 (unique)
+        """HP Restoration +0 (no_stack) is already placed -> +1 (unique)
         should be blocked because they share compat=7005600."""
         build = _make_build(required=[_HP_RESTORE_BASE, _HP_RESTORE_PLUS1])
         relic = _make_relic([_HP_RESTORE_PLUS1, EMPTY, EMPTY])
-        v_eff, v_excl, v_ns, v_nsc = _vessel_state_from_effects(ds, [_HP_RESTORE_BASE])
+        state = _vessel_state_from_effects(ds, [_HP_RESTORE_BASE])
 
-        score = scorer.score_relic_in_context(
-            relic, build, v_eff, v_excl, v_ns, vessel_no_stack_compat_ids=v_nsc)
+        score = scorer.score_relic_in_context(relic, build, state)
         assert score == 0, "unique +1 must be blocked when no_stack base is placed"
 
     def test_hp_restore_base_blocks_plus2(
         self, scorer: BuildScorer, ds: SourceDataHandler,
     ) -> None:
-        """HP Restoration +0 (no_stack) is already placed → +2 (unique)
+        """HP Restoration +0 (no_stack) is already placed -> +2 (unique)
         should be blocked."""
         build = _make_build(required=[_HP_RESTORE_BASE, _HP_RESTORE_PLUS2])
         relic = _make_relic([_HP_RESTORE_PLUS2, EMPTY, EMPTY])
-        v_eff, v_excl, v_ns, v_nsc = _vessel_state_from_effects(ds, [_HP_RESTORE_BASE])
+        state = _vessel_state_from_effects(ds, [_HP_RESTORE_BASE])
 
-        score = scorer.score_relic_in_context(
-            relic, build, v_eff, v_excl, v_ns, vessel_no_stack_compat_ids=v_nsc)
+        score = scorer.score_relic_in_context(relic, build, state)
         assert score == 0, "unique +2 must be blocked when no_stack base is placed"
 
     def test_hp_restore_plus1_blocks_base(
         self, scorer: BuildScorer, ds: SourceDataHandler,
     ) -> None:
-        """HP Restoration +1 (unique) is already placed → +0 (no_stack)
+        """HP Restoration +1 (unique) is already placed -> +0 (no_stack)
         should be blocked via identity (compat added to effect_ids)."""
         build = _make_build(required=[_HP_RESTORE_PLUS1, _HP_RESTORE_BASE])
         relic = _make_relic([_HP_RESTORE_BASE, EMPTY, EMPTY])
-        v_eff, v_excl, v_ns, v_nsc = _vessel_state_from_effects(ds, [_HP_RESTORE_PLUS1])
+        state = _vessel_state_from_effects(ds, [_HP_RESTORE_PLUS1])
 
-        score = scorer.score_relic_in_context(
-            relic, build, v_eff, v_excl, v_ns, vessel_no_stack_compat_ids=v_nsc)
+        score = scorer.score_relic_in_context(relic, build, state)
         assert score == 0, "no_stack base must be blocked when unique variant is placed"
 
     def test_hp_restore_base_marked_redundant_in_breakdown(
@@ -430,9 +404,9 @@ class TestTierFamilyStacking:
         """Breakdown should mark +0 as redundant when +1 is placed."""
         build = _make_build(required=[_HP_RESTORE_PLUS1, _HP_RESTORE_BASE])
         relic = _make_relic([_HP_RESTORE_BASE, EMPTY, EMPTY])
-        v_eff, v_excl, v_ns, v_nsc = _vessel_state_from_effects(ds, [_HP_RESTORE_PLUS1])
+        state = _vessel_state_from_effects(ds, [_HP_RESTORE_PLUS1])
 
-        breakdown = scorer.get_breakdown(relic, build, v_eff, v_excl, v_ns, v_nsc)
+        breakdown = scorer.get_breakdown(relic, build, state)
         for entry in breakdown:
             if entry["effect_id"] == _HP_RESTORE_BASE:
                 assert entry["redundant"], "Base should be marked redundant"
@@ -445,31 +419,29 @@ class TestTierFamilyStacking:
     def test_hp_restore_plus1_and_plus2_coexist(
         self, scorer: BuildScorer, ds: SourceDataHandler,
     ) -> None:
-        """+1 (unique) placed first → +2 (unique) must NOT be blocked.
+        """+1 (unique) placed first -> +2 (unique) must NOT be blocked.
         Both are variants of the same tier family but are not mutually exclusive.
         Regression test: Rule 2 previously added compat to no_stack_compat_ids,
         which incorrectly blocked sibling variants."""
         build = _make_build(required=[_HP_RESTORE_PLUS1, _HP_RESTORE_PLUS2])
         relic = _make_relic([_HP_RESTORE_PLUS2, EMPTY, EMPTY])
-        v_eff, v_excl, v_ns, v_nsc = _vessel_state_from_effects(ds, [_HP_RESTORE_PLUS1])
+        state = _vessel_state_from_effects(ds, [_HP_RESTORE_PLUS1])
 
-        score = scorer.score_relic_in_context(
-            relic, build, v_eff, v_excl, v_ns, vessel_no_stack_compat_ids=v_nsc)
+        score = scorer.score_relic_in_context(relic, build, state)
         assert score > 0, "+2 must not be blocked when only +1 is placed (no base)"
 
     def test_hp_restore_plus2_and_plus1_coexist_reverse_order(
         self, scorer: BuildScorer, ds: SourceDataHandler,
     ) -> None:
-        """+2 placed first → +1 must also be unblocked (order symmetric)."""
+        """+2 placed first -> +1 must also be unblocked (order symmetric)."""
         build = _make_build(required=[_HP_RESTORE_PLUS2, _HP_RESTORE_PLUS1])
         relic = _make_relic([_HP_RESTORE_PLUS1, EMPTY, EMPTY])
-        v_eff, v_excl, v_ns, v_nsc = _vessel_state_from_effects(ds, [_HP_RESTORE_PLUS2])
+        state = _vessel_state_from_effects(ds, [_HP_RESTORE_PLUS2])
 
-        score = scorer.score_relic_in_context(
-            relic, build, v_eff, v_excl, v_ns, vessel_no_stack_compat_ids=v_nsc)
+        score = scorer.score_relic_in_context(relic, build, state)
         assert score > 0, "+1 must not be blocked when only +2 is placed (no base)"
 
-    # -- Art gauge: both unique → should coexist -----------------------------
+    # -- Art gauge: both unique -> should coexist -----------------------------
 
     def test_art_gauge_unique_tiers_coexist(
         self, scorer: BuildScorer, ds: SourceDataHandler,
@@ -478,10 +450,9 @@ class TestTierFamilyStacking:
         Neither should block the other — they must coexist."""
         build = _make_build(required=[_ART_GAUGE_BASE, _ART_GAUGE_PLUS1])
         relic = _make_relic([_ART_GAUGE_PLUS1, EMPTY, EMPTY])
-        v_eff, v_excl, v_ns, v_nsc = _vessel_state_from_effects(ds, [_ART_GAUGE_BASE])
+        state = _vessel_state_from_effects(ds, [_ART_GAUGE_BASE])
 
-        score = scorer.score_relic_in_context(
-            relic, build, v_eff, v_excl, v_ns, vessel_no_stack_compat_ids=v_nsc)
+        score = scorer.score_relic_in_context(relic, build, state)
         assert score > 0, "Both-unique tier variants must coexist"
 
     def test_art_gauge_reverse_order_also_coexists(
@@ -490,10 +461,9 @@ class TestTierFamilyStacking:
         """+1 placed first, then +0 — both unique, should still coexist."""
         build = _make_build(required=[_ART_GAUGE_PLUS1, _ART_GAUGE_BASE])
         relic = _make_relic([_ART_GAUGE_BASE, EMPTY, EMPTY])
-        v_eff, v_excl, v_ns, v_nsc = _vessel_state_from_effects(ds, [_ART_GAUGE_PLUS1])
+        state = _vessel_state_from_effects(ds, [_ART_GAUGE_PLUS1])
 
-        score = scorer.score_relic_in_context(
-            relic, build, v_eff, v_excl, v_ns, vessel_no_stack_compat_ids=v_nsc)
+        score = scorer.score_relic_in_context(relic, build, state)
         assert score > 0, "Both-unique tier variants must coexist (reverse order)"
 
     # -- Mega-group 100 regression guard: no_stack compat=100 must NOT
@@ -507,8 +477,7 @@ class TestTierFamilyStacking:
         fire_atk_up = 7001600  # compat=100, stack type
         build = _make_build(required=[fire_atk_up, _GUARD_COUNTER_HP])
         relic = _make_relic([fire_atk_up, EMPTY, EMPTY])
-        v_eff, v_excl, v_ns, v_nsc = _vessel_state_from_effects(ds, [_GUARD_COUNTER_HP])
+        state = _vessel_state_from_effects(ds, [_GUARD_COUNTER_HP])
 
-        score = scorer.score_relic_in_context(
-            relic, build, v_eff, v_excl, v_ns, vessel_no_stack_compat_ids=v_nsc)
+        score = scorer.score_relic_in_context(relic, build, state)
         assert score > 0, "Stack-type compat=100 must not be blocked by no_stack compat=100"

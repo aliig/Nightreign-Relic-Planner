@@ -1,8 +1,10 @@
 """Relic scoring with stacking awareness."""
+from __future__ import annotations
+
 from nrplanner.constants import EMPTY_EFFECT
 from nrplanner.data import SourceDataHandler
 from nrplanner.models import (
-    BuildDefinition, OwnedRelic,
+    BuildDefinition, OwnedRelic, VesselState,
     CURSE_EXCESS_PENALTY, REQUIRED_WEIGHT,
 )
 
@@ -192,8 +194,7 @@ class BuildScorer:
     def _excluded_category_score(
         self, eff_id: int, base_weight: int,
         build: BuildDefinition,
-        vessel_desired_compat_placed: set[int],
-        desired_compat_effects: dict[int, set[int]],
+        state: VesselState,
     ) -> tuple[int, str | None]:
         """Score for a non-protected effect in an excluded stacking category.
 
@@ -202,13 +203,14 @@ class BuildScorer:
         - No desired effect in category: (0, "excl_category_nullified")
         - Desired effect NOT yet placed (would block it): (-penalty, "excl_category_blocking")
         """
+        dce = state.desired_compat_effects or {}
         compat = self.data_source.get_effect_conflict_id(eff_id)
-        desired_in_cat = desired_compat_effects.get(compat)
+        desired_in_cat = dce.get(compat)
 
         if not desired_in_cat:
             return 0, "excl_category_nullified"
 
-        if compat in vessel_desired_compat_placed:
+        if compat in state.desired_compat_placed:
             # Desired effect is already to the LEFT — this is harmless dead weight
             return 0, "excl_category_nullified"
 
@@ -221,16 +223,19 @@ class BuildScorer:
 
     def _is_excl_category_effect(self, eff_id: int,
                                   build: BuildDefinition,
-                                  desired_compat_effects: dict[int, set[int]],
+                                  state: VesselState,
                                   ) -> bool:
         """True if effect is a non-protected member of an excluded stacking
         category that has desired effects (positional scoring applies)."""
+        dce = state.desired_compat_effects or {}
+        if not dce:
+            return False
         compat = self.data_source.get_effect_conflict_id(eff_id)
         if compat == -1:
             return False
         if compat not in set(build.excluded_stacking_categories):
             return False
-        if compat not in desired_compat_effects:
+        if compat not in dce:
             return False  # no desired effect → handled by pre-filter
         if self._is_effect_protected(eff_id, build):
             return False  # desired effect itself → scores normally
@@ -278,12 +283,7 @@ class BuildScorer:
         return result
 
     def _effect_stacking_score(self, eff_id: int, category: str, weight: int,
-                                vessel_effect_ids: set[int],
-                                vessel_exclusivity_ids: set[int],
-                                vessel_no_stack_exclusivity_ids: set[int],
-                                vessel_no_stack_compat_ids: set[int] | None = None,
-                                desired_conflict_weights: dict[int, int] | None = None,
-                                ) -> int:
+                                state: VesselState) -> int:
         """Weight of an effect given what's already in the vessel (0 if redundant).
 
         Uses ``exclusivityId`` for mutual-exclusion between effects that truly
@@ -307,24 +307,23 @@ class BuildScorer:
         if stype == "stack":
             return weight
         if stype == "unique":
-            if eff_id in vessel_effect_ids:
+            if eff_id in state.effect_ids:
                 return 0
-            if text_id != -1 and text_id in vessel_effect_ids:
+            if text_id != -1 and text_id in state.effect_ids:
                 return 0
-            if excl != -1 and excl in vessel_no_stack_exclusivity_ids:
-                return self._conflict_penalty(eff_id, desired_conflict_weights)
+            if excl != -1 and excl in state.no_stack_exclusivity_ids:
+                return self._conflict_penalty(eff_id, state.desired_conflict_weights)
             # Tier-family cross-check: unique variants blocked by no_stack base
-            if vessel_no_stack_compat_ids is not None:
-                compat = self.data_source.get_effect_conflict_id(eff_id)
-                if compat != -1 and compat in vessel_no_stack_compat_ids:
-                    return self._conflict_penalty(eff_id, desired_conflict_weights)
+            compat = self.data_source.get_effect_conflict_id(eff_id)
+            if compat != -1 and compat in state.no_stack_compat_ids:
+                return self._conflict_penalty(eff_id, state.desired_conflict_weights)
             return weight
         # no_stack
-        if excl != -1 and excl in vessel_exclusivity_ids:
-            return self._conflict_penalty(eff_id, desired_conflict_weights)
-        if text_id != -1 and text_id in vessel_effect_ids:
+        if excl != -1 and excl in state.exclusivity_ids:
+            return self._conflict_penalty(eff_id, state.desired_conflict_weights)
+        if text_id != -1 and text_id in state.effect_ids:
             return 0
-        if eff_id in vessel_effect_ids:
+        if eff_id in state.effect_ids:
             return 0
         return weight
 
@@ -339,95 +338,59 @@ class BuildScorer:
         return 0
 
     def score_relic_in_context(self, relic: OwnedRelic, build: BuildDefinition,
-                                vessel_effect_ids: set[int],
-                                vessel_exclusivity_ids: set[int],
-                                vessel_no_stack_exclusivity_ids: set[int],
-                                vessel_curse_counts: dict[int, int] | None = None,
-                                vessel_no_stack_compat_ids: set[int] | None = None,
-                                desired_conflict_weights: dict[int, int] | None = None,
-                                vessel_desired_compat_placed: set[int] | None = None,
-                                desired_compat_effects: dict[int, set[int]] | None = None,
-                                ) -> int:
+                                state: VesselState) -> int:
         """Score considering stacking state of already-assigned relics."""
         score = 0
-        _dce = desired_compat_effects or {}
-        _vdcp = vessel_desired_compat_placed if vessel_desired_compat_placed is not None else set()
         for eff in relic.effects:
             if eff in (EMPTY_EFFECT, 0):
                 continue
             cat, weight = self._resolve_category_and_weight(eff, build)
             if cat is not None and cat != "excluded":
                 # Positional stacking category handling
-                if _dce and self._is_excl_category_effect(eff, build, _dce):
-                    adj, _ = self._excluded_category_score(
-                        eff, weight, build, _vdcp, _dce)
+                if self._is_excl_category_effect(eff, build, state):
+                    adj, _ = self._excluded_category_score(eff, weight, build, state)
                     score += adj
                 else:
-                    score += self._effect_stacking_score(
-                        eff, cat, weight,
-                        vessel_effect_ids, vessel_exclusivity_ids,
-                        vessel_no_stack_exclusivity_ids, vessel_no_stack_compat_ids,
-                        desired_conflict_weights)
+                    score += self._effect_stacking_score(eff, cat, weight, state)
         for curse in relic.curses:
             if curse in (EMPTY_EFFECT, 0):
                 continue
             cat, weight = self._resolve_category_and_weight(curse, build)
             if cat is not None and cat != "excluded":
-                if _dce and self._is_excl_category_effect(curse, build, _dce):
-                    adj, _ = self._excluded_category_score(
-                        curse, weight, build, _vdcp, _dce)
+                if self._is_excl_category_effect(curse, build, state):
+                    adj, _ = self._excluded_category_score(curse, weight, build, state)
                     score += adj
                 else:
-                    score += self._effect_stacking_score(
-                        curse, cat, weight,
-                        vessel_effect_ids, vessel_exclusivity_ids,
-                        vessel_no_stack_exclusivity_ids, vessel_no_stack_compat_ids,
-                        desired_conflict_weights)
-        if vessel_curse_counts is not None:
-            for curse in relic.curses:
-                if curse in (EMPTY_EFFECT, 0):
-                    continue
-                if vessel_curse_counts.get(curse, 0) >= build.curse_max:
-                    score += CURSE_EXCESS_PENALTY
+                    score += self._effect_stacking_score(curse, cat, weight, state)
+        for curse in relic.curses:
+            if curse in (EMPTY_EFFECT, 0):
+                continue
+            if state.curse_counts.get(curse, 0) >= build.curse_max:
+                score += CURSE_EXCESS_PENALTY
         return score
 
     # ------------------------------------------------------------------
     # Breakdown (for UI / API)
     # ------------------------------------------------------------------
 
-    def _classify_override(self, eff_id: int, vessel_effect_ids: set[int],
-                           vessel_exclusivity_ids: set[int],
-                           vessel_no_stack_exclusivity_ids: set[int],
-                           vessel_no_stack_compat_ids: set[int] | None = None) -> str:
+    def _classify_override(self, eff_id: int, state: VesselState) -> str:
         text_id = self.data_source.get_effect_text_id(eff_id)
-        if eff_id in vessel_effect_ids:
+        if eff_id in state.effect_ids:
             return "duplicate"
-        if text_id != -1 and text_id in vessel_effect_ids:
+        if text_id != -1 and text_id in state.effect_ids:
             return "duplicate"
         # Tier-family conflict (unique blocked by no_stack base via compat)
-        if vessel_no_stack_compat_ids is not None:
-            compat = self.data_source.get_effect_conflict_id(eff_id)
-            if compat != -1 and compat in vessel_no_stack_compat_ids:
-                return "overridden"
+        compat = self.data_source.get_effect_conflict_id(eff_id)
+        if compat != -1 and compat in state.no_stack_compat_ids:
+            return "overridden"
         return "overridden"
 
     def get_breakdown(self, relic: OwnedRelic, build: BuildDefinition,
-                      other_effect_ids: set[int] | None = None,
-                      other_exclusivity_ids: set[int] | None = None,
-                      other_no_stack_exclusivity_ids: set[int] | None = None,
-                      other_no_stack_compat_ids: set[int] | None = None,
-                      desired_conflict_weights: dict[int, int] | None = None,
-                      vessel_desired_compat_placed: set[int] | None = None,
-                      desired_compat_effects: dict[int, set[int]] | None = None,
+                      state: VesselState | None = None,
                       ) -> list[dict]:
         """Per-effect scoring detail for UI / API display."""
         breakdown = []
-        _eff_ids  = other_effect_ids or set()
-        _excl_ids = other_exclusivity_ids or set()
-        _ns_ids   = other_no_stack_exclusivity_ids or set()
-        _ns_compat = other_no_stack_compat_ids
-        _dce = desired_compat_effects or {}
-        _vdcp = vessel_desired_compat_placed if vessel_desired_compat_placed is not None else set()
+        has_state = state is not None
 
         for is_curse, effs in ((False, relic.effects), (True, relic.curses)):
             for eff in effs:
@@ -438,10 +401,10 @@ class BuildScorer:
                 override_status = None
 
                 # Positional stacking category handling
-                if (_dce and cat is not None and cat != "excluded"
-                        and self._is_excl_category_effect(eff, build, _dce)):
+                if (has_state and cat is not None and cat != "excluded"
+                        and self._is_excl_category_effect(eff, build, state)):
                     adj, excl_status = self._excluded_category_score(
-                        eff, weight, build, _vdcp, _dce)
+                        eff, weight, build, state)
                     breakdown.append({
                         "effect_id": eff,
                         "name": self.data_source.get_effect_name(eff),
@@ -454,15 +417,13 @@ class BuildScorer:
                     })
                     continue
 
-                if other_effect_ids is not None and cat is not None and cat != "excluded":
+                if has_state and cat is not None and cat != "excluded":
                     ctx_score = self._effect_stacking_score(
-                        eff, cat, weight, _eff_ids, _excl_ids, _ns_ids, _ns_compat,
-                        desired_conflict_weights)
+                        eff, cat, weight, state)
                     if ctx_score < 0:
                         override_status = "conflict_penalty"
                     elif ctx_score == 0 and base_score != 0:
-                        override_status = self._classify_override(
-                            eff, _eff_ids, _excl_ids, _ns_ids, _ns_compat)
+                        override_status = self._classify_override(eff, state)
                 final_score = base_score
                 if override_status == "conflict_penalty":
                     final_score = ctx_score  # negative

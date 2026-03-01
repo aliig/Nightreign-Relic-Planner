@@ -2,6 +2,9 @@
 
 These are the FastAPI-ready schemas — keep field names stable.
 """
+from __future__ import annotations
+
+from dataclasses import dataclass
 from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field
@@ -212,3 +215,148 @@ class VesselResult(BaseModel):
     total_score: int
     meets_requirements: bool = True
     missing_requirements: list[int | str] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Vessel stacking state
+# ---------------------------------------------------------------------------
+
+@dataclass(slots=True)
+class PlacementDelta:
+    """Reversible record of state changes from placing one relic."""
+    effect_ids: frozenset[int]
+    exclusivity_ids: frozenset[int]
+    no_stack_exclusivity_ids: frozenset[int]
+    no_stack_compat_ids: frozenset[int]
+    desired_compat_placed: frozenset[int]
+    curse_ids: tuple[int, ...]
+
+
+class VesselState:
+    """Mutable stacking state for a vessel being built up slot-by-slot.
+
+    Encapsulates the 6 mutable tracking sets/dicts plus the 2 build-level
+    precomputed values that were previously threaded as loose parameters.
+    """
+    __slots__ = (
+        'data_source',
+        'effect_ids', 'exclusivity_ids', 'no_stack_exclusivity_ids',
+        'no_stack_compat_ids', 'curse_counts', 'desired_compat_placed',
+        'desired_conflict_weights', 'desired_compat_effects',
+    )
+
+    def __init__(
+        self,
+        data_source: SourceDataHandler,
+        desired_conflict_weights: dict[int, int] | None = None,
+        desired_compat_effects: dict[int, set[int]] | None = None,
+    ):
+        self.data_source = data_source
+        self.effect_ids: set[int] = set()
+        self.exclusivity_ids: set[int] = set()
+        self.no_stack_exclusivity_ids: set[int] = set()
+        self.no_stack_compat_ids: set[int] = set()
+        self.curse_counts: dict[int, int] = {}
+        self.desired_compat_placed: set[int] = set()
+        # Build-level precomputed (immutable after init)
+        self.desired_conflict_weights = desired_conflict_weights
+        self.desired_compat_effects = desired_compat_effects
+
+    def place(self, relic: OwnedRelic) -> PlacementDelta:
+        """Compute and apply state changes for placing a relic. Returns delta for undo."""
+        added_eff: set[int] = set()
+        added_excl: set[int] = set()
+        added_ns_excl: set[int] = set()
+        added_ns_compat: set[int] = set()
+
+        ds = self.data_source
+        for eff in relic.all_effects:
+            added_eff.add(eff)
+            text_id = ds.get_effect_text_id(eff)
+            if text_id != -1 and text_id != eff:
+                added_eff.add(text_id)
+            compat = ds.get_effect_conflict_id(eff)
+            stype = ds.get_effect_stacking_type(eff)
+            excl = ds.get_effect_exclusivity_id(eff)
+            if excl != -1:
+                added_excl.add(excl)
+                if stype == "no_stack":
+                    added_ns_excl.add(excl)
+            # Rule 1: no_stack base placed (self-referencing compat)
+            if stype == "no_stack" and compat != -1 and compat == eff:
+                added_ns_compat.add(compat)
+            # Rule 2: variant placed that points to a real no_stack tier-family base.
+            # Guard: compat must be self-referencing (a real tier-family base ID, not a
+            # mega-group sentinel like 100).  Add the base's eff_id to effect_ids so the
+            # base is blocked via the identity check (eff_id in vessel_effect_ids).
+            # Do NOT add to no_stack_compat_ids — that would incorrectly block sibling
+            # variants (e.g. HP Restore +2 blocked when +1 is placed).
+            elif compat != -1 and compat != eff:
+                if (ds.get_effect_conflict_id(compat) == compat
+                        and ds.get_effect_stacking_type(compat) == "no_stack"):
+                    added_eff.add(compat)
+
+        # Desired compat tracking
+        added_dcp: set[int] = set()
+        dce = self.desired_compat_effects
+        if dce:
+            for eff in relic.all_effects:
+                compat = ds.get_effect_conflict_id(eff)
+                if compat == -1 or compat not in dce:
+                    continue
+                desired_set = dce[compat]
+                if eff in desired_set:
+                    added_dcp.add(compat)
+                else:
+                    text_id = ds.get_effect_text_id(eff)
+                    if text_id != -1 and text_id in desired_set:
+                        added_dcp.add(compat)
+
+        # Curse tracking
+        curse_ids = tuple(
+            c for c in relic.curses if c not in (EMPTY_EFFECT, 0)
+        )
+
+        # Apply mutations
+        self.effect_ids.update(added_eff)
+        self.exclusivity_ids.update(added_excl)
+        self.no_stack_exclusivity_ids.update(added_ns_excl)
+        self.no_stack_compat_ids.update(added_ns_compat)
+        self.desired_compat_placed.update(added_dcp)
+        for cid in curse_ids:
+            self.curse_counts[cid] = self.curse_counts.get(cid, 0) + 1
+
+        return PlacementDelta(
+            effect_ids=frozenset(added_eff),
+            exclusivity_ids=frozenset(added_excl),
+            no_stack_exclusivity_ids=frozenset(added_ns_excl),
+            no_stack_compat_ids=frozenset(added_ns_compat),
+            desired_compat_placed=frozenset(added_dcp),
+            curse_ids=curse_ids,
+        )
+
+    def remove(self, delta: PlacementDelta) -> None:
+        """Undo a placement (for backtracking)."""
+        self.effect_ids -= delta.effect_ids
+        self.exclusivity_ids -= delta.exclusivity_ids
+        self.no_stack_exclusivity_ids -= delta.no_stack_exclusivity_ids
+        self.no_stack_compat_ids -= delta.no_stack_compat_ids
+        self.desired_compat_placed -= delta.desired_compat_placed
+        for cid in delta.curse_ids:
+            self.curse_counts[cid] -= 1
+            if self.curse_counts[cid] == 0:
+                del self.curse_counts[cid]
+
+    def copy(self) -> VesselState:
+        """Shallow copy for branching (e.g. result builder needs a fresh copy)."""
+        clone = VesselState.__new__(VesselState)
+        clone.data_source = self.data_source
+        clone.effect_ids = set(self.effect_ids)
+        clone.exclusivity_ids = set(self.exclusivity_ids)
+        clone.no_stack_exclusivity_ids = set(self.no_stack_exclusivity_ids)
+        clone.no_stack_compat_ids = set(self.no_stack_compat_ids)
+        clone.curse_counts = dict(self.curse_counts)
+        clone.desired_compat_placed = set(self.desired_compat_placed)
+        clone.desired_conflict_weights = self.desired_conflict_weights
+        clone.desired_compat_effects = self.desired_compat_effects
+        return clone

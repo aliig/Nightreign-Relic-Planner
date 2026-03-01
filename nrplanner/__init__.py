@@ -16,6 +16,7 @@ from nrplanner.models import (
     OwnedRelic, RelicInventory,
     BuildDefinition,
     SlotAssignment, VesselResult,
+    PlacementDelta, VesselState,
 )
 from nrplanner.scoring import BuildScorer
 from nrplanner.optimizer import VesselOptimizer
@@ -36,6 +37,7 @@ __all__ = [
     "OwnedRelic", "RelicInventory",
     "BuildDefinition",
     "SlotAssignment", "VesselResult",
+    "PlacementDelta", "VesselState",
     # Optimizer
     "BuildScorer", "VesselOptimizer",
     # Persistence

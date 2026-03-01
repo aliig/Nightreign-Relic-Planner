@@ -3,10 +3,10 @@
 Unit tests (test_scoring.py) verify the scorer with manually constructed vessel state.
 These tests exercise the FULL PIPELINE:
 
-  _get_relic_stacking_adds() → score_relic_in_context() → VesselResult
+  VesselState.place() → score_relic_in_context() → VesselResult
 
 This catches bugs in state accumulation across slots that unit tests cannot
-detect because they bypass _get_relic_stacking_adds() entirely.
+detect because they bypass VesselState.place() entirely.
 
 Each known stacking bug that has been fixed gets a regression guard here so
 it can never be silently re-introduced.
@@ -21,6 +21,7 @@ from nrplanner import (
     BuildScorer,
     VesselOptimizer,
     SourceDataHandler,
+    VesselState,
     decrypt_sl2,
     discover_characters,
     parse_relics,
@@ -127,43 +128,39 @@ def optimizer(ds: SourceDataHandler, scorer: BuildScorer) -> VesselOptimizer:
 # ---------------------------------------------------------------------------
 # State-building integration tests
 #
-# These call _get_relic_stacking_adds() directly (it is internal but not
-# sealed) and feed its output into score_relic_in_context().  This is the
-# precise integration point that has harboured the tier-family stacking bugs.
+# These use VesselState.place() to build up stacking state and feed it into
+# score_relic_in_context().  This is the precise integration point that has
+# harboured the tier-family stacking bugs.
 # ---------------------------------------------------------------------------
 
 class TestStackingStateBuilding:
-    """Verify that _get_relic_stacking_adds() produces the correct sets for
+    """Verify that VesselState.place() produces the correct sets for
     each stacking rule, and that those sets yield correct scoring behaviour."""
 
     # -- Rule 1: no_stack base placed ----------------------------------------
 
     def test_rule1_base_blocks_variant_via_no_stack_compat_ids(
-        self, optimizer: VesselOptimizer, scorer: BuildScorer,
+        self, ds: SourceDataHandler, scorer: BuildScorer,
     ) -> None:
         """When the no_stack base (+0) is placed, its compat ID must enter
         no_stack_compat_ids so that unique variants (+1/+2) score 0.
 
-        Regression guard for Rule 1 in _get_relic_stacking_adds().
+        Regression guard for Rule 1 in VesselState.place().
         """
         relic_base = _make_relic([_HP_RESTORE_BASE, EMPTY, EMPTY])
-        eff_ids, excl_ids, ns_excl_ids, ns_compat_ids = (
-            optimizer._get_relic_stacking_adds(relic_base)
-        )
+        state = VesselState(ds)
+        state.place(relic_base)
 
         # The base's compat ID must be in no_stack_compat_ids so the unique
         # variant check in _effect_stacking_score() can block it.
-        assert _HP_RESTORE_BASE in ns_compat_ids, (
+        assert _HP_RESTORE_BASE in state.no_stack_compat_ids, (
             "Rule 1: no_stack base must add its self-ref compat to no_stack_compat_ids"
         )
 
         build = _make_build(preferred=[_HP_RESTORE_PLUS1])
         relic_plus1 = _make_relic([_HP_RESTORE_PLUS1, EMPTY, EMPTY])
 
-        score = scorer.score_relic_in_context(
-            relic_plus1, build, eff_ids, excl_ids, ns_excl_ids,
-            vessel_no_stack_compat_ids=ns_compat_ids,
-        )
+        score = scorer.score_relic_in_context(relic_plus1, build, state)
         assert score == 0, (
             "HP Restore +1 must be blocked when no_stack base is already placed"
         )
@@ -171,7 +168,7 @@ class TestStackingStateBuilding:
     # -- Rule 2: unique variant placed ---------------------------------------
 
     def test_rule2_variant_adds_base_id_to_effect_ids(
-        self, optimizer: VesselOptimizer,
+        self, ds: SourceDataHandler,
     ) -> None:
         """When a unique variant (+1) is placed, its compat ID (the base's eff_id)
         must enter effect_ids so the no_stack base is blocked.
@@ -181,46 +178,41 @@ class TestStackingStateBuilding:
         wrongly blocked (they share the same compat ID).
         """
         relic_plus1 = _make_relic([_HP_RESTORE_PLUS1, EMPTY, EMPTY])
-        eff_ids, excl_ids, ns_excl_ids, ns_compat_ids = (
-            optimizer._get_relic_stacking_adds(relic_plus1)
-        )
+        state = VesselState(ds)
+        state.place(relic_plus1)
 
         # Base's eff_id must be in effect_ids (for identity check to block it)
-        assert _HP_RESTORE_BASE in eff_ids, (
+        assert _HP_RESTORE_BASE in state.effect_ids, (
             "Rule 2: placing a variant must add the base's eff_id to effect_ids"
         )
         # Base's compat must NOT be in no_stack_compat_ids
         # (that would incorrectly block sibling variants)
-        assert _HP_RESTORE_BASE not in ns_compat_ids, (
+        assert _HP_RESTORE_BASE not in state.no_stack_compat_ids, (
             "Rule 2: variant must NOT add base's compat to no_stack_compat_ids "
             "(would falsely block sibling variants like +2)"
         )
 
     def test_rule2_variant_blocks_base_via_effect_ids(
-        self, optimizer: VesselOptimizer, scorer: BuildScorer,
+        self, ds: SourceDataHandler, scorer: BuildScorer,
     ) -> None:
         """After Rule 2 places base's eff_id in effect_ids, the no_stack base
         must score 0 (blocked by the identity check: eff_id in vessel_effect_ids).
         """
         relic_plus1 = _make_relic([_HP_RESTORE_PLUS1, EMPTY, EMPTY])
-        eff_ids, excl_ids, ns_excl_ids, ns_compat_ids = (
-            optimizer._get_relic_stacking_adds(relic_plus1)
-        )
+        state = VesselState(ds)
+        state.place(relic_plus1)
 
         build = _make_build(preferred=[_HP_RESTORE_BASE])
         relic_base = _make_relic([_HP_RESTORE_BASE, EMPTY, EMPTY])
 
-        score = scorer.score_relic_in_context(
-            relic_base, build, eff_ids, excl_ids, ns_excl_ids,
-            vessel_no_stack_compat_ids=ns_compat_ids,
-        )
+        score = scorer.score_relic_in_context(relic_base, build, state)
         assert score == 0, (
             "HP Restore base must score 0 when a variant is already placed "
             "(base's eff_id is in effect_ids via Rule 2)"
         )
 
     def test_rule2_sibling_variant_not_blocked(
-        self, optimizer: VesselOptimizer, scorer: BuildScorer,
+        self, ds: SourceDataHandler, scorer: BuildScorer,
     ) -> None:
         """+1 placed first must NOT block +2.
 
@@ -231,17 +223,13 @@ class TestStackingStateBuilding:
         so it scores normally.
         """
         relic_plus1 = _make_relic([_HP_RESTORE_PLUS1, EMPTY, EMPTY])
-        eff_ids, excl_ids, ns_excl_ids, ns_compat_ids = (
-            optimizer._get_relic_stacking_adds(relic_plus1)
-        )
+        state = VesselState(ds)
+        state.place(relic_plus1)
 
         build = _make_build(preferred=[_HP_RESTORE_PLUS2])
         relic_plus2 = _make_relic([_HP_RESTORE_PLUS2, EMPTY, EMPTY])
 
-        score = scorer.score_relic_in_context(
-            relic_plus2, build, eff_ids, excl_ids, ns_excl_ids,
-            vessel_no_stack_compat_ids=ns_compat_ids,
-        )
+        score = scorer.score_relic_in_context(relic_plus2, build, state)
         assert score > 0, (
             "HP Restore +2 must NOT be blocked when +1 is placed. "
             "Rule 2 must add base's eff_id to effect_ids, not no_stack_compat_ids."
@@ -250,7 +238,7 @@ class TestStackingStateBuilding:
     # -- Mega-group 100 guard ------------------------------------------------
 
     def test_rule2_skips_mega_group_100(
-        self, optimizer: VesselOptimizer,
+        self, ds: SourceDataHandler,
     ) -> None:
         """Effects with compat=100 (mega-group sentinel) must NOT trigger
         Rule 2.  The self-ref guard (get_effect_conflict_id(100) != 100)
@@ -260,19 +248,20 @@ class TestStackingStateBuilding:
         """
         # _TAKING_ATTACKS is no_stack with compat=100 (not self-referencing)
         relic = _make_relic([_TAKING_ATTACKS, EMPTY, EMPTY])
-        eff_ids, _, _, ns_compat_ids = optimizer._get_relic_stacking_adds(relic)
+        state = VesselState(ds)
+        state.place(relic)
 
         # 100 is not a real effect ID — must not enter the sets via Rule 2
         # (Rule 1 also doesn't fire because compat=100 != eff_id=7032200)
-        assert 100 not in ns_compat_ids, (
+        assert 100 not in state.no_stack_compat_ids, (
             "Mega-group sentinel 100 must not enter no_stack_compat_ids"
         )
-        assert 100 not in eff_ids, (
+        assert 100 not in state.effect_ids, (
             "Mega-group sentinel 100 must not enter effect_ids"
         )
 
     def test_mega_group_100_effects_coexist_in_state(
-        self, optimizer: VesselOptimizer, scorer: BuildScorer,
+        self, ds: SourceDataHandler, scorer: BuildScorer,
     ) -> None:
         """Two different compat=100 effects (no shared exclusivityId) must both
         score when placed in the same vessel.
@@ -280,17 +269,13 @@ class TestStackingStateBuilding:
         Regression guard for the original mega-group false-block bug.
         """
         relic_taking = _make_relic([_TAKING_ATTACKS, EMPTY, EMPTY])
-        eff_ids, excl_ids, ns_excl_ids, ns_compat_ids = (
-            optimizer._get_relic_stacking_adds(relic_taking)
-        )
+        state = VesselState(ds)
+        state.place(relic_taking)
 
         build = _make_build(preferred=[_PHYSICAL_ATK_1])
         relic_phys = _make_relic([_PHYSICAL_ATK_1, EMPTY, EMPTY])
 
-        score = scorer.score_relic_in_context(
-            relic_phys, build, eff_ids, excl_ids, ns_excl_ids,
-            vessel_no_stack_compat_ids=ns_compat_ids,
-        )
+        score = scorer.score_relic_in_context(relic_phys, build, state)
         assert score > 0, (
             "Physical Attack +0 (compat=100, stack) must not be blocked by "
             "Taking Attacks (compat=100, no_stack) — no shared exclusivityId"
