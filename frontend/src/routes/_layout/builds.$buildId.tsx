@@ -1,7 +1,7 @@
 import { createFileRoute, useParams } from "@tanstack/react-router"
 import { useMutation, useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query"
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { X, Search, Pin } from "lucide-react"
+import { X, Search, Pin, Plus, Trash2 } from "lucide-react"
 import {
   DndContext,
   DragEndEvent,
@@ -27,7 +27,7 @@ import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip
 import { buildEffectMap, DEEP_COLOR, EffectList, EMPTY_EFFECT } from "@/components/RelicDisplay"
 import { cn } from "@/lib/utils"
 import { isLoggedIn } from "@/hooks/useAuth"
-import { useLocalBuilds } from "@/hooks/useLocalBuilds"
+import { useLocalBuilds, type WeightGroup } from "@/hooks/useLocalBuilds"
 import useCustomToast from "@/hooks/useCustomToast"
 import { handleError } from "@/utils"
 
@@ -44,14 +44,6 @@ export const Route = createFileRoute("/_layout/builds/$buildId")({
 
 type EffectMeta = { id: number; name: string; family?: string; is_debuff?: boolean; source?: string | null }
 type FamilyMeta = { name: string; member_names: string[]; member_ids: number[] }
-type TierConfig = {
-  key: string
-  display_name: string
-  color: string
-  weight: number
-  scored: boolean
-  is_exclusion: boolean
-}
 type RelicForPicker = {
   ga_handle: number
   name: string
@@ -59,8 +51,23 @@ type RelicForPicker = {
   is_deep: boolean
 }
 type DragData =
-  | { type: "effect"; effectId: number; sourceTier: string | null }
-  | { type: "family"; familyName: string; sourceTier: string | null }
+  | { type: "effect"; effectId: number; sourceZone: string | null }
+  | { type: "family"; familyName: string; sourceZone: string | null }
+
+// Shape of the build data returned by the API (new schema).
+// Cast API response to this type until the SDK is regenerated.
+type BuildApiData = {
+  name: string
+  character: string
+  groups: WeightGroup[]
+  required_effects: number[]
+  required_families: string[]
+  excluded_effects: number[]
+  excluded_families: string[]
+  include_deep: boolean
+  curse_max: number
+  pinned_relics: number[]
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -68,6 +75,25 @@ type DragData =
 
 const COLOR_HEX: Record<string, string> = {
   Red: "#FF4444", Blue: "#4488FF", Yellow: "#B8860B", Green: "#44BB44", White: "#AAAAAA",
+}
+
+const DEFAULT_GROUPS: WeightGroup[] = [
+  { weight: 50, effects: [], families: [] },
+  { weight: 25, effects: [], families: [] },
+  { weight: 10, effects: [], families: [] },
+  { weight: -20, effects: [], families: [] },
+]
+
+const REQUIRED_COLOR = "#FF8C00"
+const EXCLUDED_COLOR = "#CC4444"
+
+function getLabelForWeight(weight: number): { label: string; color: string } {
+  if (weight >= 75) return { label: "Essential", color: "#FF4444" }
+  if (weight >= 35) return { label: "Preferred", color: "#4488FF" }
+  if (weight >= 15) return { label: "Nice to Have", color: "#44BB88" }
+  if (weight >= 1) return { label: "Bonus", color: "#9966CC" }
+  if (weight < 0) return { label: "Avoid", color: "#888888" }
+  return { label: "Neutral", color: "#AAAAAA" }
 }
 
 // ---------------------------------------------------------------------------
@@ -105,12 +131,12 @@ function DraggableChip({
   )
 }
 
-function DroppableTierZone({
-  tierKey, color, children,
+function DroppableZone({
+  zoneId, color, children,
 }: {
-  tierKey: string; color: string; children: React.ReactNode
+  zoneId: string; color: string; children: React.ReactNode
 }) {
-  const { setNodeRef, isOver } = useDroppable({ id: `tier:${tierKey}` })
+  const { setNodeRef, isOver } = useDroppable({ id: zoneId })
   return (
     <div
       ref={setNodeRef}
@@ -382,78 +408,77 @@ function AnonPinnedRelicDialog({
 interface EditorUIProps {
   name: string
   character: string
-  tiers: Record<string, number[]>
-  familyTiers: Record<string, string[]>
+  groups: WeightGroup[]
+  requiredEffects: number[]
+  requiredFamilies: string[]
+  excludedEffects: number[]
+  excludedFamilies: string[]
   includeDeep: boolean
   curseMax: number
-  tierConfigs: TierConfig[]
-  tierWeights: Record<string, number> | null | undefined
   pinnedRelics: number[]
   pinnedRelicMeta: Map<number, RelicForPicker>
   saving: boolean
   effects: EffectMeta[]
   families: FamilyMeta[]
   isAuth: boolean
-  onTiersChange: (tiers: Record<string, number[]>) => void
-  onFamilyTiersChange: (ft: Record<string, string[]>) => void
+  onGroupsChange: (groups: WeightGroup[]) => void
+  onRequiredEffectsChange: (ids: number[]) => void
+  onRequiredFamiliesChange: (names: string[]) => void
+  onExcludedEffectsChange: (ids: number[]) => void
+  onExcludedFamiliesChange: (names: string[]) => void
   onIncludeDeepChange: (v: boolean) => void
   onCurseMaxChange: (v: number) => void
-  onTierWeightsChange: (w: Record<string, number> | null) => void
   onPinnedRelicsChange: (handles: number[], meta: Map<number, RelicForPicker>) => void
   onRename: (newName: string) => void
 }
 
 function BuildEditorUI({
-  name, character, tiers, familyTiers, includeDeep, curseMax,
-  tierConfigs, tierWeights, pinnedRelics, pinnedRelicMeta,
-  saving, effects, families, isAuth,
-  onTiersChange, onFamilyTiersChange, onIncludeDeepChange, onCurseMaxChange,
-  onTierWeightsChange, onPinnedRelicsChange, onRename,
+  name, character, groups, requiredEffects, requiredFamilies,
+  excludedEffects, excludedFamilies, includeDeep, curseMax,
+  pinnedRelics, pinnedRelicMeta, saving, effects, families, isAuth,
+  onGroupsChange, onRequiredEffectsChange, onRequiredFamiliesChange,
+  onExcludedEffectsChange, onExcludedFamiliesChange,
+  onIncludeDeepChange, onCurseMaxChange, onPinnedRelicsChange, onRename,
 }: EditorUIProps) {
   const [effectSearch, setEffectSearch] = useState("")
   const [draftName, setDraftName] = useState(name)
   const [activeDragName, setActiveDragName] = useState<string | null>(null)
 
-  // Keep draft name in sync with prop (e.g., after save roundtrip)
   useEffect(() => { setDraftName(name) }, [name])
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
   )
 
-  // Compute effective weights (server defaults merged with build overrides)
-  const effectiveWeights = useMemo(() => {
-    const defaults = Object.fromEntries(tierConfigs.map((t) => [t.key, t.weight]))
-    return tierWeights ? { ...defaults, ...tierWeights } : defaults
-  }, [tierConfigs, tierWeights])
+  const effectMap = new Map(effects.map((e) => [e.id, e]))
 
-  // Sort tiers: non-blacklist by weight desc, blacklist always last
-  const sortedTierKeys = useMemo(() => {
-    const nonBlacklist = tierConfigs
-      .filter((t) => !t.is_exclusion)
-      .map((t) => t.key)
-      .sort((a, b) => (effectiveWeights[b] ?? 0) - (effectiveWeights[a] ?? 0))
-    const blacklistKeys = tierConfigs.filter((t) => t.is_exclusion).map((t) => t.key)
-    return [...nonBlacklist, ...blacklistKeys]
-  }, [tierConfigs, effectiveWeights])
+  // All effect IDs and family names currently assigned to any zone
+  const assignedEffectIds = useMemo(() => {
+    const ids = new Set<number>()
+    for (const id of requiredEffects) ids.add(id)
+    for (const id of excludedEffects) ids.add(id)
+    for (const g of groups) for (const id of g.effects) ids.add(id)
+    return ids
+  }, [requiredEffects, excludedEffects, groups])
 
-  // Build display info per tier (fixed label from config + color)
-  const tierDisplay = useMemo(() => {
-    return Object.fromEntries(
-      tierConfigs.map((t) => [
-        t.key,
-        {
-          label: t.display_name,
-          color: t.color,
-          weight: effectiveWeights[t.key] ?? t.weight,
-          scored: t.scored,
-          is_exclusion: t.is_exclusion,
-        },
-      ]),
-    )
-  }, [tierConfigs, effectiveWeights])
+  const assignedFamilyNames = useMemo(() => {
+    const names = new Set<string>()
+    for (const n of requiredFamilies) names.add(n)
+    for (const n of excludedFamilies) names.add(n)
+    for (const g of groups) for (const n of g.families) names.add(n)
+    return names
+  }, [requiredFamilies, excludedFamilies, groups])
 
-  const allTierKeys = tierConfigs.map((t) => t.key)
+  const filteredEffects = effects.filter(
+    (e) =>
+      !assignedEffectIds.has(e.id) &&
+      (effectSearch === "" || e.name.toLowerCase().includes(effectSearch.toLowerCase())),
+  )
+  const filteredFamilies = families.filter(
+    (f) =>
+      !assignedFamilyNames.has(f.name) &&
+      (effectSearch === "" || f.name.toLowerCase().includes(effectSearch.toLowerCase())),
+  )
 
   function commitRename() {
     const trimmed = draftName.trim()
@@ -464,62 +489,54 @@ function BuildEditorUI({
     }
   }
 
+  // Move effect to a zone (removing it from all other zones first)
   const assignEffect = useCallback(
-    (effectId: number, targetTier: string) => {
-      const next = { ...tiers }
-      for (const key of allTierKeys) {
-        next[key] = (next[key] ?? []).filter((id) => id !== effectId)
+    (effectId: number, targetZone: string) => {
+      const newGroups = groups.map((g) => ({ ...g, effects: g.effects.filter((id) => id !== effectId) }))
+      const newRequired = requiredEffects.filter((id) => id !== effectId)
+      const newExcluded = excludedEffects.filter((id) => id !== effectId)
+
+      if (targetZone === "zone:required") {
+        onGroupsChange(newGroups)
+        onRequiredEffectsChange([...newRequired, effectId])
+        onExcludedEffectsChange(newExcluded)
+      } else if (targetZone === "zone:excluded") {
+        onGroupsChange(newGroups)
+        onRequiredEffectsChange(newRequired)
+        onExcludedEffectsChange([...newExcluded, effectId])
+      } else if (targetZone.startsWith("zone:group:")) {
+        const idx = parseInt(targetZone.slice("zone:group:".length))
+        onGroupsChange(newGroups.map((g, i) => i === idx ? { ...g, effects: [...g.effects, effectId] } : g))
+        onRequiredEffectsChange(newRequired)
+        onExcludedEffectsChange(newExcluded)
       }
-      next[targetTier] = [...(next[targetTier] ?? []), effectId]
-      onTiersChange(next)
     },
-    [tiers, allTierKeys, onTiersChange],
+    [groups, requiredEffects, excludedEffects, onGroupsChange, onRequiredEffectsChange, onExcludedEffectsChange],
   )
 
-  const removeEffect = useCallback(
-    (effectId: number, fromTier: string) => {
-      onTiersChange({
-        ...tiers,
-        [fromTier]: (tiers[fromTier] ?? []).filter((id) => id !== effectId),
-      })
-    },
-    [tiers, onTiersChange],
-  )
-
+  // Move family to a zone (removing it from all other zones first)
   const assignFamily = useCallback(
-    (familyName: string, targetTier: string) => {
-      const next = { ...familyTiers }
-      for (const key of allTierKeys) {
-        next[key] = (next[key] ?? []).filter((n) => n !== familyName)
+    (familyName: string, targetZone: string) => {
+      const newGroups = groups.map((g) => ({ ...g, families: g.families.filter((n) => n !== familyName) }))
+      const newRequired = requiredFamilies.filter((n) => n !== familyName)
+      const newExcluded = excludedFamilies.filter((n) => n !== familyName)
+
+      if (targetZone === "zone:required") {
+        onGroupsChange(newGroups)
+        onRequiredFamiliesChange([...newRequired, familyName])
+        onExcludedFamiliesChange(newExcluded)
+      } else if (targetZone === "zone:excluded") {
+        onGroupsChange(newGroups)
+        onRequiredFamiliesChange(newRequired)
+        onExcludedFamiliesChange([...newExcluded, familyName])
+      } else if (targetZone.startsWith("zone:group:")) {
+        const idx = parseInt(targetZone.slice("zone:group:".length))
+        onGroupsChange(newGroups.map((g, i) => i === idx ? { ...g, families: [...g.families, familyName] } : g))
+        onRequiredFamiliesChange(newRequired)
+        onExcludedFamiliesChange(newExcluded)
       }
-      next[targetTier] = [...(next[targetTier] ?? []), familyName]
-      onFamilyTiersChange(next)
     },
-    [familyTiers, allTierKeys, onFamilyTiersChange],
-  )
-
-  const removeFamily = useCallback(
-    (familyName: string, fromTier: string) => {
-      onFamilyTiersChange({
-        ...familyTiers,
-        [fromTier]: (familyTiers[fromTier] ?? []).filter((n) => n !== familyName),
-      })
-    },
-    [familyTiers, onFamilyTiersChange],
-  )
-
-  const effectMap = new Map(effects.map((e) => [e.id, e]))
-  const assignedIds = new Set(Object.values(tiers).flat())
-  const assignedFamilyNames = new Set(Object.values(familyTiers).flat())
-  const filteredEffects = effects.filter(
-    (e) =>
-      !assignedIds.has(e.id) &&
-      (effectSearch === "" || e.name.toLowerCase().includes(effectSearch.toLowerCase())),
-  )
-  const filteredFamilies = families.filter(
-    (f) =>
-      !assignedFamilyNames.has(f.name) &&
-      (effectSearch === "" || f.name.toLowerCase().includes(effectSearch.toLowerCase())),
+    [groups, requiredFamilies, excludedFamilies, onGroupsChange, onRequiredFamiliesChange, onExcludedFamiliesChange],
   )
 
   function handleDragStart(event: DragStartEvent) {
@@ -535,24 +552,18 @@ function BuildEditorUI({
     setActiveDragName(null)
     const { active, over } = event
     if (!over) return
-    const overId = over.id as string
-    if (!overId.startsWith("tier:")) return
-    const targetTier = overId.slice(5)
+    const targetZone = over.id as string
+    if (!targetZone.startsWith("zone:")) return
     const data = active.data.current as DragData
     if (data.type === "effect") {
-      assignEffect(data.effectId, targetTier)
+      assignEffect(data.effectId, targetZone)
     } else {
-      assignFamily(data.familyName, targetTier)
+      assignFamily(data.familyName, targetZone)
     }
   }
 
-  function handleWeightChange(tierKey: string, value: number) {
-    const defaults = Object.fromEntries(tierConfigs.map((t) => [t.key, t.weight]))
-    const next = { ...defaults, ...(tierWeights ?? {}), [tierKey]: value }
-    // If all weights match defaults, clear the override (null = use defaults)
-    const isAllDefault = tierConfigs.every((t) => next[t.key] === t.weight)
-    onTierWeightsChange(isAllDefault ? null : next)
-  }
+  // Default click-to-add target: first group (index 0), or required if no groups
+  const defaultClickTarget = groups.length > 0 ? "zone:group:0" : "zone:required"
 
   const maxPins = includeDeep ? 6 : 3
   const atPinLimit = pinnedRelics.length >= maxPins
@@ -676,74 +687,176 @@ function BuildEditorUI({
         </div>
 
         <div className="grid lg:grid-cols-[1fr_320px] gap-6">
-          {/* Tier columns */}
+          {/* Priority zones */}
           <div className="space-y-4">
-            {tierWeights && (
-              <button
-                type="button"
-                onClick={() => onTierWeightsChange(null)}
-                className="text-xs text-muted-foreground underline"
-              >
-                Reset weights to defaults
-              </button>
-            )}
-            {sortedTierKeys.map((tierKey) => {
-              const { label, color, is_exclusion } = tierDisplay[tierKey] ?? { label: tierKey, color: "#888", is_exclusion: false }
-              const tierEffects = (tiers[tierKey] ?? [])
-                .map((id) => effectMap.get(id))
-                .filter(Boolean) as EffectMeta[]
-              const tierFamilies = familyTiers[tierKey] ?? []
-              const isEmpty = tierEffects.length === 0 && tierFamilies.length === 0
+            {/* Required */}
+            <div>
+              <h3 className="text-sm font-semibold mb-1" style={{ color: REQUIRED_COLOR }}>Required</h3>
+              <DroppableZone zoneId="zone:required" color={REQUIRED_COLOR}>
+                {requiredEffects.length === 0 && requiredFamilies.length === 0 ? (
+                  <p className="text-xs text-muted-foreground italic">
+                    Drop effects here to require them
+                  </p>
+                ) : (
+                  <div className="flex flex-wrap gap-2">
+                    {requiredFamilies.map((familyName) => (
+                      <DraggableChip
+                        key={`family:${familyName}`}
+                        dragId={`family:${familyName}`}
+                        name={`${familyName} (group)`}
+                        color={REQUIRED_COLOR}
+                        dragData={{ type: "family", familyName, sourceZone: "zone:required" }}
+                        onRemove={() => onRequiredFamiliesChange(requiredFamilies.filter((n) => n !== familyName))}
+                      />
+                    ))}
+                    {requiredEffects.map((id) => {
+                      const e = effectMap.get(id)
+                      if (!e) return null
+                      return (
+                        <DraggableChip
+                          key={id}
+                          dragId={`effect:${id}`}
+                          name={e.source === "deep" ? `${e.name} (deep)` : e.name}
+                          color={REQUIRED_COLOR}
+                          dragData={{ type: "effect", effectId: id, sourceZone: "zone:required" }}
+                          onRemove={() => onRequiredEffectsChange(requiredEffects.filter((x) => x !== id))}
+                        />
+                      )
+                    })}
+                  </div>
+                )}
+              </DroppableZone>
+            </div>
 
+            {/* Weight groups */}
+            {groups.map((group, idx) => {
+              const { label, color } = getLabelForWeight(group.weight)
+              const isEmpty = group.effects.length === 0 && group.families.length === 0
               return (
-                <div key={tierKey}>
+                <div key={idx}>
                   <div className="flex items-center justify-between mb-1">
-                    <h3 className="text-sm font-semibold" style={{ color }}>{label}</h3>
-                    {!is_exclusion && (
+                    <div className="flex items-center gap-2">
                       <input
                         type="number"
                         min={-100}
                         max={100}
-                        value={effectiveWeights[tierKey] ?? 0}
-                        onChange={(e) => handleWeightChange(tierKey, Number(e.target.value))}
+                        value={group.weight}
+                        onChange={(e) =>
+                          onGroupsChange(
+                            groups.map((g, i) => i === idx ? { ...g, weight: Number(e.target.value) } : g),
+                          )
+                        }
                         className="w-16 text-xs text-right text-muted-foreground bg-transparent border-b border-transparent hover:border-muted-foreground/30 focus:border-primary focus:outline-none focus:ring-0 py-0.5 transition-colors [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                        title="Tier weight"
+                        title="Group weight"
                       />
-                    )}
+                      <span className="text-xs font-semibold" style={{ color }}>{label}</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => onGroupsChange(groups.filter((_, i) => i !== idx))}
+                      className="text-muted-foreground hover:text-destructive transition-colors"
+                      aria-label="Remove group"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
                   </div>
-                  <DroppableTierZone tierKey={tierKey} color={color}>
+                  <DroppableZone zoneId={`zone:group:${idx}`} color={color}>
                     {isEmpty ? (
                       <p className="text-xs text-muted-foreground italic">
                         Drop effects here, or click in the browser to add
                       </p>
                     ) : (
                       <div className="flex flex-wrap gap-2">
-                        {tierFamilies.map((familyName) => (
+                        {group.families.map((familyName) => (
                           <DraggableChip
                             key={`family:${familyName}`}
                             dragId={`family:${familyName}`}
                             name={`${familyName} (group)`}
                             color={color}
-                            dragData={{ type: "family", familyName, sourceTier: tierKey }}
-                            onRemove={() => removeFamily(familyName, tierKey)}
+                            dragData={{ type: "family", familyName, sourceZone: `zone:group:${idx}` }}
+                            onRemove={() =>
+                              onGroupsChange(
+                                groups.map((g, i) =>
+                                  i === idx ? { ...g, families: g.families.filter((n) => n !== familyName) } : g,
+                                ),
+                              )
+                            }
                           />
                         ))}
-                        {tierEffects.map((e) => (
-                          <DraggableChip
-                            key={e.id}
-                            dragId={`effect:${e.id}`}
-                            name={e.source === "deep" ? `${e.name} (deep)` : e.name}
-                            color={color}
-                            dragData={{ type: "effect", effectId: e.id, sourceTier: tierKey }}
-                            onRemove={() => removeEffect(e.id, tierKey)}
-                          />
-                        ))}
+                        {group.effects.map((id) => {
+                          const e = effectMap.get(id)
+                          if (!e) return null
+                          return (
+                            <DraggableChip
+                              key={id}
+                              dragId={`effect:${id}`}
+                              name={e.source === "deep" ? `${e.name} (deep)` : e.name}
+                              color={color}
+                              dragData={{ type: "effect", effectId: id, sourceZone: `zone:group:${idx}` }}
+                              onRemove={() =>
+                                onGroupsChange(
+                                  groups.map((g, i) =>
+                                    i === idx ? { ...g, effects: g.effects.filter((x) => x !== id) } : g,
+                                  ),
+                                )
+                              }
+                            />
+                          )
+                        })}
                       </div>
                     )}
-                  </DroppableTierZone>
+                  </DroppableZone>
                 </div>
               )
             })}
+
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => onGroupsChange([...groups, { weight: 0, effects: [], families: [] }])}
+            >
+              <Plus className="h-3.5 w-3.5 mr-1" /> Add Group
+            </Button>
+
+            {/* Excluded */}
+            <div>
+              <h3 className="text-sm font-semibold mb-1" style={{ color: EXCLUDED_COLOR }}>Excluded</h3>
+              <DroppableZone zoneId="zone:excluded" color={EXCLUDED_COLOR}>
+                {excludedEffects.length === 0 && excludedFamilies.length === 0 ? (
+                  <p className="text-xs text-muted-foreground italic">
+                    Drop effects here to block them
+                  </p>
+                ) : (
+                  <div className="flex flex-wrap gap-2">
+                    {excludedFamilies.map((familyName) => (
+                      <DraggableChip
+                        key={`family:${familyName}`}
+                        dragId={`family:${familyName}`}
+                        name={`${familyName} (group)`}
+                        color={EXCLUDED_COLOR}
+                        dragData={{ type: "family", familyName, sourceZone: "zone:excluded" }}
+                        onRemove={() => onExcludedFamiliesChange(excludedFamilies.filter((n) => n !== familyName))}
+                      />
+                    ))}
+                    {excludedEffects.map((id) => {
+                      const e = effectMap.get(id)
+                      if (!e) return null
+                      return (
+                        <DraggableChip
+                          key={id}
+                          dragId={`effect:${id}`}
+                          name={e.source === "deep" ? `${e.name} (deep)` : e.name}
+                          color={EXCLUDED_COLOR}
+                          dragData={{ type: "effect", effectId: id, sourceZone: "zone:excluded" }}
+                          onRemove={() => onExcludedEffectsChange(excludedEffects.filter((x) => x !== id))}
+                        />
+                      )
+                    })}
+                  </div>
+                )}
+              </DroppableZone>
+            </div>
           </div>
 
           {/* Effect browser */}
@@ -768,8 +881,8 @@ function BuildEditorUI({
                     <DraggableBrowserRow
                       key={`family:${family.name}`}
                       dragId={`family:${family.name}`}
-                      data={{ type: "family", familyName: family.name, sourceTier: null }}
-                      onClick={() => assignFamily(family.name, sortedTierKeys[0] ?? "required")}
+                      data={{ type: "family", familyName: family.name, sourceZone: null }}
+                      onClick={() => assignFamily(family.name, defaultClickTarget)}
                     >
                       <span
                         className="text-sm truncate italic flex-1"
@@ -789,8 +902,8 @@ function BuildEditorUI({
                 <DraggableBrowserRow
                   key={effect.id}
                   dragId={`effect:${effect.id}`}
-                  data={{ type: "effect", effectId: effect.id, sourceTier: null }}
-                  onClick={() => assignEffect(effect.id, sortedTierKeys[0] ?? "required")}
+                  data={{ type: "effect", effectId: effect.id, sourceZone: null }}
+                  onClick={() => assignEffect(effect.id, defaultClickTarget)}
                 >
                   <span className="text-sm truncate flex-1" title={effect.name}>
                     {effect.name}
@@ -832,7 +945,7 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
   const { showErrorToast } = useCustomToast()
   const queryClient = useQueryClient()
 
-  const { data: build } = useSuspenseQuery({
+  const { data: buildRaw } = useSuspenseQuery({
     queryKey: ["builds", buildId],
     queryFn: () => BuildsService.getBuild({ buildId }),
   })
@@ -846,47 +959,52 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
     queryFn: () => GameService.getFamilies(),
     staleTime: Infinity,
   })
-  const { data: tiersData } = useSuspenseQuery({
-    queryKey: ["game", "tiers"],
-    queryFn: () => GameService.getTiers(),
-    staleTime: Infinity,
-  })
 
   const effects = (effectsData ?? []) as EffectMeta[]
   const families = (familiesData ?? []) as FamilyMeta[]
-  const tierConfigs = (tiersData ?? []) as TierConfig[]
+  // Cast to new schema type (SDK will be regenerated separately)
+  const build = buildRaw as unknown as BuildApiData
 
-  const [tiers, setTiers] = useState<Record<string, number[]>>(
-    () => (build.tiers as Record<string, number[]>) ?? {},
+  const [groups, setGroups] = useState<WeightGroup[]>(
+    () => build.groups ?? DEFAULT_GROUPS.map((g) => ({ ...g })),
   )
-  const [familyTiers, setFamilyTiers] = useState<Record<string, string[]>>(
-    () => (build.family_tiers as Record<string, string[]>) ?? {},
+  const [requiredEffects, setRequiredEffects] = useState<number[]>(
+    () => build.required_effects ?? [],
+  )
+  const [requiredFamilies, setRequiredFamilies] = useState<string[]>(
+    () => build.required_families ?? [],
+  )
+  const [excludedEffects, setExcludedEffects] = useState<number[]>(
+    () => build.excluded_effects ?? [],
+  )
+  const [excludedFamilies, setExcludedFamilies] = useState<string[]>(
+    () => build.excluded_families ?? [],
   )
   const [includeDeep, setIncludeDeep] = useState(build.include_deep)
   const [curseMax, setCurseMax] = useState(build.curse_max)
-  const [tierWeights, setTierWeights] = useState<Record<string, number> | null | undefined>(
-    build.tier_weights ?? null,
-  )
   const [pinnedRelics, setPinnedRelics] = useState<number[]>(build.pinned_relics ?? [])
   const [pinnedRelicMeta, setPinnedRelicMeta] = useState<Map<number, RelicForPicker>>(new Map())
 
-  const tiersRef = useRef(tiers)
-  const familyTiersRef = useRef(familyTiers)
+  const groupsRef = useRef(groups)
+  const requiredEffectsRef = useRef(requiredEffects)
+  const requiredFamiliesRef = useRef(requiredFamilies)
+  const excludedEffectsRef = useRef(excludedEffects)
+  const excludedFamiliesRef = useRef(excludedFamilies)
   const includeDeepRef = useRef(includeDeep)
   const curseMaxRef = useRef(curseMax)
-  const tierWeightsRef = useRef(tierWeights)
   const pinnedRelicsRef = useRef(pinnedRelics)
-  tiersRef.current = tiers
-  familyTiersRef.current = familyTiers
+  groupsRef.current = groups
+  requiredEffectsRef.current = requiredEffects
+  requiredFamiliesRef.current = requiredFamilies
+  excludedEffectsRef.current = excludedEffects
+  excludedFamiliesRef.current = excludedFamilies
   includeDeepRef.current = includeDeep
   curseMaxRef.current = curseMax
-  tierWeightsRef.current = tierWeights
   pinnedRelicsRef.current = pinnedRelics
 
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // On mount: populate pinnedRelicMeta for handles already stored in the build
-  // so chips show names instead of raw IDs after a page reload.
   useEffect(() => {
     const pinned = build.pinned_relics ?? []
     if (pinned.length === 0) return
@@ -928,11 +1046,13 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    setTiers((build.tiers as Record<string, number[]>) ?? {})
-    setFamilyTiers((build.family_tiers as Record<string, string[]>) ?? {})
+    setGroups(build.groups ?? DEFAULT_GROUPS.map((g) => ({ ...g })))
+    setRequiredEffects(build.required_effects ?? [])
+    setRequiredFamilies(build.required_families ?? [])
+    setExcludedEffects(build.excluded_effects ?? [])
+    setExcludedFamilies(build.excluded_families ?? [])
     setIncludeDeep(build.include_deep)
     setCurseMax(build.curse_max)
-    setTierWeights(build.tier_weights ?? null)
     setPinnedRelics(build.pinned_relics ?? [])
   }, [build])
 
@@ -945,13 +1065,15 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
       BuildsService.updateBuild({
         buildId,
         requestBody: {
-          tiers: tiersRef.current,
-          family_tiers: familyTiersRef.current,
+          groups: groupsRef.current,
+          required_effects: requiredEffectsRef.current,
+          required_families: requiredFamiliesRef.current,
+          excluded_effects: excludedEffectsRef.current,
+          excluded_families: excludedFamiliesRef.current,
           include_deep: includeDeepRef.current,
           curse_max: curseMaxRef.current,
-          tier_weights: tierWeightsRef.current ?? null,
           pinned_relics: pinnedRelicsRef.current,
-        },
+        } as any, // SDK will be regenerated with new schema
       }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["builds"] }),
     onError: handleError.bind(showErrorToast),
@@ -971,25 +1093,28 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
 
   return (
     <BuildEditorUI
-      name={build.name}
-      character={build.character}
-      tiers={tiers}
-      familyTiers={familyTiers}
+      name={(buildRaw as any).name}
+      character={(buildRaw as any).character}
+      groups={groups}
+      requiredEffects={requiredEffects}
+      requiredFamilies={requiredFamilies}
+      excludedEffects={excludedEffects}
+      excludedFamilies={excludedFamilies}
       includeDeep={includeDeep}
       curseMax={curseMax}
-      tierConfigs={tierConfigs}
-      tierWeights={tierWeights}
       pinnedRelics={pinnedRelics}
       pinnedRelicMeta={pinnedRelicMeta}
       saving={saveMutation.isPending}
       effects={effects}
       families={families}
       isAuth={true}
-      onTiersChange={(t) => { setTiers(t); scheduleAutoSave() }}
-      onFamilyTiersChange={(ft) => { setFamilyTiers(ft); scheduleAutoSave() }}
+      onGroupsChange={(g) => { setGroups(g); scheduleAutoSave() }}
+      onRequiredEffectsChange={(ids) => { setRequiredEffects(ids); scheduleAutoSave() }}
+      onRequiredFamiliesChange={(names) => { setRequiredFamilies(names); scheduleAutoSave() }}
+      onExcludedEffectsChange={(ids) => { setExcludedEffects(ids); scheduleAutoSave() }}
+      onExcludedFamiliesChange={(names) => { setExcludedFamilies(names); scheduleAutoSave() }}
       onIncludeDeepChange={(v) => { setIncludeDeep(v); scheduleAutoSave() }}
       onCurseMaxChange={(v) => { setCurseMax(v); scheduleAutoSave() }}
-      onTierWeightsChange={(w) => { setTierWeights(w); scheduleAutoSave() }}
       onPinnedRelicsChange={(handles, meta) => {
         setPinnedRelics(handles)
         setPinnedRelicMeta(meta)
@@ -1017,31 +1142,30 @@ function LocalBuildEditorContent({ buildId }: { buildId: string }) {
     queryFn: () => GameService.getFamilies(),
     staleTime: Infinity,
   })
-  const { data: tiersData } = useSuspenseQuery({
-    queryKey: ["game", "tiers"],
-    queryFn: () => GameService.getTiers(),
-    staleTime: Infinity,
-  })
 
   const effects = (effectsData ?? []) as EffectMeta[]
   const families = (familiesData ?? []) as FamilyMeta[]
-  const tierConfigs = (tiersData ?? []) as TierConfig[]
   const build = getById(buildId)
 
-  const [tiers, setTiers] = useState<Record<string, number[]>>(
-    () => build?.tiers ?? {},
+  const [groups, setGroups] = useState<WeightGroup[]>(
+    () => build?.groups ?? DEFAULT_GROUPS.map((g) => ({ ...g })),
   )
-  const [familyTiers, setFamilyTiers] = useState<Record<string, string[]>>(
-    () => (build?.family_tiers as Record<string, string[]>) ?? {},
+  const [requiredEffects, setRequiredEffects] = useState<number[]>(
+    () => build?.required_effects ?? [],
+  )
+  const [requiredFamilies, setRequiredFamilies] = useState<string[]>(
+    () => build?.required_families ?? [],
+  )
+  const [excludedEffects, setExcludedEffects] = useState<number[]>(
+    () => build?.excluded_effects ?? [],
+  )
+  const [excludedFamilies, setExcludedFamilies] = useState<string[]>(
+    () => build?.excluded_families ?? [],
   )
   const [includeDeep, setIncludeDeep] = useState(build?.include_deep ?? false)
   const [curseMax, setCurseMax] = useState(build?.curse_max ?? 1)
-  const [tierWeights, setTierWeights] = useState<Record<string, number> | null | undefined>(
-    build?.tier_weights ?? null,
-  )
   const [pinnedRelics, setPinnedRelics] = useState<number[]>(build?.pinned_relics ?? [])
   const [pinnedRelicMeta, setPinnedRelicMeta] = useState<Map<number, RelicForPicker>>(() => {
-    // Pre-populate from sessionStorage so chips show names after a page reload.
     const raw = sessionStorage.getItem("selectedCharacter")
     const char = raw ? JSON.parse(raw) : null
     const handles = new Set(build?.pinned_relics ?? [])
@@ -1054,17 +1178,21 @@ function LocalBuildEditorContent({ buildId }: { buildId: string }) {
     return map
   })
 
-  const tiersRef = useRef(tiers)
-  const familyTiersRef = useRef(familyTiers)
+  const groupsRef = useRef(groups)
+  const requiredEffectsRef = useRef(requiredEffects)
+  const requiredFamiliesRef = useRef(requiredFamilies)
+  const excludedEffectsRef = useRef(excludedEffects)
+  const excludedFamiliesRef = useRef(excludedFamilies)
   const includeDeepRef = useRef(includeDeep)
   const curseMaxRef = useRef(curseMax)
-  const tierWeightsRef = useRef(tierWeights)
   const pinnedRelicsRef = useRef(pinnedRelics)
-  tiersRef.current = tiers
-  familyTiersRef.current = familyTiers
+  groupsRef.current = groups
+  requiredEffectsRef.current = requiredEffects
+  requiredFamiliesRef.current = requiredFamilies
+  excludedEffectsRef.current = excludedEffects
+  excludedFamiliesRef.current = excludedFamilies
   includeDeepRef.current = includeDeep
   curseMaxRef.current = curseMax
-  tierWeightsRef.current = tierWeights
   pinnedRelicsRef.current = pinnedRelics
 
   const updateRef = useRef(update)
@@ -1080,11 +1208,13 @@ function LocalBuildEditorContent({ buildId }: { buildId: string }) {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
     saveTimerRef.current = setTimeout(() => {
       updateRef.current(buildId, {
-        tiers: tiersRef.current,
-        family_tiers: familyTiersRef.current,
+        groups: groupsRef.current,
+        required_effects: requiredEffectsRef.current,
+        required_families: requiredFamiliesRef.current,
+        excluded_effects: excludedEffectsRef.current,
+        excluded_families: excludedFamiliesRef.current,
         include_deep: includeDeepRef.current,
         curse_max: curseMaxRef.current,
-        tier_weights: tierWeightsRef.current ?? null,
         pinned_relics: pinnedRelicsRef.current,
       })
     }, 400)
@@ -1102,23 +1232,26 @@ function LocalBuildEditorContent({ buildId }: { buildId: string }) {
     <BuildEditorUI
       name={build.name}
       character={build.character}
-      tiers={tiers}
-      familyTiers={familyTiers}
+      groups={groups}
+      requiredEffects={requiredEffects}
+      requiredFamilies={requiredFamilies}
+      excludedEffects={excludedEffects}
+      excludedFamilies={excludedFamilies}
       includeDeep={includeDeep}
       curseMax={curseMax}
-      tierConfigs={tierConfigs}
-      tierWeights={tierWeights}
       pinnedRelics={pinnedRelics}
       pinnedRelicMeta={pinnedRelicMeta}
       saving={false}
       effects={effects}
       families={families}
       isAuth={false}
-      onTiersChange={(t) => { setTiers(t); scheduleAutoSave() }}
-      onFamilyTiersChange={(ft) => { setFamilyTiers(ft); scheduleAutoSave() }}
+      onGroupsChange={(g) => { setGroups(g); scheduleAutoSave() }}
+      onRequiredEffectsChange={(ids) => { setRequiredEffects(ids); scheduleAutoSave() }}
+      onRequiredFamiliesChange={(names) => { setRequiredFamilies(names); scheduleAutoSave() }}
+      onExcludedEffectsChange={(ids) => { setExcludedEffects(ids); scheduleAutoSave() }}
+      onExcludedFamiliesChange={(names) => { setExcludedFamilies(names); scheduleAutoSave() }}
       onIncludeDeepChange={(v) => { setIncludeDeep(v); scheduleAutoSave() }}
       onCurseMaxChange={(v) => { setCurseMax(v); scheduleAutoSave() }}
-      onTierWeightsChange={(w) => { setTierWeights(w); scheduleAutoSave() }}
       onPinnedRelicsChange={(handles, meta) => {
         setPinnedRelics(handles)
         setPinnedRelicMeta(meta)

@@ -19,7 +19,7 @@ from app.api.deps import GameDataDep, OptionalUser, SessionDep
 from app.core.config import settings
 from app.models import Build, CharacterSlot, Relic
 from nrplanner.constants import CHARACTER_NAMES
-from nrplanner.models import BuildDefinition, OwnedRelic, RelicInventory, VesselResult
+from nrplanner.models import BuildDefinition, OwnedRelic, RelicInventory, VesselResult, WeightGroup
 from nrplanner.scoring import BuildScorer
 from nrplanner.optimizer import VesselOptimizer
 
@@ -128,11 +128,13 @@ def run_optimize(
             id=str(db_build.id),
             name=db_build.name,
             character=db_build.character,
-            tiers=db_build.tiers,
-            family_tiers=db_build.family_tiers,
+            groups=[WeightGroup(**g) for g in (db_build.groups or [])],
+            required_effects=db_build.required_effects or [],
+            required_families=db_build.required_families or [],
+            excluded_effects=db_build.excluded_effects or [],
+            excluded_families=db_build.excluded_families or [],
             include_deep=db_build.include_deep,
             curse_max=db_build.curse_max,
-            tier_weights=db_build.tier_weights,
             pinned_relics=db_build.pinned_relics or [],
         )
 
@@ -223,11 +225,13 @@ def run_optimize_stream(
             id=str(db_build.id),
             name=db_build.name,
             character=db_build.character,
-            tiers=db_build.tiers,
-            family_tiers=db_build.family_tiers,
+            groups=[WeightGroup(**g) for g in (db_build.groups or [])],
+            required_effects=db_build.required_effects or [],
+            required_families=db_build.required_families or [],
+            excluded_effects=db_build.excluded_effects or [],
+            excluded_families=db_build.excluded_families or [],
             include_deep=db_build.include_deep,
             curse_max=db_build.curse_max,
-            tier_weights=db_build.tier_weights,
             pinned_relics=db_build.pinned_relics or [],
         )
 

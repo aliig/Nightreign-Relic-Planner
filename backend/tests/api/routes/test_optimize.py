@@ -6,19 +6,18 @@ import pytest
 from fastapi.testclient import TestClient
 
 from nrplanner.constants import EMPTY_EFFECT
-from nrplanner.models import ALL_TIER_KEYS
 
 EMPTY = EMPTY_EFFECT
-
-_DEFAULT_TIERS = {k: [] for k in ALL_TIER_KEYS}
-_DEFAULT_FAMILY_TIERS = {k: [] for k in ALL_TIER_KEYS}
 
 _MINIMAL_BUILD = {
     "id": "inline-test",
     "name": "Test Build",
     "character": "Wylder",
-    "tiers": _DEFAULT_TIERS,
-    "family_tiers": _DEFAULT_FAMILY_TIERS,
+    "groups": [],
+    "required_effects": [],
+    "required_families": [],
+    "excluded_effects": [],
+    "excluded_families": [],
     "include_deep": False,
     "curse_max": 1,
 }

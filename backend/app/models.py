@@ -195,11 +195,13 @@ class RelicsPublic(SQLModel):
 # Build models
 # ---------------------------------------------------------------------------
 
-_DEFAULT_TIER_KEYS = ["required", "preferred", "nice_to_have", "bonus", "avoid", "blacklist"]
-
-
-def _default_tiers() -> dict:
-    return {k: [] for k in _DEFAULT_TIER_KEYS}
+# Default weight groups for new builds (matches legacy tier defaults)
+_DEFAULT_GROUPS = [
+    {"weight": 50,  "effects": [], "families": []},
+    {"weight": 25,  "effects": [], "families": []},
+    {"weight": 10,  "effects": [], "families": []},
+    {"weight": -20, "effects": [], "families": []},
+]
 
 
 class Build(SQLModel, table=True):
@@ -209,20 +211,28 @@ class Build(SQLModel, table=True):
     )
     name: str = Field(max_length=255)
     character: str = Field(max_length=50)
-    tiers: dict = Field(
-        default_factory=_default_tiers,
-        sa_column=Column(JSON, nullable=False),
+    groups: list = Field(
+        default_factory=lambda: list(_DEFAULT_GROUPS),
+        sa_column=Column(JSON, nullable=False, server_default="[]"),
     )
-    family_tiers: dict = Field(
-        default_factory=_default_tiers,
-        sa_column=Column(JSON, nullable=False),
+    required_effects: list = Field(
+        default_factory=list,
+        sa_column=Column(JSON, nullable=False, server_default="[]"),
+    )
+    required_families: list = Field(
+        default_factory=list,
+        sa_column=Column(JSON, nullable=False, server_default="[]"),
+    )
+    excluded_effects: list = Field(
+        default_factory=list,
+        sa_column=Column(JSON, nullable=False, server_default="[]"),
+    )
+    excluded_families: list = Field(
+        default_factory=list,
+        sa_column=Column(JSON, nullable=False, server_default="[]"),
     )
     include_deep: bool = True
     curse_max: int = 1
-    tier_weights: dict | None = Field(
-        default=None,
-        sa_column=Column(JSON, nullable=True),
-    )
     pinned_relics: list = Field(
         default_factory=list,
         sa_column=Column(JSON, nullable=False, server_default="[]"),
@@ -248,11 +258,13 @@ class BuildCreate(SQLModel):
 class BuildUpdate(SQLModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
     character: str | None = Field(default=None, max_length=50)
-    tiers: dict[str, list[int]] | None = None
-    family_tiers: dict[str, list[str]] | None = None
+    groups: list[dict] | None = None
+    required_effects: list[int] | None = None
+    required_families: list[str] | None = None
+    excluded_effects: list[int] | None = None
+    excluded_families: list[str] | None = None
     include_deep: bool | None = None
     curse_max: int | None = Field(default=None, ge=1)
-    tier_weights: dict[str, int] | None = None
     pinned_relics: list[int] | None = None
 
 
@@ -261,11 +273,13 @@ class BuildPublic(SQLModel):
     owner_id: uuid.UUID
     name: str
     character: str
-    tiers: dict[str, list[int]]
-    family_tiers: dict[str, list[str]]
+    groups: list[dict] = Field(default_factory=list)
+    required_effects: list[int] = Field(default_factory=list)
+    required_families: list[str] = Field(default_factory=list)
+    excluded_effects: list[int] = Field(default_factory=list)
+    excluded_families: list[str] = Field(default_factory=list)
     include_deep: bool
     curse_max: int
-    tier_weights: dict[str, int] | None = None
     pinned_relics: list[int] = Field(default_factory=list)
     is_featured: bool
     created_at: datetime | None = None
@@ -281,11 +295,13 @@ class FeaturedBuildPublic(SQLModel):
     id: uuid.UUID
     name: str
     character: str
-    tiers: dict[str, list[int]]
-    family_tiers: dict[str, list[str]]
+    groups: list[dict] = Field(default_factory=list)
+    required_effects: list[int] = Field(default_factory=list)
+    required_families: list[str] = Field(default_factory=list)
+    excluded_effects: list[int] = Field(default_factory=list)
+    excluded_families: list[str] = Field(default_factory=list)
     include_deep: bool
     curse_max: int
-    tier_weights: dict[str, int] | None = None
     pinned_relics: list[int] = Field(default_factory=list)
     owner_name: str | None = None
     created_at: datetime | None = None

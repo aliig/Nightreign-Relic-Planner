@@ -8,7 +8,7 @@ import pytest
 
 from nrplanner import BuildScorer, VesselOptimizer, SourceDataHandler
 from nrplanner.models import (
-    ALL_TIER_KEYS, BuildDefinition, OwnedRelic, RelicInventory, VesselResult,
+    BuildDefinition, OwnedRelic, RelicInventory, VesselResult,
 )
 
 EMPTY = 4294967295  # EMPTY_EFFECT sentinel
@@ -36,15 +36,11 @@ def _make_relic(
 
 
 def _make_build(required: list[int] | None = None) -> BuildDefinition:
-    tiers = {k: [] for k in ALL_TIER_KEYS}
-    if required:
-        tiers["required"] = required
     return BuildDefinition(
         id="opt-test",
         name="Optimizer Test",
         character="Wylder",
-        tiers=tiers,
-        family_tiers={k: [] for k in ALL_TIER_KEYS},
+        required_effects=required or [],
         include_deep=False,
         curse_max=1,
     )
@@ -170,11 +166,8 @@ class TestPinnedRelics:
             _make_relic([EMPTY, EMPTY, EMPTY], color="Blue", ga_handle=0xC0000011),
         ]
         inventory = RelicInventory.from_owned_relics(relics)
-        tiers = {k: [] for k in ALL_TIER_KEYS}
         build = BuildDefinition(
             id="pin-test", name="Pin Test", character="Wylder",
-            tiers=tiers,
-            family_tiers={k: [] for k in ALL_TIER_KEYS},
             include_deep=False,
             curse_max=1,
             pinned_relics=[pinned_handle],
@@ -197,8 +190,6 @@ class TestPinnedRelics:
         inventory = RelicInventory.from_owned_relics([])
         build = BuildDefinition(
             id="absent-pin", name="Absent Pin", character="Wylder",
-            tiers={k: [] for k in ALL_TIER_KEYS},
-            family_tiers={k: [] for k in ALL_TIER_KEYS},
             include_deep=False,
             curse_max=1,
             pinned_relics=[0xDEADBEEF],
@@ -212,11 +203,8 @@ class TestPinnedRelics:
     ) -> None:
         """Empty pinned_relics list produces the same result as not setting it."""
         build_no_pins = _make_build()
-        tiers = {k: [] for k in ALL_TIER_KEYS}
         build_empty_pins = BuildDefinition(
             id="opt-test", name="Optimizer Test", character="Wylder",
-            tiers=tiers,
-            family_tiers={k: [] for k in ALL_TIER_KEYS},
             include_deep=False,
             curse_max=1,
             pinned_relics=[],

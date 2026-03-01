@@ -5,24 +5,86 @@ import { BuildsService } from "@/client"
 const STORAGE_KEY = "anon_builds"
 export const MIGRATION_FLAG = "migrate_builds_on_login"
 
+const DEFAULT_GROUPS = [
+  { weight: 50, effects: [] as number[], families: [] as string[] },
+  { weight: 25, effects: [] as number[], families: [] as string[] },
+  { weight: 10, effects: [] as number[], families: [] as string[] },
+  { weight: -20, effects: [] as number[], families: [] as string[] },
+]
+
+export interface WeightGroup {
+  weight: number
+  effects: number[]
+  families: string[]
+}
+
 export interface LocalBuild {
   id: string
   name: string
   character: string
-  tiers: Record<string, number[]>
-  family_tiers: Record<string, unknown>
+  groups: WeightGroup[]
+  required_effects: number[]
+  required_families: string[]
+  excluded_effects: number[]
+  excluded_families: string[]
   include_deep: boolean
   curse_max: number
-  tier_weights?: Record<string, number> | null
   pinned_relics?: number[]
   created_at: string
   updated_at: string
 }
 
+// ---------------------------------------------------------------------------
+// Legacy migration (v1–v4: tiers/family_tiers/tier_weights → new schema)
+// ---------------------------------------------------------------------------
+
+const _LEGACY_WEIGHTS: Record<string, number> = {
+  preferred: 50, nice_to_have: 25, bonus: 10, avoid: -20,
+}
+
+function _migrateFromLegacy(build: Record<string, unknown>): LocalBuild {
+  const tiers = (build.tiers as Record<string, number[]>) ?? {}
+  const familyTiers = (build.family_tiers as Record<string, string[]>) ?? {}
+  const tierWeights = (build.tier_weights as Record<string, number>) ?? {}
+
+  const groups: WeightGroup[] = []
+  for (const [key, defaultWeight] of Object.entries(_LEGACY_WEIGHTS)) {
+    const effs = tiers[key] ?? []
+    const fams = familyTiers[key] ?? []
+    if (effs.length > 0 || fams.length > 0) {
+      groups.push({ weight: tierWeights[key] ?? defaultWeight, effects: effs, families: fams })
+    }
+  }
+
+  return {
+    id: build.id as string,
+    name: build.name as string,
+    character: build.character as string,
+    groups: groups.length > 0 ? groups : [...DEFAULT_GROUPS.map(g => ({ ...g }))],
+    required_effects: (tiers.required ?? []) as number[],
+    required_families: (familyTiers.required ?? []) as string[],
+    excluded_effects: (tiers.blacklist ?? []) as number[],
+    excluded_families: (familyTiers.blacklist ?? []) as string[],
+    include_deep: (build.include_deep as boolean) ?? false,
+    curse_max: (build.curse_max as number) ?? 1,
+    pinned_relics: (build.pinned_relics as number[]) ?? [],
+    created_at: build.created_at as string,
+    updated_at: build.updated_at as string,
+  }
+}
+
 function loadFromStorage(): LocalBuild[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
-    return raw ? (JSON.parse(raw) as LocalBuild[]) : []
+    if (!raw) return []
+    const parsed = JSON.parse(raw) as unknown[]
+    return parsed.map((b) => {
+      const obj = b as Record<string, unknown>
+      if ("tiers" in obj && !("groups" in obj)) {
+        return _migrateFromLegacy(obj)
+      }
+      return obj as LocalBuild
+    })
   } catch {
     return []
   }
@@ -41,8 +103,11 @@ export function useLocalBuilds() {
       id: crypto.randomUUID(),
       name: data.name,
       character: data.character,
-      tiers: {},
-      family_tiers: {},
+      groups: DEFAULT_GROUPS.map(g => ({ ...g })),
+      required_effects: [],
+      required_families: [],
+      excluded_effects: [],
+      excluded_families: [],
       include_deep: false,
       curse_max: 1,
       created_at: now,
@@ -121,14 +186,20 @@ export async function migrateLocalBuildsToDb(): Promise<number> {
         requestBody: { name: build.name, character: build.character },
       })
       const hasCustomSettings =
-        Object.values(build.tiers).some((ids) => ids.length > 0) ||
+        (build.groups ?? []).some((g) => g.effects.length > 0 || g.families.length > 0) ||
+        (build.required_effects ?? []).length > 0 ||
+        (build.excluded_effects ?? []).length > 0 ||
         build.include_deep !== false ||
         build.curse_max !== 1
       if (hasCustomSettings) {
         await BuildsService.updateBuild({
           buildId: created.id,
           requestBody: {
-            tiers: build.tiers,
+            groups: build.groups,
+            required_effects: build.required_effects,
+            required_families: build.required_families,
+            excluded_effects: build.excluded_effects,
+            excluded_families: build.excluded_families,
             include_deep: build.include_deep,
             curse_max: build.curse_max,
           },

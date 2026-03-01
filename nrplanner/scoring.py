@@ -3,7 +3,7 @@ from nrplanner.constants import EMPTY_EFFECT
 from nrplanner.data import SourceDataHandler
 from nrplanner.models import (
     BuildDefinition, OwnedRelic,
-    CURSE_EXCESS_PENALTY, MAGNITUDE_TIERS, SCORED_TIERS,
+    CURSE_EXCESS_PENALTY, REQUIRED_WEIGHT,
 )
 
 
@@ -12,80 +12,102 @@ class BuildScorer:
 
     def __init__(self, data_source: SourceDataHandler):
         self.data_source = data_source
-        self._name_cache: dict[str, str] = {}
-        self._name_cache_tiers = None
+        self._name_cache: dict[str, tuple[str, int]] = {}
+        self._name_cache_key: object = None
 
     # ------------------------------------------------------------------
-    # Tier / weight resolution
+    # Category / weight resolution
     # ------------------------------------------------------------------
 
-    def _get_name_cache(self, build: BuildDefinition) -> dict[str, str]:
-        """display_name -> tier cache for name-based effect matching (lazy-built)."""
-        if self._name_cache_tiers is build.tiers:
+    def _get_name_cache(self, build: BuildDefinition) -> dict[str, tuple[str, int]]:
+        """display_name -> (category, weight) cache for name-based effect matching."""
+        cache_key = (id(build.required_effects), id(build.excluded_effects),
+                     tuple(id(g) for g in build.groups))
+        if self._name_cache_key == cache_key:
             return self._name_cache
-        cache: dict[str, str] = {}
-        for tier_name, effect_ids in build.tiers.items():
-            for eid in effect_ids:
+        cache: dict[str, tuple[str, int]] = {}
+        # required effects
+        for eid in build.required_effects:
+            name = self.data_source.get_effect_name(eid)
+            if name and name != "Empty" and not name.startswith("Effect "):
+                cache.setdefault(name, ("required", REQUIRED_WEIGHT))
+        # excluded effects
+        for eid in build.excluded_effects:
+            name = self.data_source.get_effect_name(eid)
+            if name and name != "Empty" and not name.startswith("Effect "):
+                cache.setdefault(name, ("excluded", 0))
+        # group effects
+        for g in build.groups:
+            for eid in g.effects:
                 name = self.data_source.get_effect_name(eid)
                 if name and name != "Empty" and not name.startswith("Effect "):
-                    cache.setdefault(name, tier_name)
+                    cache.setdefault(name, ("group", g.weight))
         self._name_cache = cache
-        self._name_cache_tiers = build.tiers
+        self._name_cache_key = cache_key
         return cache
 
-    def _resolve_tier_and_weight(self, eff_id: int,
-                                  build: BuildDefinition) -> tuple[str | None, int]:
-        """Return (tier, weight) for an effect. Falls back to text_id, name, then family."""
-        tier = build.get_tier_for_effect(eff_id)
-        if not tier:
+    def _resolve_category_and_weight(self, eff_id: int,
+                                      build: BuildDefinition) -> tuple[str | None, int]:
+        """Return (category, weight) for an effect.
+
+        Category is "required", "excluded", "group", or None (unassigned).
+        Falls back through: direct ID -> text_id -> name -> family.
+        """
+        result = build.get_weight_for_effect(eff_id)
+        if not result:
             text_id = self.data_source.get_effect_text_id(eff_id)
             if text_id != -1 and text_id != eff_id:
-                tier = build.get_tier_for_effect(text_id)
-        if not tier:
+                result = build.get_weight_for_effect(text_id)
+        if not result:
             name = self.data_source.get_effect_name(eff_id)
-            tier = self._get_name_cache(build).get(name)
-        effective_weights = build.get_effective_weights()
-        if tier:
-            return tier, effective_weights.get(tier, 0)
+            result = self._get_name_cache(build).get(name)
+        if result:
+            return result
 
         family = self.data_source.get_effect_family(eff_id)
         if family:
-            ftier = build.get_tier_for_family(family)
-            if ftier:
-                if ftier in MAGNITUDE_TIERS:
-                    weight = self.data_source.get_family_magnitude_weight(
-                        eff_id, effective_weights.get(ftier, 0))
-                    return ftier, weight
-                return ftier, effective_weights.get(ftier, 0)
+            fresult = build.get_weight_for_family(family)
+            if fresult:
+                cat, base_w = fresult
+                if cat == "excluded":
+                    return cat, 0
+                # All families get magnitude weighting (positive and negative)
+                weight = self.data_source.get_family_magnitude_weight(eff_id, base_w)
+                return cat, weight
         return None, 0
 
     # ------------------------------------------------------------------
-    # Blacklist
+    # Exclusion check
     # ------------------------------------------------------------------
 
-    def has_blacklisted_effect(self, relic: OwnedRelic, build: BuildDefinition) -> bool:
-        blacklist_ids = set(build.tiers.get("blacklist", []))
-        blacklist_families = build.family_tiers.get("blacklist", [])
-        if not blacklist_ids and not blacklist_families:
+    def has_excluded_effect(self, relic: OwnedRelic, build: BuildDefinition) -> bool:
+        """True if the relic contains any excluded effect or family."""
+        excl_ids = set(build.excluded_effects)
+        excl_families = build.excluded_families
+        if not excl_ids and not excl_families:
             return False
-        blacklist_names = {
+        excl_names = {
             self.data_source.get_effect_name(eid)
-            for eid in blacklist_ids
+            for eid in excl_ids
             if self.data_source.get_effect_name(eid) not in ("", "Empty", None)
         }
         for eff in relic.all_effects:
-            if eff in blacklist_ids:
+            if eff in excl_ids:
                 return True
             text_id = self.data_source.get_effect_text_id(eff)
-            if text_id != -1 and text_id != eff and text_id in blacklist_ids:
+            if text_id != -1 and text_id != eff and text_id in excl_ids:
                 return True
-            if blacklist_names and self.data_source.get_effect_name(eff) in blacklist_names:
+            if excl_names and self.data_source.get_effect_name(eff) in excl_names:
                 return True
-            if blacklist_families:
+            if excl_families:
                 family = self.data_source.get_effect_family(eff)
-                if family and family in blacklist_families:
+                if family and family in excl_families:
                     return True
         return False
+
+    # Keep old name as alias for backwards compatibility during transition
+    def has_blacklisted_effect(self, relic: OwnedRelic, build: BuildDefinition) -> bool:
+        return self.has_excluded_effect(relic, build)
 
     # ------------------------------------------------------------------
     # Scoring
@@ -97,18 +119,18 @@ class BuildScorer:
         for eff in relic.effects:
             if eff in (EMPTY_EFFECT, 0):
                 continue
-            tier, weight = self._resolve_tier_and_weight(eff, build)
-            if tier in SCORED_TIERS:
+            cat, weight = self._resolve_category_and_weight(eff, build)
+            if cat is not None and cat != "excluded":
                 score += weight
         for curse in relic.curses:
             if curse in (EMPTY_EFFECT, 0):
                 continue
-            tier, weight = self._resolve_tier_and_weight(curse, build)
-            if tier in SCORED_TIERS:
+            cat, weight = self._resolve_category_and_weight(curse, build)
+            if cat is not None and cat != "excluded":
                 score += weight
         return score
 
-    def _effect_stacking_score(self, eff_id: int, tier: str, weight: int,
+    def _effect_stacking_score(self, eff_id: int, category: str, weight: int,
                                 vessel_effect_ids: set[int],
                                 vessel_exclusivity_ids: set[int],
                                 vessel_no_stack_exclusivity_ids: set[int],
@@ -164,19 +186,19 @@ class BuildScorer:
         for eff in relic.effects:
             if eff in (EMPTY_EFFECT, 0):
                 continue
-            tier, weight = self._resolve_tier_and_weight(eff, build)
-            if tier in SCORED_TIERS:
+            cat, weight = self._resolve_category_and_weight(eff, build)
+            if cat is not None and cat != "excluded":
                 score += self._effect_stacking_score(
-                    eff, tier, weight,
+                    eff, cat, weight,
                     vessel_effect_ids, vessel_exclusivity_ids,
                     vessel_no_stack_exclusivity_ids, vessel_no_stack_compat_ids)
         for curse in relic.curses:
             if curse in (EMPTY_EFFECT, 0):
                 continue
-            tier, weight = self._resolve_tier_and_weight(curse, build)
-            if tier in SCORED_TIERS:
+            cat, weight = self._resolve_category_and_weight(curse, build)
+            if cat is not None and cat != "excluded":
                 score += self._effect_stacking_score(
-                    curse, tier, weight,
+                    curse, cat, weight,
                     vessel_effect_ids, vessel_exclusivity_ids,
                     vessel_no_stack_exclusivity_ids, vessel_no_stack_compat_ids)
         if vessel_curse_counts is not None:
@@ -224,19 +246,20 @@ class BuildScorer:
             for eff in effs:
                 if eff in (EMPTY_EFFECT, 0):
                     continue
-                tier, weight = self._resolve_tier_and_weight(eff, build)
-                base_score = weight if tier else 0
+                cat, weight = self._resolve_category_and_weight(eff, build)
+                base_score = weight if (cat is not None and cat != "excluded") else 0
                 override_status = None
-                if other_effect_ids is not None and tier in SCORED_TIERS:
+                if other_effect_ids is not None and cat is not None and cat != "excluded":
                     ctx_score = self._effect_stacking_score(
-                        eff, tier, weight, _eff_ids, _excl_ids, _ns_ids, _ns_compat)
+                        eff, cat, weight, _eff_ids, _excl_ids, _ns_ids, _ns_compat)
                     if ctx_score == 0 and base_score != 0:
                         override_status = self._classify_override(
                             eff, _eff_ids, _excl_ids, _ns_ids, _ns_compat)
                 breakdown.append({
                     "effect_id": eff,
                     "name": self.data_source.get_effect_name(eff),
-                    "tier": tier,
+                    "category": cat,
+                    "weight": weight,
                     "score": 0 if override_status else base_score,
                     "is_curse": is_curse,
                     "redundant": override_status is not None,

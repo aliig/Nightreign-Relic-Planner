@@ -6,7 +6,7 @@ BuildDefinition tiers are populated with real effect IDs from game data.
 import pytest
 
 from nrplanner import BuildScorer, SourceDataHandler
-from nrplanner.models import ALL_TIER_KEYS, BuildDefinition, OwnedRelic
+from nrplanner.models import BuildDefinition, OwnedRelic, WeightGroup
 
 EMPTY = 4294967295  # EMPTY_EFFECT sentinel
 
@@ -32,20 +32,17 @@ def _make_build(
     required: list[int] | None = None,
     avoid: list[int] | None = None,
     blacklist: list[int] | None = None,
+    groups: list[WeightGroup] | None = None,
 ) -> BuildDefinition:
-    tiers = {k: [] for k in ALL_TIER_KEYS}
-    if required:
-        tiers["required"] = required
-    if avoid:
-        tiers["avoid"] = avoid
-    if blacklist:
-        tiers["blacklist"] = blacklist
     return BuildDefinition(
         id="test-build",
         name="Test Build",
         character="Wylder",
-        tiers=tiers,
-        family_tiers={k: [] for k in ALL_TIER_KEYS},
+        groups=groups or (
+            [WeightGroup(weight=-20, effects=avoid)] if avoid else []
+        ),
+        required_effects=required or [],
+        excluded_effects=blacklist or [],
         include_deep=False,
         curse_max=1,
     )
@@ -90,71 +87,59 @@ class TestScoreRelic:
         assert scorer.score_relic(relic, build) == 0
 
 
-class TestHasBlacklistedEffect:
-    def test_empty_blacklist_returns_false(
+class TestHasExcludedEffect:
+    def test_empty_exclusions_returns_false(
         self, scorer: BuildScorer, all_effects: list[dict]
     ) -> None:
         eff_id = all_effects[0]["id"]
-        build = _make_build()  # no blacklist
+        build = _make_build()  # no exclusions
         relic = _make_relic([eff_id, EMPTY, EMPTY])
-        assert scorer.has_blacklisted_effect(relic, build) is False
+        assert scorer.has_excluded_effect(relic, build) is False
 
-    def test_effect_in_blacklist_returns_true(
+    def test_excluded_effect_returns_true(
         self, scorer: BuildScorer, all_effects: list[dict]
     ) -> None:
         eff_id = all_effects[0]["id"]
         build = _make_build(blacklist=[eff_id])
         relic = _make_relic([eff_id, EMPTY, EMPTY])
-        assert scorer.has_blacklisted_effect(relic, build) is True
+        assert scorer.has_excluded_effect(relic, build) is True
 
-    def test_effect_not_in_blacklist_returns_false(
+    def test_non_excluded_effect_returns_false(
         self, scorer: BuildScorer, all_effects: list[dict]
     ) -> None:
         eff_id = all_effects[0]["id"]
         other_eff = all_effects[1]["id"]
         build = _make_build(blacklist=[other_eff])
         relic = _make_relic([eff_id, EMPTY, EMPTY])
-        assert scorer.has_blacklisted_effect(relic, build) is False
+        assert scorer.has_excluded_effect(relic, build) is False
 
 
-class TestCustomTierWeights:
-    def test_higher_weight_yields_higher_score(
+class TestCustomGroupWeights:
+    def test_higher_weight_group_yields_higher_score(
         self, scorer: BuildScorer, all_effects: list[dict]
     ) -> None:
         eff_id = all_effects[0]["id"]
-        base_build = _make_build(required=[eff_id])
+        low_build = _make_build(groups=[WeightGroup(weight=10, effects=[eff_id])])
+        high_build = _make_build(groups=[WeightGroup(weight=80, effects=[eff_id])])
         relic = _make_relic([eff_id, EMPTY, EMPTY])
-        default_score = scorer.score_relic(relic, base_build)
+        assert scorer.score_relic(relic, high_build) > scorer.score_relic(relic, low_build)
 
-        tiers = {k: [] for k in ALL_TIER_KEYS}
-        tiers["required"] = [eff_id]
-        high_build = BuildDefinition(
-            id="hw", name="HW", character="Wylder",
-            tiers=tiers,
-            family_tiers={k: [] for k in ALL_TIER_KEYS},
-            include_deep=False,
-            curse_max=1,
-            tier_weights={"required": 200},
-        )
-        assert scorer.score_relic(relic, high_build) > default_score
+    def test_required_effect_scores_at_required_weight(
+        self, scorer: BuildScorer, all_effects: list[dict]
+    ) -> None:
+        from nrplanner.models import REQUIRED_WEIGHT
+        eff_id = all_effects[0]["id"]
+        relic = _make_relic([eff_id, EMPTY, EMPTY])
+        build = _make_build(required=[eff_id])
+        assert scorer.score_relic(relic, build) == REQUIRED_WEIGHT
 
-    def test_none_tier_weights_uses_defaults(
+    def test_negative_weight_group_yields_negative_score(
         self, scorer: BuildScorer, all_effects: list[dict]
     ) -> None:
         eff_id = all_effects[0]["id"]
+        build = _make_build(groups=[WeightGroup(weight=-30, effects=[eff_id])])
         relic = _make_relic([eff_id, EMPTY, EMPTY])
-        tiers = {k: [] for k in ALL_TIER_KEYS}
-        tiers["required"] = [eff_id]
-        build_explicit_none = BuildDefinition(
-            id="n", name="N", character="Wylder",
-            tiers=tiers,
-            family_tiers={k: [] for k in ALL_TIER_KEYS},
-            include_deep=False,
-            curse_max=1,
-            tier_weights=None,
-        )
-        build_defaults = _make_build(required=[eff_id])
-        assert scorer.score_relic(relic, build_explicit_none) == scorer.score_relic(relic, build_defaults)
+        assert scorer.score_relic(relic, build) < 0
 
 
 class TestGetBreakdown:
@@ -175,7 +160,7 @@ class TestGetBreakdown:
         build = _make_build(required=[eff_id])
         relic = _make_relic([eff_id, EMPTY, EMPTY])
         breakdown = scorer.get_breakdown(relic, build)
-        required_keys = {"effect_id", "name", "tier", "score", "is_curse", "redundant"}
+        required_keys = {"effect_id", "name", "category", "weight", "score", "is_curse", "redundant"}
         for item in breakdown:
             assert required_keys.issubset(item.keys()), f"Missing keys: {item}"
 

@@ -51,14 +51,6 @@ class TestGameEndpoints:
         for vessel in data:
             assert vessel["Character"] == "All"
 
-    def test_get_tiers_ok(self, client: TestClient) -> None:
-        response = client.get("/api/v1/game/tiers")
-        assert response.status_code == 200
-        data = response.json()
-        assert isinstance(data, list)
-        tier_keys = {t["key"] for t in data}
-        assert tier_keys == {"required", "preferred", "nice_to_have", "bonus", "avoid", "blacklist"}
-
     def test_get_colors_ok(self, client: TestClient) -> None:
         response = client.get("/api/v1/game/colors")
         assert response.status_code == 200

@@ -47,11 +47,13 @@ class TestCreateBuild:
         assert build["name"] == "Test Build"
         assert build["character"] == "Wylder"
         assert "id" in build
-        # All 6 tier keys must be present with empty lists (includes "bonus" tier)
-        expected_keys = {"required", "preferred", "nice_to_have", "bonus", "avoid", "blacklist"}
-        assert expected_keys == set(build["tiers"].keys())
-        for key, ids in build["tiers"].items():
-            assert ids == [], f"Tier '{key}' should be empty on creation"
+        # New schema: groups list with 4 default weight groups, empty required/excluded
+        assert isinstance(build["groups"], list)
+        assert len(build["groups"]) == 4
+        assert build["required_effects"] == []
+        assert build["required_families"] == []
+        assert build["excluded_effects"] == []
+        assert build["excluded_families"] == []
         assert build["include_deep"] is True
         assert build["curse_max"] == 1
 
@@ -137,23 +139,16 @@ class TestUpdateBuild:
         assert response.status_code == 200
         assert response.json()["name"] == "Renamed"
 
-    def test_update_tiers(
+    def test_update_required_effects(
         self, client: TestClient, superuser_token_headers: dict[str, str], build: dict
     ) -> None:
-        new_tiers = {
-            "required": [1001],
-            "preferred": [],
-            "nice_to_have": [],
-            "avoid": [],
-            "blacklist": [],
-        }
         response = client.put(
             f"/api/v1/builds/{build['id']}",
-            json={"tiers": new_tiers},
+            json={"required_effects": [1001]},
             headers=superuser_token_headers,
         )
         assert response.status_code == 200
-        assert response.json()["tiers"]["required"] == [1001]
+        assert response.json()["required_effects"] == [1001]
 
     def test_update_not_found(
         self, client: TestClient, superuser_token_headers: dict[str, str]
@@ -210,27 +205,28 @@ class TestDeleteBuild:
         client.delete(f"/api/v1/builds/{b['id']}", headers=superuser_token_headers)
 
 
-class TestTierWeightsAndPinnedRelics:
-    def test_create_has_null_tier_weights_and_empty_pinned(
+class TestGroupsAndPinnedRelics:
+    def test_create_has_default_groups_and_empty_pinned(
         self, client: TestClient, superuser_token_headers: dict[str, str]
     ) -> None:
-        b = _create_build(client, superuser_token_headers, name="WeightsCheck")
-        assert b["tier_weights"] is None
+        b = _create_build(client, superuser_token_headers, name="GroupsCheck")
+        assert isinstance(b["groups"], list)
+        assert len(b["groups"]) == 4
         assert b["pinned_relics"] == []
         client.delete(f"/api/v1/builds/{b['id']}", headers=superuser_token_headers)
 
-    def test_update_tier_weights(
+    def test_update_groups(
         self, client: TestClient, superuser_token_headers: dict[str, str]
     ) -> None:
-        b = _create_build(client, superuser_token_headers, name="WeightsUpdate")
-        weights = {"required": 200, "avoid": -100}
+        b = _create_build(client, superuser_token_headers, name="GroupsUpdate")
+        new_groups = [{"weight": 75, "effects": [1001], "families": []}]
         resp = client.put(
             f"/api/v1/builds/{b['id']}",
-            json={"tier_weights": weights},
+            json={"groups": new_groups},
             headers=superuser_token_headers,
         )
         assert resp.status_code == 200
-        assert resp.json()["tier_weights"] == weights
+        assert resp.json()["groups"][0]["weight"] == 75
         client.delete(f"/api/v1/builds/{b['id']}", headers=superuser_token_headers)
 
     def test_update_pinned_relics(

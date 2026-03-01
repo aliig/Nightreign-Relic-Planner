@@ -5,13 +5,55 @@ from typing import Optional
 
 import orjson
 
-from nrplanner.models import ALL_TIER_KEYS, BuildDefinition
+from nrplanner.models import BuildDefinition, WeightGroup
+
+
+_LEGACY_DEFAULT_WEIGHTS: dict[str, int] = {
+    "preferred":   50,
+    "nice_to_have": 25,
+    "bonus":       10,
+    "avoid":       -20,
+}
+
+
+def _migrate_to_v5(build_id: str, b: dict) -> dict:
+    """Convert a pre-v5 build dict (tier-based) to the v5 weight-group schema."""
+    tiers = b.get("tiers", {})
+    family_tiers = b.get("family_tiers", {})
+    tier_weights_override = b.get("tier_weights", {}) or {}
+
+    required_effects = tiers.get("required", tiers.get("must_have", []))
+    required_families = family_tiers.get("required", family_tiers.get("must_have", []))
+    excluded_effects = tiers.get("blacklist", [])
+    excluded_families = family_tiers.get("blacklist", [])
+
+    groups = []
+    for tier_key, default_w in _LEGACY_DEFAULT_WEIGHTS.items():
+        effs = tiers.get(tier_key, [])
+        fams = family_tiers.get(tier_key, [])
+        if effs or fams:
+            weight = tier_weights_override.get(tier_key, default_w)
+            groups.append({"weight": weight, "effects": effs, "families": fams})
+
+    return {
+        "id": build_id,
+        "name": b["name"],
+        "character": b["character"],
+        "groups": groups,
+        "required_effects": required_effects,
+        "required_families": required_families,
+        "excluded_effects": excluded_effects,
+        "excluded_families": excluded_families,
+        "include_deep": b.get("include_deep", True),
+        "curse_max": b.get("curse_max", 1),
+        "pinned_relics": b.get("pinned_relics", []),
+    }
 
 
 class BuildStore:
     """Persists BuildDefinitions to a JSON file."""
 
-    CURRENT_VERSION = 4
+    CURRENT_VERSION = 5
 
     def __init__(self, base_dir: pathlib.Path):
         self.file_path = base_dir / "optimizer_builds.json"
@@ -29,27 +71,12 @@ class BuildStore:
             raw = orjson.loads(self.file_path.read_bytes())
             version = raw.get("version", 1)
             for build_id, b in raw.get("builds", {}).items():
-                tiers = b.get("tiers", {})
-                migrated_tiers = {
-                    "required":    tiers.get("required", tiers.get("must_have", [])),
-                    # v1-v3: "nice_to_have" was preferred; v4+ it's its own tier
-                    "preferred":   tiers.get("preferred", tiers.get("nice_to_have", []) if version < 4 else []),
-                    "nice_to_have": tiers.get("nice_to_have", []) if version >= 4 else [],
-                    "avoid":       tiers.get("avoid", tiers.get("low_priority", [])),
-                    "blacklist":   tiers.get("blacklist", []),
-                }
-                family_tiers = b.get("family_tiers", {k: [] for k in ALL_TIER_KEYS})
-                for key in ALL_TIER_KEYS:
-                    family_tiers.setdefault(key, [])
-                self.builds[build_id] = BuildDefinition.model_validate({
-                    "id":           build_id,
-                    "name":         b["name"],
-                    "character":    b["character"],
-                    "tiers":        migrated_tiers,
-                    "family_tiers": family_tiers,
-                    "include_deep": b.get("include_deep", True),
-                    "curse_max":    b.get("curse_max", 1),
-                })
+                if version < 5:
+                    # v1-v4 used tier-based schema; migrate to weight groups
+                    b = _migrate_to_v5(build_id, b)
+                else:
+                    b["id"] = build_id
+                self.builds[build_id] = BuildDefinition.model_validate(b)
         except Exception as e:
             print(f"[BuildStore] Error loading builds: {e}")
 

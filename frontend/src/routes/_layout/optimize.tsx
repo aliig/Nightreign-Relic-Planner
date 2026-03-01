@@ -31,9 +31,16 @@ export const Route = createFileRoute("/_layout/optimize")({
   }),
 })
 
-const TIER_COLORS: Record<string, string> = {
-  required: "#FF4444", preferred: "#4488FF", nice_to_have: "#44BB88",
-  bonus: "#9966CC", avoid: "#888888", blacklist: "#FF8C00",
+function getBreakdownColor(b: Record<string, unknown>): string | undefined {
+  const category = b.category as string | null
+  if (!category || category === "excluded") return undefined
+  if (category === "required") return "#FF8C00"
+  const weight = (b.weight as number) ?? 0
+  if (weight >= 75) return "#FF4444"
+  if (weight >= 35) return "#4488FF"
+  if (weight >= 15) return "#44BB88"
+  if (weight >= 1) return "#9966CC"
+  return "#888888"
 }
 
 // --- Optimization result cache (persists across route navigations, clears on page reload) ---
@@ -142,7 +149,7 @@ function SlotCard({ slot, isPinned = false }: { slot: SlotAssignment; isPinned?:
                 <div key={i} className="flex items-center justify-between text-xs">
                   <span
                     className="truncate"
-                    style={{ color: TIER_COLORS[b.tier as string] ?? undefined }}
+                    style={{ color: getBreakdownColor(b) }}
                   >
                     {b.name as string}
                     {b.redundant ? " (redundant)" : ""}
@@ -474,11 +481,13 @@ function AnonOptimizeForm() {
             id: build.id,
             name: build.name,
             character: build.character,
-            tiers: build.tiers,
-            family_tiers: build.family_tiers,
+            groups: build.groups,
+            required_effects: build.required_effects,
+            required_families: build.required_families,
+            excluded_effects: build.excluded_effects,
+            excluded_families: build.excluded_families,
             include_deep: build.include_deep,
             curse_max: build.curse_max,
-            tier_weights: build.tier_weights ?? null,
             pinned_relics: build.pinned_relics ?? [],
           },
           relics,

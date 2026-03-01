@@ -6,7 +6,7 @@
  * - Mock createFileRoute the same way as upload.test.tsx so we can access the
  *   component directly.
  * - Force the anonymous (localStorage) path via isLoggedIn → false.
- * - Mock useSuspenseQuery to return controlled families/effects/tiers data.
+ * - Mock useSuspenseQuery to return controlled families/effects data.
  * - Mock useLocalBuilds to return a minimal build fixture.
  *
  * Key regression this covers:
@@ -25,14 +25,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 type FamilyMeta = { name: string; member_names: string[]; member_ids: number[] }
 type EffectMeta = { id: number; name: string; is_debuff?: boolean }
-type TierConfig = {
-  key: string
-  display_name: string
-  color: string
-  weight: number
-  scored: boolean
-  is_exclusion: boolean
-}
 
 // ---------------------------------------------------------------------------
 // Mutable mock state (set per test, closures read at call time)
@@ -41,34 +33,22 @@ type TierConfig = {
 let mockFamilies: FamilyMeta[] = []
 let mockEffects: EffectMeta[] = []
 
-const MOCK_TIERS: TierConfig[] = [
-  {
-    key: "required",
-    display_name: "Essential",
-    color: "#FF4444",
-    weight: 100,
-    scored: true,
-    is_exclusion: false,
-  },
-  {
-    key: "preferred",
-    display_name: "Preferred",
-    color: "#4488FF",
-    weight: 50,
-    scored: true,
-    is_exclusion: false,
-  },
-]
-
 const MOCK_BUILD = {
   id: "build-1",
   name: "Test Build",
   character: "Wylder",
-  tiers: {},
-  family_tiers: {},
+  groups: [
+    { weight: 50, effects: [], families: [] },
+    { weight: 25, effects: [], families: [] },
+    { weight: 10, effects: [], families: [] },
+    { weight: -20, effects: [], families: [] },
+  ],
+  required_effects: [],
+  required_families: [],
+  excluded_effects: [],
+  excluded_families: [],
   include_deep: false,
   curse_max: 1,
-  tier_weights: null,
   pinned_relics: [],
 }
 
@@ -93,7 +73,6 @@ vi.mock("@tanstack/react-query", async (importOriginal) => {
       const key = opts.queryKey as [string, string]
       if (key[1] === "families") return { data: mockFamilies }
       if (key[1] === "effects") return { data: mockEffects }
-      if (key[1] === "tiers") return { data: MOCK_TIERS }
       return { data: [] }
     },
     // useQuery is called by AuthPinnedRelicDialog (not rendered in anon path,
@@ -108,7 +87,6 @@ vi.mock("@/client", () => ({
   GameService: {
     getEffects: vi.fn(),
     getFamilies: vi.fn(),
-    getTiers: vi.fn(),
   },
   BuildsService: {
     getBuild: vi.fn(),
@@ -129,6 +107,7 @@ vi.mock("@/hooks/useLocalBuilds", () => ({
     getById: () => MOCK_BUILD,
     update: vi.fn(),
   }),
+  // WeightGroup is a type-only import in builds.$buildId.tsx — no runtime value needed
 }))
 
 vi.mock("@/hooks/useCustomToast", () => ({

@@ -12,7 +12,7 @@ from nrplanner.data import SourceDataHandler
 from nrplanner.checker import RelicChecker, InvalidReason, is_curse_invalid
 from nrplanner.vessel import LoadoutHandler
 from nrplanner.models import (
-    TierConfig, TIERS, TIER_MAP, ALL_TIER_KEYS,
+    WeightGroup, REQUIRED_WEIGHT,
     OwnedRelic, RelicInventory,
     BuildDefinition,
     SlotAssignment, VesselResult,
@@ -32,7 +32,7 @@ __all__ = [
     # Loadout
     "LoadoutHandler",
     # Models
-    "TierConfig", "TIERS", "TIER_MAP", "ALL_TIER_KEYS",
+    "WeightGroup", "REQUIRED_WEIGHT",
     "OwnedRelic", "RelicInventory",
     "BuildDefinition",
     "SlotAssignment", "VesselResult",

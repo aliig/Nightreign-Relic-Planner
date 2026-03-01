@@ -5,7 +5,7 @@ from nrplanner.constants import EMPTY_EFFECT
 from nrplanner.data import SourceDataHandler
 from nrplanner.models import (
     BuildDefinition, OwnedRelic, RelicInventory,
-    SlotAssignment, VesselResult, SCORED_TIERS,
+    SlotAssignment, VesselResult,
 )
 from nrplanner.scoring import BuildScorer
 
@@ -42,7 +42,7 @@ class VesselOptimizer:
             candidates = inventory.get_candidates(slot_colors[i], is_deep)
             candidates = [
                 r for r in candidates
-                if not self.scorer.has_blacklisted_effect(r, build)
+                if not self.scorer.has_excluded_effect(r, build)
                 and r.ga_handle not in pinned_handles
             ]
             scored = sorted(
@@ -189,11 +189,11 @@ class VesselOptimizer:
         ]
 
         missing: list[int | str] = []
-        required_ids = set(build.tiers.get("required", []))
+        required_ids = set(build.required_effects)
 
         # Name-based resolution: if a required effect ID wasn't found directly or via
         # text_id, check if any assigned effect resolves to the same display name.
-        # This mirrors the name-fallback in BuildScorer._resolve_tier_and_weight and
+        # This mirrors the name-fallback in BuildScorer._resolve_category_and_weight and
         # prevents false-positive "missing" warnings when alias effect IDs are used.
         uncovered = required_ids - assigned_effect_ids
         if uncovered:
@@ -209,7 +209,7 @@ class VesselOptimizer:
                         assigned_effect_ids.add(required_name_to_id[name])
 
         missing.extend(required_ids - assigned_effect_ids)
-        for family in build.family_tiers.get("required", []):
+        for family in build.required_families:
             family_ids = self.data_source.get_family_effect_ids(family)
             if not (assigned_effect_ids & family_ids):
                 missing.append(family)
@@ -446,8 +446,8 @@ class VesselOptimizer:
             if not relic:
                 continue
             for bk_j, entry in enumerate(breakdown):
-                tier = entry.get("tier")
-                if tier not in SCORED_TIERS:
+                cat = entry.get("category")
+                if cat is None or cat == "excluded":
                     continue
                 eff_id = entry["effect_id"]
                 compat = self.data_source.get_effect_conflict_id(eff_id)
@@ -496,7 +496,7 @@ class VesselOptimizer:
                     # the base in the original loop).
                     continue
                 # This variant was wrongly blocked by the base — restore its score.
-                _, weight = self.scorer._resolve_tier_and_weight(eff_id, build)
+                _, weight = self.scorer._resolve_category_and_weight(eff_id, build)
                 if weight <= 0:
                     continue
                 entry["score"] = weight

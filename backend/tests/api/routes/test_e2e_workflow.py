@@ -199,49 +199,42 @@ class TestE2EWorkflow:
         assert build["name"] == "E2E Test Build"
         assert build["character"] == class_name
         assert "id" in build
-        expected_tier_keys = {"required", "preferred", "nice_to_have", "bonus", "avoid", "blacklist"}
-        assert set(build["tiers"].keys()) == expected_tier_keys
-        for tier_list in build["tiers"].values():
-            assert tier_list == [], "All tiers should be empty on creation"
-        assert set(build["family_tiers"].keys()) == expected_tier_keys
+        assert isinstance(build["groups"], list)
+        assert len(build["groups"]) == 4
+        assert build["required_effects"] == []
+        assert build["required_families"] == []
+        assert build["excluded_effects"] == []
+        assert build["excluded_families"] == []
         assert build["include_deep"] is True
         assert build["curse_max"] == 1
-        assert build["tier_weights"] is None
         assert build["pinned_relics"] == []
 
         state["build_id"] = build["id"]
         state["build_data"] = build
 
     # ---------------------------------------------------------------
-    # Step 4: Update build with tier configuration
+    # Step 4: Update build with group configuration
     # ---------------------------------------------------------------
 
-    def test_04_update_build_tiers(
+    def test_04_update_build_groups(
         self, client: TestClient, superuser_token_headers: dict[str, str]
     ) -> None:
-        """PUT /builds/{id} to set preferred effects from real game data."""
+        """PUT /builds/{id} to set preferred effects in a weight group from real game data."""
         state = self.__class__._state
         build_id = state["build_id"]
         preferred_ids = state.get("preferred_effect_ids", [])
 
-        new_tiers = {
-            "required": [],
-            "preferred": preferred_ids,
-            "nice_to_have": [],
-            "bonus": [],
-            "avoid": [],
-            "blacklist": [],
-        }
+        new_groups = [{"weight": 50, "effects": preferred_ids, "families": []}]
 
         response = client.put(
             f"/api/v1/builds/{build_id}",
-            json={"tiers": new_tiers},
+            json={"groups": new_groups},
             headers=superuser_token_headers,
         )
 
         assert response.status_code == 200, response.text
         updated = response.json()
-        assert updated["tiers"]["preferred"] == preferred_ids
+        assert updated["groups"][0]["effects"] == preferred_ids
         assert updated["name"] == "E2E Test Build"  # unchanged
 
         state["build_data"] = updated
@@ -311,11 +304,13 @@ class TestE2EWorkflow:
             "id": str(build_data["id"]),
             "name": build_data["name"],
             "character": build_data["character"],
-            "tiers": build_data["tiers"],
-            "family_tiers": build_data["family_tiers"],
+            "groups": build_data.get("groups", []),
+            "required_effects": build_data.get("required_effects", []),
+            "required_families": build_data.get("required_families", []),
+            "excluded_effects": build_data.get("excluded_effects", []),
+            "excluded_families": build_data.get("excluded_families", []),
             "include_deep": build_data["include_deep"],
             "curse_max": build_data["curse_max"],
-            "tier_weights": build_data.get("tier_weights"),
             "pinned_relics": build_data.get("pinned_relics", []),
         }
 

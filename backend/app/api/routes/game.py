@@ -8,7 +8,6 @@ from fastapi import APIRouter
 
 from app.api.deps import GameDataDep
 from nrplanner.constants import CHARACTER_NAME_ID, CHARACTER_NAMES, RELIC_COLOR_HEX
-from nrplanner.models import TIERS
 
 router = APIRouter(prefix="/game", tags=["game"])
 
@@ -39,12 +38,6 @@ def get_characters() -> list[dict[str, Any]]:
 def get_vessels(hero_type: int, ds: GameDataDep) -> list[dict[str, Any]]:
     """All vessels available for a hero (hero-specific + shared)."""
     return ds.get_all_vessels_for_hero(hero_type)
-
-
-@router.get("/tiers")
-def get_tiers() -> list[dict[str, Any]]:
-    """Tier configuration: required, preferred, nice_to_have, avoid, blacklist."""
-    return [t.model_dump() for t in TIERS]
 
 
 @router.get("/colors")

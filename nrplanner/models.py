@@ -12,52 +12,23 @@ from nrplanner.save import RawRelic
 
 
 # ---------------------------------------------------------------------------
-# Tier system
+# Weight group system
 # ---------------------------------------------------------------------------
 
-class TierConfig(BaseModel):
-    """Immutable definition of a single build tier."""
-    model_config = ConfigDict(frozen=True)
-
-    key: str
-    display_name: str
-    color: str
-    weight: int
-    scored: bool
-    magnitude_weighted: bool
-    is_must_have: bool
-    is_exclusion: bool
-    show_debuffs_first: bool = False
-
-    @computed_field
-    @property
-    def label_suffix(self) -> str:
-        if self.is_must_have:
-            return f" ({self.weight:+d} pts, Must Have)"
-        if self.scored:
-            return f" ({self.weight:+d} pts)"
-        if self.is_exclusion:
-            return " (Absolute Exclusion)"
-        return ""
-
-
-TIERS: list[TierConfig] = [
-    TierConfig(key="required",     display_name="Essential",    color="#FF4444", weight=100, scored=True,  magnitude_weighted=True,  is_must_have=True,  is_exclusion=False),
-    TierConfig(key="preferred",    display_name="Preferred",    color="#4488FF", weight=50,  scored=True,  magnitude_weighted=True,  is_must_have=False, is_exclusion=False),
-    TierConfig(key="nice_to_have", display_name="Nice-to-Have", color="#44BB88", weight=25,  scored=True,  magnitude_weighted=True,  is_must_have=False, is_exclusion=False),
-    TierConfig(key="bonus",        display_name="Bonus",        color="#9966CC", weight=10,  scored=True,  magnitude_weighted=True,  is_must_have=False, is_exclusion=False),
-    TierConfig(key="avoid",        display_name="Avoid",        color="#888888", weight=-20, scored=True,  magnitude_weighted=False, is_must_have=False, is_exclusion=False),
-    TierConfig(key="blacklist",    display_name="Excluded",     color="#FF8C00", weight=0,   scored=False, magnitude_weighted=False, is_must_have=False, is_exclusion=True, show_debuffs_first=True),
-]
-
-TIER_MAP:               dict[str, TierConfig] = {t.key: t for t in TIERS}
-ALL_TIER_KEYS:          list[str]             = [t.key for t in TIERS]
-TIER_WEIGHTS:           dict[str, int]        = {t.key: t.weight for t in TIERS}
-SCORED_TIERS:           tuple[str, ...]       = tuple(t.key for t in TIERS if t.scored)
-MAGNITUDE_TIERS:        tuple[str, ...]       = tuple(t.key for t in TIERS if t.magnitude_weighted)
+# Scoring weight applied to required effects (also a hard constraint)
+REQUIRED_WEIGHT = 100
 
 # Penalty per excess curse beyond build.curse_max
 CURSE_EXCESS_PENALTY = -200
+
+
+class WeightGroup(BaseModel):
+    """A user-defined group of effects/families sharing a scoring weight."""
+    model_config = ConfigDict(frozen=True)
+
+    weight: int                    # Scoring weight; negative = penalty
+    effects: list[int] = Field(default_factory=list)   # Effect IDs in this group
+    families: list[str] = Field(default_factory=list)  # Family names (magnitude-weighted)
 
 
 # ---------------------------------------------------------------------------
@@ -167,38 +138,52 @@ class BuildDefinition(BaseModel):
     id: str
     name: str
     character: str
-    tiers: dict[str, list[int]] = Field(
-        default_factory=lambda: {k: [] for k in ALL_TIER_KEYS})
-    family_tiers: dict[str, list[str]] = Field(
-        default_factory=lambda: {k: [] for k in ALL_TIER_KEYS})
+    groups: list[WeightGroup] = Field(default_factory=list)
+    required_effects: list[int] = Field(default_factory=list)
+    required_families: list[str] = Field(default_factory=list)
+    excluded_effects: list[int] = Field(default_factory=list)
+    excluded_families: list[str] = Field(default_factory=list)
     include_deep: bool = True
     curse_max: int = 1  # max times the same curse is tolerated (0=avoid all)
-    tier_weights: dict[str, int] | None = None  # per-build overrides; None = use defaults
     pinned_relics: list[int] = Field(default_factory=list)  # ga_handle IDs to force-assign
 
-    def get_effective_weights(self) -> dict[str, int]:
-        """Return tier weights merged with any per-build overrides."""
-        if self.tier_weights:
-            return {**TIER_WEIGHTS, **self.tier_weights}
-        return dict(TIER_WEIGHTS)
+    def get_weight_for_effect(self, effect_id: int) -> tuple[str, int] | None:
+        """Return (category, weight) for a direct effect ID lookup.
+
+        Category is "required", "excluded", or "group".
+        Returns None if the effect is not mentioned in this build.
+        """
+        if effect_id in self.required_effects:
+            return ("required", REQUIRED_WEIGHT)
+        if effect_id in self.excluded_effects:
+            return ("excluded", 0)
+        for g in self.groups:
+            if effect_id in g.effects:
+                return ("group", g.weight)
+        return None
+
+    def get_weight_for_family(self, family_name: str) -> tuple[str, int] | None:
+        """Return (category, weight) for a family name lookup.
+
+        Returns None if the family is not mentioned in this build.
+        """
+        if family_name in self.required_families:
+            return ("required", REQUIRED_WEIGHT)
+        if family_name in self.excluded_families:
+            return ("excluded", 0)
+        for g in self.groups:
+            if family_name in g.families:
+                return ("group", g.weight)
+        return None
 
     def all_prioritized_effects(self) -> set[int]:
+        """All effect IDs explicitly mentioned in this build."""
         result: set[int] = set()
-        for effects in self.tiers.values():
-            result.update(effects)
+        result.update(self.required_effects)
+        result.update(self.excluded_effects)
+        for g in self.groups:
+            result.update(g.effects)
         return result
-
-    def get_tier_for_effect(self, effect_id: int) -> Optional[str]:
-        for tier_name, effects in self.tiers.items():
-            if effect_id in effects:
-                return tier_name
-        return None
-
-    def get_tier_for_family(self, family_name: str) -> Optional[str]:
-        for tier_name, families in self.family_tiers.items():
-            if family_name in families:
-                return tier_name
-        return None
 
 
 # ---------------------------------------------------------------------------

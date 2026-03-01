@@ -17,7 +17,6 @@ from app.models import (
     FeaturedBuildsPublic,
     Message,
     User,
-    _default_tiers,
 )
 
 router = APIRouter(prefix="/builds", tags=["builds"])
@@ -51,13 +50,11 @@ def create_build(
     current_user: CurrentUser,
     build_in: BuildCreate,
 ) -> Any:
-    """Create a new build (empty tiers)."""
+    """Create a new build."""
     build = Build(
         owner_id=current_user.id,
         name=build_in.name,
         character=build_in.character,
-        tiers=_default_tiers(),
-        family_tiers=_default_tiers(),
     )
     session.add(build)
     session.commit()
@@ -91,11 +88,13 @@ def list_featured_builds(
             id=build.id,
             name=build.name,
             character=build.character,
-            tiers=build.tiers,
-            family_tiers=build.family_tiers,
+            groups=build.groups,
+            required_effects=build.required_effects,
+            required_families=build.required_families,
+            excluded_effects=build.excluded_effects,
+            excluded_families=build.excluded_families,
             include_deep=build.include_deep,
             curse_max=build.curse_max,
-            tier_weights=build.tier_weights,
             pinned_relics=build.pinned_relics or [],
             owner_name=full_name,
             created_at=build.created_at,
@@ -183,11 +182,13 @@ def clone_build(
         owner_id=current_user.id,
         name=f"{source.name} (Copy)",
         character=source.character,
-        tiers=dict(source.tiers),
-        family_tiers=dict(source.family_tiers),
+        groups=list(source.groups or []),
+        required_effects=list(source.required_effects or []),
+        required_families=list(source.required_families or []),
+        excluded_effects=list(source.excluded_effects or []),
+        excluded_families=list(source.excluded_families or []),
         include_deep=source.include_deep,
         curse_max=source.curse_max,
-        tier_weights=dict(source.tier_weights) if source.tier_weights else None,
         pinned_relics=list(source.pinned_relics or []),
         is_featured=False,
     )

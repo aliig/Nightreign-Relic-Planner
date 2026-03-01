@@ -26,11 +26,11 @@ from nrplanner import (
     parse_relics,
 )
 from nrplanner.models import (
-    ALL_TIER_KEYS,
     BuildDefinition,
     OwnedRelic,
     RelicInventory,
     VesselResult,
+    WeightGroup,
 )
 
 EMPTY = 4294967295  # EMPTY_EFFECT sentinel
@@ -80,19 +80,13 @@ def _make_build(
     required: list[int] | None = None,
     blacklist: list[int] | None = None,
 ) -> BuildDefinition:
-    tiers = {k: [] for k in ALL_TIER_KEYS}
-    if preferred:
-        tiers["preferred"] = preferred
-    if required:
-        tiers["required"] = required
-    if blacklist:
-        tiers["blacklist"] = blacklist
     return BuildDefinition(
         id="integration-test",
         name="Integration Test",
         character="Wylder",
-        tiers=tiers,
-        family_tiers={k: [] for k in ALL_TIER_KEYS},
+        groups=[WeightGroup(weight=50, effects=preferred)] if preferred else [],
+        required_effects=required or [],
+        excluded_effects=blacklist or [],
         include_deep=False,
         curse_max=1,
     )
