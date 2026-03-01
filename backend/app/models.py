@@ -237,6 +237,10 @@ class Build(SQLModel, table=True):
         default_factory=list,
         sa_column=Column(JSON, nullable=False, server_default="[]"),
     )
+    excluded_stacking_categories: list = Field(
+        default_factory=lambda: [300, 6630000],
+        sa_column=Column(JSON, nullable=False, server_default="[300, 6630000]"),
+    )
     is_featured: bool = Field(default=False, index=True)
     created_at: datetime | None = Field(
         default_factory=get_datetime_utc,
@@ -266,6 +270,7 @@ class BuildUpdate(SQLModel):
     include_deep: bool | None = None
     curse_max: int | None = Field(default=None, ge=1)
     pinned_relics: list[int] | None = None
+    excluded_stacking_categories: list[int] | None = None
 
 
 class BuildPublic(SQLModel):
@@ -281,6 +286,7 @@ class BuildPublic(SQLModel):
     include_deep: bool
     curse_max: int
     pinned_relics: list[int] = Field(default_factory=list)
+    excluded_stacking_categories: list[int] = Field(default_factory=list)
     is_featured: bool
     created_at: datetime | None = None
     updated_at: datetime | None = None
@@ -303,6 +309,7 @@ class FeaturedBuildPublic(SQLModel):
     include_deep: bool
     curse_max: int
     pinned_relics: list[int] = Field(default_factory=list)
+    excluded_stacking_categories: list[int] = Field(default_factory=list)
     owner_name: str | None = None
     created_at: datetime | None = None
 

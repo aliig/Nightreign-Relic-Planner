@@ -27,6 +27,9 @@ class VesselOptimizer:
         slot_colors = vessel_data["Colors"]
         num_slots = 6 if build.include_deep else 3
 
+        # Precompute conflict penalty weights once per optimization call.
+        desired_cw = self.scorer.get_desired_conflict_weights(build)
+
         # Pre-assign pinned relics; returns (None, ...) if any can't fit this vessel.
         pinned_map, slot_owner = self._pre_assign_pinned(
             build, inventory, slot_colors, num_slots)
@@ -58,9 +61,11 @@ class VesselOptimizer:
         else:
             total = sum(len(c) for c in candidates_per_free_slot)
             if total <= 200 and num_free <= 6:
-                raw_free = self._backtrack_solve(candidates_per_free_slot, num_free, build, top_n)
+                raw_free = self._backtrack_solve(
+                    candidates_per_free_slot, num_free, build, top_n, desired_cw)
             else:
-                raw_free = self._greedy_solve(candidates_per_free_slot, num_free, build, top_n)
+                raw_free = self._greedy_solve(
+                    candidates_per_free_slot, num_free, build, top_n, desired_cw)
 
         # Merge free-slot results back into full num_slots assignments
         raw: list[list] = []
@@ -74,7 +79,8 @@ class VesselOptimizer:
             raw.append(full)
 
         return [
-            self._build_vessel_result(assignment, num_slots, slot_colors, vessel_data, build)
+            self._build_vessel_result(
+                assignment, num_slots, slot_colors, vessel_data, build, desired_cw)
             for assignment in raw
         ]
 
@@ -134,7 +140,9 @@ class VesselOptimizer:
 
     def _build_vessel_result(self, assignments: list, num_slots: int,
                              slot_colors: tuple, vessel_data: dict,
-                             build: BuildDefinition) -> VesselResult:
+                             build: BuildDefinition,
+                             desired_conflict_weights: dict[int, int] | None = None,
+                             ) -> VesselResult:
         """Construct VesselResult from raw slot assignments (left-to-right priority)."""
         slot_results: list[tuple] = [(None, 0, [])] * num_slots
         assigned_effect_ids: set[int] = set()
@@ -150,9 +158,11 @@ class VesselOptimizer:
             if relic:
                 score = self.scorer.score_relic_in_context(
                     relic, build, vessel_eff, vessel_excl, vessel_no_stack_excl,
-                    vessel_curse_counts, vessel_no_stack_compat)
+                    vessel_curse_counts, vessel_no_stack_compat,
+                    desired_conflict_weights)
                 breakdown = self.scorer.get_breakdown(
-                    relic, build, vessel_eff, vessel_excl, vessel_no_stack_excl, vessel_no_stack_compat)
+                    relic, build, vessel_eff, vessel_excl, vessel_no_stack_excl,
+                    vessel_no_stack_compat, desired_conflict_weights)
                 assigned_effect_ids.update(relic.all_effects)
                 for eff in relic.all_effects:
                     text_id = self.data_source.get_effect_text_id(eff)
@@ -231,13 +241,15 @@ class VesselOptimizer:
     # ------------------------------------------------------------------
 
     def _greedy_solve(self, candidates_per_slot: list, num_slots: int,
-                      build: BuildDefinition, top_n: int = 3) -> list[list]:
+                      build: BuildDefinition, top_n: int = 3,
+                      desired_cw: dict[int, int] | None = None) -> list[list]:
         results: list[list] = []
         excluded: set[int] = set()
         seen: set[frozenset] = set()
 
         for _ in range(top_n):
-            assignment = self._greedy_solve_once(candidates_per_slot, num_slots, build, excluded)
+            assignment = self._greedy_solve_once(
+                candidates_per_slot, num_slots, build, excluded, desired_cw)
             handles = frozenset(r.ga_handle for r, _ in assignment if r is not None)
             if not handles or handles in seen:
                 break
@@ -256,7 +268,8 @@ class VesselOptimizer:
 
     def _greedy_solve_once(self, candidates_per_slot: list, num_slots: int,
                            build: BuildDefinition,
-                           excluded_handles: set[int] | None = None) -> list:
+                           excluded_handles: set[int] | None = None,
+                           desired_cw: dict[int, int] | None = None) -> list:
         assigned: list = [None] * num_slots
         used: set[int] = set(excluded_handles or ())
         vessel_eff: set[int] = set()
@@ -272,7 +285,7 @@ class VesselOptimizer:
                     continue
                 score = self.scorer.score_relic_in_context(
                     relic, build, vessel_eff, vessel_excl, vessel_no_stack_excl,
-                    vessel_curse_counts, vessel_no_stack_compat)
+                    vessel_curse_counts, vessel_no_stack_compat, desired_cw)
                 if best is None or score > best[0]:
                     best = (score, relic)
 
@@ -292,7 +305,8 @@ class VesselOptimizer:
         return assigned
 
     def _backtrack_solve(self, candidates_per_slot: list, num_slots: int,
-                         build: BuildDefinition, top_n: int = 3) -> list[list]:
+                         build: BuildDefinition, top_n: int = 3,
+                         desired_cw: dict[int, int] | None = None) -> list[list]:
         top: list[tuple[int, list]] = []
         seen: set[frozenset] = set()
         min_threshold = -1
@@ -337,7 +351,7 @@ class VesselOptimizer:
 
                 ctx_score = self.scorer.score_relic_in_context(
                     relic, build, v_eff, v_excl, v_no_stack_excl,
-                    curse_counts, v_no_stack_compat)
+                    curse_counts, v_no_stack_compat, desired_cw)
                 if score + ctx_score + remaining_max <= min_threshold:
                     continue  # actual-score prune
 

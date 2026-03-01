@@ -240,6 +240,13 @@ export class GameService {
       url: '/api/v1/game/colors',
     });
   }
+
+  public static getStackingCategories(): CancelablePromise<Record<string, unknown>[]> {
+    return __request(OpenAPI, {
+      method: 'GET',
+      url: '/api/v1/game/stacking-categories',
+    });
+  }
 }
 
 // ---------------------------------------------------------------------------

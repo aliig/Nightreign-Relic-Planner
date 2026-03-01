@@ -96,6 +96,7 @@ def list_featured_builds(
             include_deep=build.include_deep,
             curse_max=build.curse_max,
             pinned_relics=build.pinned_relics or [],
+            excluded_stacking_categories=build.excluded_stacking_categories or [],
             owner_name=full_name,
             created_at=build.created_at,
         )
@@ -190,6 +191,7 @@ def clone_build(
         include_deep=source.include_deep,
         curse_max=source.curse_max,
         pinned_relics=list(source.pinned_relics or []),
+        excluded_stacking_categories=list(source.excluded_stacking_categories or []),
         is_featured=False,
     )
     session.add(clone)

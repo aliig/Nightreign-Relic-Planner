@@ -53,7 +53,7 @@ def _migrate_to_v5(build_id: str, b: dict) -> dict:
 class BuildStore:
     """Persists BuildDefinitions to a JSON file."""
 
-    CURRENT_VERSION = 5
+    CURRENT_VERSION = 6
 
     def __init__(self, base_dir: pathlib.Path):
         self.file_path = base_dir / "optimizer_builds.json"

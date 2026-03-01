@@ -146,6 +146,7 @@ class BuildDefinition(BaseModel):
     include_deep: bool = True
     curse_max: int = 1  # max times the same curse is tolerated (0=avoid all)
     pinned_relics: list[int] = Field(default_factory=list)  # ga_handle IDs to force-assign
+    excluded_stacking_categories: list[int] = Field(default_factory=list)  # compatibilityId values
 
     def get_weight_for_effect(self, effect_id: int) -> tuple[str, int] | None:
         """Return (category, weight) for a direct effect ID lookup.

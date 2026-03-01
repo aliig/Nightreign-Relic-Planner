@@ -136,6 +136,7 @@ def run_optimize(
             include_deep=db_build.include_deep,
             curse_max=db_build.curse_max,
             pinned_relics=db_build.pinned_relics or [],
+            excluded_stacking_categories=db_build.excluded_stacking_categories or [],
         )
 
         db_relics = session.exec(
@@ -233,6 +234,7 @@ def run_optimize_stream(
             include_deep=db_build.include_deep,
             curse_max=db_build.curse_max,
             pinned_relics=db_build.pinned_relics or [],
+            excluded_stacking_categories=db_build.excluded_stacking_categories or [],
         )
 
         db_relics = session.exec(

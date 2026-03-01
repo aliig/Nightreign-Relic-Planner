@@ -12,6 +12,11 @@ const DEFAULT_GROUPS = [
   { weight: -20, effects: [] as number[], families: [] as string[] },
 ]
 
+// Stacking categories excluded by default for new builds.
+// 300 = "Changes compatible armament's skill to ..."
+// 6630000 = "Dormant Power Helps Discover ..."
+const DEFAULT_EXCLUDED_STACKING_CATEGORIES = [300, 6630000]
+
 export interface WeightGroup {
   weight: number
   effects: number[]
@@ -30,6 +35,7 @@ export interface LocalBuild {
   include_deep: boolean
   curse_max: number
   pinned_relics?: number[]
+  excluded_stacking_categories?: number[]
   created_at: string
   updated_at: string
 }
@@ -68,6 +74,7 @@ function _migrateFromLegacy(build: Record<string, unknown>): LocalBuild {
     include_deep: (build.include_deep as boolean) ?? false,
     curse_max: (build.curse_max as number) ?? 1,
     pinned_relics: (build.pinned_relics as number[]) ?? [],
+    excluded_stacking_categories: (build.excluded_stacking_categories as number[]) ?? [],
     created_at: build.created_at as string,
     updated_at: build.updated_at as string,
   }
@@ -110,6 +117,7 @@ export function useLocalBuilds() {
       excluded_families: [],
       include_deep: false,
       curse_max: 1,
+      excluded_stacking_categories: [...DEFAULT_EXCLUDED_STACKING_CATEGORIES],
       created_at: now,
       updated_at: now,
     }
@@ -189,6 +197,7 @@ export async function migrateLocalBuildsToDb(): Promise<number> {
         (build.groups ?? []).some((g) => g.effects.length > 0 || g.families.length > 0) ||
         (build.required_effects ?? []).length > 0 ||
         (build.excluded_effects ?? []).length > 0 ||
+        (build.excluded_stacking_categories ?? []).length > 0 ||
         build.include_deep !== false ||
         build.curse_max !== 1
       if (hasCustomSettings) {
@@ -200,6 +209,7 @@ export async function migrateLocalBuildsToDb(): Promise<number> {
             required_families: build.required_families,
             excluded_effects: build.excluded_effects,
             excluded_families: build.excluded_families,
+            excluded_stacking_categories: build.excluded_stacking_categories,
             include_deep: build.include_deep,
             curse_max: build.curse_max,
           },

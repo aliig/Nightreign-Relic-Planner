@@ -40,6 +40,12 @@ def get_vessels(hero_type: int, ds: GameDataDep) -> list[dict[str, Any]]:
     return ds.get_all_vessels_for_hero(hero_type)
 
 
+@router.get("/stacking-categories")
+def get_stacking_categories(ds: GameDataDep) -> list[dict[str, Any]]:
+    """Mutually-exclusive effect groups available for bulk exclusion."""
+    return ds.get_stacking_categories()
+
+
 @router.get("/colors")
 def get_colors() -> dict[str, str]:
     """Relic color names mapped to their display hex codes."""

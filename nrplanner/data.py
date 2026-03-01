@@ -15,6 +15,23 @@ from nrplanner.constants import (
 )
 
 
+def _longest_common_prefix(names: list[str]) -> str:
+    """Longest common word-prefix of a list of strings, with trailing '...'."""
+    if not names:
+        return ""
+    words_list = [n.split() for n in names]
+    prefix_words: list[str] = []
+    for parts in zip(*words_list):
+        if len(set(parts)) == 1:
+            prefix_words.append(parts[0])
+        else:
+            break
+    label = " ".join(prefix_words) if prefix_words else names[0]
+    if label != names[0]:
+        label += "..."
+    return label
+
+
 def get_system_language() -> str:
     """Detect OS locale and return a supported language code (default en_US)."""
     import locale
@@ -330,6 +347,54 @@ class SourceDataHandler:
             return int(self.effect_params.loc[effect_id, "overrideEffectId"])
         except KeyError:
             return -1
+
+    # ------------------------------------------------------------------
+    # Stacking categories (bulk-exclusion UI)
+    # ------------------------------------------------------------------
+
+    _IGNORED_COMPAT_IDS = frozenset({-1, 100, 900})
+
+    # Curated list of compatibilityId values exposed in the UI.
+    # 300  = "Changes compatible armament's skill to ..."
+    # 6630000 = "Dormant Power Helps Discover ..."
+    _STACKING_CATEGORY_WHITELIST = frozenset({300, 6630000})
+
+    def get_stacking_categories(self) -> list[dict]:
+        """Curated no_stack compatibilityId groups for bulk-exclusion UI.
+
+        Returns list of dicts sorted by label::
+
+            {
+                "compatibility_id": int,
+                "label": str,           # common prefix of member names
+                "effect_ids": list[int],
+                "member_names": list[str],
+            }
+
+        Only whitelisted categories are returned.
+        """
+        # Group effect IDs by compatibilityId (whitelisted only)
+        groups: dict[int, list[int]] = {}
+        for eff_id, row in self.effect_params.iterrows():
+            compat = int(row["compatibilityId"])
+            if compat not in self._STACKING_CATEGORY_WHITELIST:
+                continue
+            groups.setdefault(compat, []).append(int(eff_id))
+
+        result: list[dict] = []
+        for compat_id, eff_ids in groups.items():
+            names = [self.get_effect_name(e) for e in eff_ids]
+            names = [n for n in names if n and n != "Empty" and not n.startswith("Effect ")]
+            label = _longest_common_prefix(names)
+            result.append({
+                "compatibility_id": compat_id,
+                "label": label,
+                "effect_ids": sorted(eff_ids),
+                "member_names": sorted(set(names)),
+            })
+
+        result.sort(key=lambda x: x["label"])
+        return result
 
     def _get_source_override_names(self) -> set[str]:
         """Lazy-load the set of effect names that have source overrides."""

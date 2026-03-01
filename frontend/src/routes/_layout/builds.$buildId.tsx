@@ -53,6 +53,12 @@ type RelicForPicker = {
 type DragData =
   | { type: "effect"; effectId: number; sourceZone: string | null }
   | { type: "family"; familyName: string; sourceZone: string | null }
+type StackingCategory = {
+  compatibility_id: number
+  label: string
+  effect_ids: number[]
+  member_names: string[]
+}
 
 // Shape of the build data returned by the API (new schema).
 // Cast API response to this type until the SDK is regenerated.
@@ -67,6 +73,7 @@ type BuildApiData = {
   include_deep: boolean
   curse_max: number
   pinned_relics: number[]
+  excluded_stacking_categories: number[]
 }
 
 // ---------------------------------------------------------------------------
@@ -417,6 +424,8 @@ interface EditorUIProps {
   curseMax: number
   pinnedRelics: number[]
   pinnedRelicMeta: Map<number, RelicForPicker>
+  excludedStackingCategories: number[]
+  stackingCategories: StackingCategory[]
   saving: boolean
   effects: EffectMeta[]
   families: FamilyMeta[]
@@ -429,16 +438,19 @@ interface EditorUIProps {
   onIncludeDeepChange: (v: boolean) => void
   onCurseMaxChange: (v: number) => void
   onPinnedRelicsChange: (handles: number[], meta: Map<number, RelicForPicker>) => void
+  onExcludedStackingCategoriesChange: (ids: number[]) => void
   onRename: (newName: string) => void
 }
 
 function BuildEditorUI({
   name, character, groups, requiredEffects, requiredFamilies,
   excludedEffects, excludedFamilies, includeDeep, curseMax,
-  pinnedRelics, pinnedRelicMeta, saving, effects, families, isAuth,
+  pinnedRelics, pinnedRelicMeta, excludedStackingCategories, stackingCategories,
+  saving, effects, families, isAuth,
   onGroupsChange, onRequiredEffectsChange, onRequiredFamiliesChange,
   onExcludedEffectsChange, onExcludedFamiliesChange,
-  onIncludeDeepChange, onCurseMaxChange, onPinnedRelicsChange, onRename,
+  onIncludeDeepChange, onCurseMaxChange, onPinnedRelicsChange,
+  onExcludedStackingCategoriesChange, onRename,
 }: EditorUIProps) {
   const [effectSearch, setEffectSearch] = useState("")
   const [draftName, setDraftName] = useState(name)
@@ -707,6 +719,50 @@ function BuildEditorUI({
               </div>
             )}
           </div>
+
+          {/* Stacking category exclusions */}
+          {stackingCategories.length > 0 && (
+            <div>
+              <div className="flex items-center gap-2 mb-1">
+                <span className="text-sm font-medium">Stacking Category Exclusions</span>
+              </div>
+              <p className="text-xs text-muted-foreground mb-2">
+                All effects in checked categories will be excluded unless individually listed in a priority group below.
+              </p>
+              <div className="grid sm:grid-cols-2 gap-x-4 gap-y-1 max-h-64 overflow-y-auto">
+                {stackingCategories.map((cat) => {
+                  const checked = excludedStackingCategories.includes(cat.compatibility_id)
+                  return (
+                    <Tooltip key={cat.compatibility_id}>
+                      <TooltipTrigger asChild>
+                        <label className="flex items-center gap-2 text-sm py-0.5 cursor-pointer hover:bg-muted/20 rounded px-1 transition-colors">
+                          <Checkbox
+                            checked={checked}
+                            onCheckedChange={(v: boolean) => {
+                              if (v) {
+                                onExcludedStackingCategoriesChange([...excludedStackingCategories, cat.compatibility_id])
+                              } else {
+                                onExcludedStackingCategoriesChange(excludedStackingCategories.filter((id) => id !== cat.compatibility_id))
+                              }
+                            }}
+                          />
+                          <span className="truncate">{cat.label}</span>
+                          <span className="ml-auto text-xs text-muted-foreground shrink-0">({cat.effect_ids.length})</span>
+                        </label>
+                      </TooltipTrigger>
+                      <TooltipContent side="right" className="max-w-80 max-h-48 overflow-y-auto">
+                        <ul className="text-xs space-y-0.5">
+                          {cat.member_names.map((name, i) => (
+                            <li key={i}>{name}</li>
+                          ))}
+                        </ul>
+                      </TooltipContent>
+                    </Tooltip>
+                  )
+                })}
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="grid lg:grid-cols-[1fr_320px] gap-6">
@@ -995,9 +1051,15 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
     queryFn: () => GameService.getFamilies(),
     staleTime: Infinity,
   })
+  const { data: stackingCategoriesData } = useSuspenseQuery({
+    queryKey: ["game", "stacking-categories"],
+    queryFn: () => GameService.getStackingCategories() as unknown as Promise<StackingCategory[]>,
+    staleTime: Infinity,
+  })
 
   const effects = (effectsData ?? []) as EffectMeta[]
   const families = (familiesData ?? []) as FamilyMeta[]
+  const stackingCategories = (stackingCategoriesData ?? []) as StackingCategory[]
   // Cast to new schema type (SDK will be regenerated separately)
   const build = buildRaw as unknown as BuildApiData
 
@@ -1020,6 +1082,9 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
   const [curseMax, setCurseMax] = useState(build.curse_max)
   const [pinnedRelics, setPinnedRelics] = useState<number[]>(build.pinned_relics ?? [])
   const [pinnedRelicMeta, setPinnedRelicMeta] = useState<Map<number, RelicForPicker>>(new Map())
+  const [excludedStackingCategories, setExcludedStackingCategories] = useState<number[]>(
+    () => build.excluded_stacking_categories ?? [],
+  )
 
   const groupsRef = useRef(groups)
   const requiredEffectsRef = useRef(requiredEffects)
@@ -1029,6 +1094,7 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
   const includeDeepRef = useRef(includeDeep)
   const curseMaxRef = useRef(curseMax)
   const pinnedRelicsRef = useRef(pinnedRelics)
+  const excludedStackingCategoriesRef = useRef(excludedStackingCategories)
   groupsRef.current = groups
   requiredEffectsRef.current = requiredEffects
   requiredFamiliesRef.current = requiredFamilies
@@ -1037,6 +1103,7 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
   includeDeepRef.current = includeDeep
   curseMaxRef.current = curseMax
   pinnedRelicsRef.current = pinnedRelics
+  excludedStackingCategoriesRef.current = excludedStackingCategories
 
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -1090,6 +1157,7 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
     setIncludeDeep(build.include_deep)
     setCurseMax(build.curse_max)
     setPinnedRelics(build.pinned_relics ?? [])
+    setExcludedStackingCategories(build.excluded_stacking_categories ?? [])
   }, [build])
 
   useEffect(() => {
@@ -1106,6 +1174,7 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
           required_families: requiredFamiliesRef.current,
           excluded_effects: excludedEffectsRef.current,
           excluded_families: excludedFamiliesRef.current,
+          excluded_stacking_categories: excludedStackingCategoriesRef.current,
           include_deep: includeDeepRef.current,
           curse_max: curseMaxRef.current,
           pinned_relics: pinnedRelicsRef.current,
@@ -1140,6 +1209,8 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
       curseMax={curseMax}
       pinnedRelics={pinnedRelics}
       pinnedRelicMeta={pinnedRelicMeta}
+      excludedStackingCategories={excludedStackingCategories}
+      stackingCategories={stackingCategories}
       saving={saveMutation.isPending}
       effects={effects}
       families={families}
@@ -1156,6 +1227,7 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
         setPinnedRelicMeta(meta)
         scheduleAutoSave()
       }}
+      onExcludedStackingCategoriesChange={(ids) => { setExcludedStackingCategories(ids); scheduleAutoSave() }}
       onRename={(name) => renameMutation.mutate(name)}
     />
   )
@@ -1178,9 +1250,15 @@ function LocalBuildEditorContent({ buildId }: { buildId: string }) {
     queryFn: () => GameService.getFamilies(),
     staleTime: Infinity,
   })
+  const { data: stackingCategoriesData } = useSuspenseQuery({
+    queryKey: ["game", "stacking-categories"],
+    queryFn: () => GameService.getStackingCategories() as unknown as Promise<StackingCategory[]>,
+    staleTime: Infinity,
+  })
 
   const effects = (effectsData ?? []) as EffectMeta[]
   const families = (familiesData ?? []) as FamilyMeta[]
+  const stackingCategories = (stackingCategoriesData ?? []) as StackingCategory[]
   const build = getById(buildId)
 
   const [groups, setGroups] = useState<WeightGroup[]>(
@@ -1213,6 +1291,9 @@ function LocalBuildEditorContent({ buildId }: { buildId: string }) {
     }
     return map
   })
+  const [excludedStackingCategories, setExcludedStackingCategories] = useState<number[]>(
+    () => build?.excluded_stacking_categories ?? [],
+  )
 
   const groupsRef = useRef(groups)
   const requiredEffectsRef = useRef(requiredEffects)
@@ -1222,6 +1303,7 @@ function LocalBuildEditorContent({ buildId }: { buildId: string }) {
   const includeDeepRef = useRef(includeDeep)
   const curseMaxRef = useRef(curseMax)
   const pinnedRelicsRef = useRef(pinnedRelics)
+  const excludedStackingCategoriesRef = useRef(excludedStackingCategories)
   groupsRef.current = groups
   requiredEffectsRef.current = requiredEffects
   requiredFamiliesRef.current = requiredFamilies
@@ -1230,6 +1312,7 @@ function LocalBuildEditorContent({ buildId }: { buildId: string }) {
   includeDeepRef.current = includeDeep
   curseMaxRef.current = curseMax
   pinnedRelicsRef.current = pinnedRelics
+  excludedStackingCategoriesRef.current = excludedStackingCategories
 
   const updateRef = useRef(update)
   updateRef.current = update
@@ -1249,6 +1332,7 @@ function LocalBuildEditorContent({ buildId }: { buildId: string }) {
         required_families: requiredFamiliesRef.current,
         excluded_effects: excludedEffectsRef.current,
         excluded_families: excludedFamiliesRef.current,
+        excluded_stacking_categories: excludedStackingCategoriesRef.current,
         include_deep: includeDeepRef.current,
         curse_max: curseMaxRef.current,
         pinned_relics: pinnedRelicsRef.current,
@@ -1277,6 +1361,8 @@ function LocalBuildEditorContent({ buildId }: { buildId: string }) {
       curseMax={curseMax}
       pinnedRelics={pinnedRelics}
       pinnedRelicMeta={pinnedRelicMeta}
+      excludedStackingCategories={excludedStackingCategories}
+      stackingCategories={stackingCategories}
       saving={false}
       effects={effects}
       families={families}
@@ -1293,6 +1379,7 @@ function LocalBuildEditorContent({ buildId }: { buildId: string }) {
         setPinnedRelicMeta(meta)
         scheduleAutoSave()
       }}
+      onExcludedStackingCategoriesChange={(ids) => { setExcludedStackingCategories(ids); scheduleAutoSave() }}
       onRename={(name) => updateRef.current(buildId, { name })}
     />
   )
