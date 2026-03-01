@@ -77,34 +77,52 @@ def test_get_all_effects_list_structure(
         assert isinstance(effect["alias_ids"], list), "alias_ids must be a list"
 
 
-def test_get_all_effects_list_covers_all_valid_ids(
+def test_get_all_effects_list_covers_all_reachable_ids(
     ds: SourceDataHandler, all_effects: list[dict]
 ) -> None:
-    """Every valid effect ID in AttachEffectParam must be reachable via id or alias_ids.
+    """Every reachable effect ID must appear in get_all_effects_list() via id or alias_ids.
 
     Regression guard for the deduplication bug where get_all_effects_list() dropped
     alias IDs, causing relics whose effects used those IDs to show blank properties.
+    Also verifies that unreachable effects are properly filtered out.
     """
-    # Build the set of all IDs reachable from the exported effects list
-    reachable: set[int] = set()
+    # Build the set of all IDs returned from the exported effects list
+    returned: set[int] = set()
     for e in all_effects:
-        reachable.add(e["id"])
-        reachable.update(e["alias_ids"])
+        returned.add(e["id"])
+        returned.update(e["alias_ids"])
 
-    # Compute all valid IDs from the raw param table (same filter as get_all_effects_list)
+    # Every reachable effect with a real name must be covered
+    reachable = ds._reachable_effect_ids
     expected: set[int] = set()
-    for eff_id in ds.effect_params.index:
-        if eff_id == 0:
+    for eff_id in reachable:
+        if eff_id == 0 or eff_id not in ds.effect_params.index:
             continue
         name = ds.get_effect_name(eff_id).strip()
         if name == "Empty" or name.startswith("Effect "):
             continue
         expected.add(eff_id)
 
-    missing = expected - reachable
+    missing = expected - returned
     assert not missing, (
-        f"{len(missing)} valid effect IDs are not reachable via id or alias_ids: "
+        f"{len(missing)} reachable effect IDs not in get_all_effects_list(): "
         f"{sorted(missing)[:20]}{'...' if len(missing) > 20 else ''}"
+    )
+
+    # No unreachable effects should leak through
+    leaked = returned - reachable
+    assert not leaked, (
+        f"{len(leaked)} unreachable effect IDs leaked into get_all_effects_list(): "
+        f"{sorted(leaked)[:20]}{'...' if len(leaked) > 20 else ''}"
+    )
+
+    # Confirm filtering is actually active (reachable << total named effects)
+    all_named = {eid for eid in ds.effect_params.index
+                 if eid != 0
+                 and ds.get_effect_name(eid).strip() not in ("Empty",)
+                 and not ds.get_effect_name(eid).strip().startswith("Effect ")}
+    assert len(returned) < len(all_named), (
+        "Reachability filter doesn't appear active — returned all named effects"
     )
 
 

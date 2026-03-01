@@ -4,6 +4,7 @@ Game data loader — reads CSV/XML resource files into queryable DataFrames.
 All methods are read-only. Constructor takes an optional resources_dir so
 paths can be overridden (useful for testing and future FastAPI deployment).
 """
+import functools
 import re
 from pathlib import Path
 from typing import Optional, Union
@@ -261,6 +262,17 @@ class SourceDataHandler:
         lo2, hi2 = RELIC_GROUPS["deep_103"]
         return lo1 <= relic_id <= hi1 or lo2 <= relic_id <= hi2
 
+    @functools.cached_property
+    def _reachable_effect_ids(self) -> set[int]:
+        """Effect IDs reachable from safe relics via the pool tables."""
+        ids: set[int] = set()
+        for relic_id in self.get_safe_relic_ids():
+            if relic_id not in self.relic_table.index:
+                continue
+            for pool_id in self.get_relic_pools_seq(relic_id):
+                ids.update(self.get_pool_rollable_effects(pool_id))
+        return ids
+
     # ------------------------------------------------------------------
     # Effect data
     # ------------------------------------------------------------------
@@ -435,6 +447,8 @@ class SourceDataHandler:
                 continue
             name = self.get_effect_name(eff_id).strip()
             if name == "Empty" or name.startswith("Effect "):
+                continue
+            if eff_id not in self._reachable_effect_ids:
                 continue
 
             # For source-overridden names, deep-pool effects get a separate entry
