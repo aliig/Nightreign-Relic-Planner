@@ -78,7 +78,6 @@ def upgrade():
         sa.Column('id', sa.UUID(), nullable=False),
         sa.Column('owner_id', sa.UUID(), nullable=False),
         sa.Column('name', sqlmodel.sql.sqltypes.AutoString(length=255), nullable=False),
-        sa.Column('character', sqlmodel.sql.sqltypes.AutoString(length=50), nullable=False),
         sa.Column('tiers', sa.JSON(), nullable=False),
         sa.Column('family_tiers', sa.JSON(), nullable=False),
         sa.Column('include_deep', sa.Boolean(), nullable=False, server_default='true'),
