@@ -452,6 +452,12 @@ function BuildEditorUI({
 
   const effectMap = new Map(effects.map((e) => [e.id, e]))
 
+  // Groups sorted by weight descending for display; zone IDs use original array index
+  const sortedGroupIndices = useMemo(
+    () => groups.map((_, i) => i).sort((a, b) => groups[b].weight - groups[a].weight),
+    [groups],
+  )
+
   // All effect IDs and family names currently assigned to any zone
   const assignedEffectIds = useMemo(() => {
     const ids = new Set<number>()
@@ -729,7 +735,8 @@ function BuildEditorUI({
             </div>
 
             {/* Weight groups */}
-            {groups.map((group, idx) => {
+            {sortedGroupIndices.map((idx) => {
+              const group = groups[idx]
               const { label, color } = getLabelForWeight(group.weight)
               const isEmpty = group.effects.length === 0 && group.families.length === 0
               return (
