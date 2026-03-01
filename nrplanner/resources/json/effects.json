@@ -1,31 +1,4 @@
 {
-  "10000": {
-    "name": "FP Restoration upon Successive Attacks(Old Pocket Watch)"
-  },
-  "10001": {
-    "name": "Taking attacks improves attack power (Besmirched Frame)"
-  },
-  "10002": {
-    "name": "Switching Weapons Boosts Attack Power (Fell Omen Fetish)"
-  },
-  "11000": {
-    "name": "Wylder +1 additional Character Skill use (The Wylder's Earring)"
-  },
-  "11002": {
-    "name": "Wylder Art gauge greatly filled when ability is activated (Silver Tear)"
-  },
-  "12002": {
-    "name": "Guardian Slowly restores nearby allies' HP while Art is active (Witch's Brooch)"
-  },
-  "16002": {
-    "name": "Revenant Expend own HP to fully heal nearby allies when activating Art (Old Portrait)"
-  },
-  "17002": {
-    "name": "Recluse Activating Ultimate Art raises Max HP (Bone-Like Stone)"
-  },
-  "100000": {
-    "name": "Taking attacks improves attack power (Dark Night of the Beast)"
-  },
   "310000": {
     "name": "Increased Maximum HP"
   },
@@ -150,7 +123,7 @@
     "name": "Blood Loss in Vicinity Increases Attack Power"
   },
   "321700": {
-    "name": "Poison & Rot Improves Attack Power"
+    "name": "Poison & Rot in Vicinity Increases Attack Power"
   },
   "321800": {
     "name": "Improved Jump Attacks"
@@ -183,7 +156,7 @@
     "name": "Reduced Spell FP Cost"
   },
   "330801": {
-    "name": "Maximum HP Down"
+    "name": "Reduced Maximum HP"
   },
   "330900": {
     "name": "Improved Charged Spells & Skills"
@@ -204,7 +177,7 @@
     "name": "Improved Holy Damage Negation"
   },
   "340500": {
-    "name": "Improved Non-Physical Damage Negation"
+    "name": "Improved Affinity Damage Negation"
   },
   "340700": {
     "name": "Improved Dodging"
@@ -258,130 +231,127 @@
     "name": "Continuous HP Loss"
   },
   "6001400": {
-    "name": "Physical Attack Up +4%"
-  },
-  "6001401": {
-    "name": "Relic: Physical Attack Up +4"
+    "name": "Physical Attack Up +4\n"
   },
   "6001500": {
-    "name": "Magic Attack Power Up +3%"
+    "name": "Magic Attack Power Up +3\n"
   },
   "6001501": {
-    "name": "Magic Attack Power Up +4%"
+    "name": "Magic Attack Power Up +4\n"
   },
   "6001600": {
-    "name": "Fire Attack Power Up +3%"
+    "name": "Fire Attack Power Up +3\n"
   },
   "6001601": {
-    "name": "Fire Attack Power Up +4%"
+    "name": "Fire Attack Power Up +4\n"
   },
   "6001700": {
-    "name": "Lightning Attack Power Up +3%"
+    "name": "Lightning Attack Power Up +3\n"
   },
   "6001701": {
-    "name": "Lightning Attack Power Up +4%"
+    "name": "Lightning Attack Power Up +4\n"
   },
   "6001800": {
-    "name": "Holy Attack Power Up +3%"
+    "name": "Holy Attack Power Up +3\n"
   },
   "6001801": {
-    "name": "Holy Attack Power Up +4%"
+    "name": "Holy Attack Power Up +4\n"
   },
   "6002600": {
-    "name": "Improved Magic Damage Negation +1%"
+    "name": "Improved Magic Damage Negation +1\n"
   },
   "6002601": {
-    "name": "Improved Magic Damage Negation +2%"
+    "name": "Improved Magic Damage Negation +2\n"
   },
   "6002700": {
-    "name": "Improved Fire Damage Negation +1%"
+    "name": "Improved Fire Damage Negation +1\n"
   },
   "6002701": {
-    "name": "Improved Fire Damage Negation +2%"
+    "name": "Improved Fire Damage Negation +2\n"
   },
   "6002800": {
-    "name": "Improved Lightning Damage Negation +1%"
+    "name": "Improved Lightning Damage Negation +1\n"
   },
   "6002801": {
-    "name": "Improved Lightning Damage Negation +2%"
+    "name": "Improved Lightning Damage Negation +2\n"
   },
   "6002900": {
-    "name": "Improved Holy Damage Negation +1%"
+    "name": "Improved Holy Damage Negation +1\n"
   },
   "6002901": {
-    "name": "Improved Holy Damage Negation +2%"
+    "name": "Improved Holy Damage Negation +2\n"
   },
   "6003000": {
-    "name": "Improved Poison Resistance +1%"
+    "name": "Improved Poison Resistance +1\n"
   },
   "6003001": {
-    "name": "Improved Poison Resistance +2%"
+    "name": "Improved Poison Resistance +2\n"
   },
   "6003100": {
-    "name": "Improved Blood Loss Resistance +1%"
+    "name": "Improved Blood Loss Resistance +1\n"
   },
   "6003101": {
-    "name": "Improved Blood Loss Resistance +2%"
+    "name": "Improved Blood Loss Resistance +2\n"
   },
   "6003200": {
-    "name": "Improved Sleep Resistance +1%"
+    "name": "Improved Sleep Resistance +1\n"
   },
   "6003201": {
-    "name": "Improved Sleep Resistance +2%"
+    "name": "Improved Sleep Resistance +2\n"
   },
   "6003300": {
-    "name": "Improved Death Blight Resistance +1%"
+    "name": "Improved Death Blight Resistance +1\n"
   },
   "6003301": {
-    "name": "Improved Death Blight Resistance +2%"
+    "name": "Improved Death Blight Resistance +2\n"
   },
   "6003400": {
-    "name": "Improved Rot Resistance +1%"
+    "name": "Improved Rot Resistance +1\n"
   },
   "6003401": {
-    "name": "Improved Rot Resistance +2%"
+    "name": "Improved Rot Resistance +2\n"
   },
   "6003500": {
-    "name": "Improved Frost Resistance +1%"
+    "name": "Improved Frost Resistance +1\n"
   },
   "6003501": {
-    "name": "Improved Frost Resistance +2%"
+    "name": "Improved Frost Resistance +2\n"
   },
   "6003600": {
-    "name": "Improved Madness Resistance +1%"
+    "name": "Improved Madness Resistance +1\n"
   },
   "6003601": {
-    "name": "Improved Madness Resistance +2%"
+    "name": "Improved Madness Resistance +2\n"
   },
   "6005600": {
-    "name": "Partial HP Restoration upon Post-Damage Attacks +1%"
+    "name": "Partial HP Restoration upon Post-Damage Attacks +1\n"
   },
   "6005601": {
-    "name": "Partial HP Restoration upon Post-Damage Attacks +2%"
+    "name": "Partial HP Restoration upon Post-Damage Attacks +2\n"
   },
   "6030200": {
-    "name": "HP restored when using medicinal boluses\t etc. +1%"
+    "name": "HP restored when using medicinal boluses, etc. +1\n"
   },
   "6030600": {
-    "name": "Art gauge charged from successful guarding +1%"
+    "name": "Successful guarding fills more of the Art gauge +1\n"
   },
   "6030800": {
-    "name": "Art gauge fills moderately upon critical hit +1%"
+    "name": "Critical hits fill more of the Art gauge +1\n"
   },
   "6030900": {
-    "name": "Physical attack power increases after using grease items +1"
+    "name": "Physical attack power increases after using grease items +1\n"
   },
   "6030901": {
-    "name": "Physical attack power increases after using grease items +2"
+    "name": "Physical attack power increases after using grease items +2\n"
   },
   "6035100": {
     "name": "Critical Hit Boosts Stamina Recovery Speed +1"
   },
   "6040100": {
-    "name": "Improved Guard Counters +1%"
+    "name": "Improved Guard Counters +1\n"
   },
   "6040101": {
-    "name": "Improved Guard Counters +2%"
+    "name": "Improved Guard Counters +2\n"
   },
   "6040300": {
     "name": "Improved Throwing Pot Damage +1"
@@ -408,28 +378,28 @@
     "name": "Max stamina increased for each great enemy defeated at a Great Encampment"
   },
   "6090000": {
-    "name": "Defeating enemies fills more of the Art gauge +1%"
+    "name": "Defeating enemies fills more of the Art gauge +1\n"
   },
   "6160000": {
-    "name": "HP Restoration upon Thrusting Counterattack +1%"
+    "name": "HP Restoration upon Thrusting Counterattack +1\n"
   },
   "6260000": {
-    "name": "Attack power up when facing poison-afflicted enemy +1%"
+    "name": "Attack power up when facing poison-afflicted enemy +1\n"
   },
   "6260001": {
-    "name": "Attack power up when facing poison-afflicted enemy +2%"
+    "name": "Attack power up when facing poison-afflicted enemy +2\n"
   },
   "6260300": {
-    "name": "Attack power up when facing scarlet rot-afflicted%enemy +1"
+    "name": "Attack power up when facing scarlet rot-afflicted enemy +1\n"
   },
   "6260301": {
-    "name": "Attack power up when facing scarlet rot-afflicted%enemy +2"
+    "name": "Attack power up when facing scarlet rot-afflicted enemy +2\n"
   },
   "6260400": {
-    "name": "Attack power up when facing frostbite-afflicted%enemy +1"
+    "name": "Attack power up when facing frostbite-afflicted enemy +1\n"
   },
   "6260401": {
-    "name": "Attack power up when facing frostbite-afflicted%enemy +2"
+    "name": "Attack power up when facing frostbite-afflicted enemy +2\n"
   },
   "6500000": {
     "name": "[Wylder] Character Skill inflicts Blood Loss"
@@ -455,26 +425,32 @@
   "6500700": {
     "name": "[Executor] Slowly Restore HP upon Ability Activation"
   },
+  "6500800": {
+    "name": "[Scholar] Reduced FP consumption when using Character Skill on self"
+  },
+  "6500900": {
+    "name": "[Undertaker] Executing Art readies Character Skill"
+  },
   "6600000": {
-    "name": "Sleep in Vicinity Improves Attack Power%"
+    "name": "Sleep in Vicinity Improves Attack Power\n"
   },
   "6600001": {
-    "name": "Sleep in Vicinity Improves Attack Power +1%"
+    "name": "Sleep in Vicinity Improves Attack Power +1\n"
   },
   "6600100": {
-    "name": "Madness in Vicinity Improves Attack Power%"
+    "name": "Madness in Vicinity Improves Attack Power\n"
   },
   "6600101": {
-    "name": "Madness in Vicinity Improves Attack Power +1%"
+    "name": "Madness in Vicinity Improves Attack Power +1\n"
   },
   "6610400": {
-    "name": "Increased Maximum HP%"
+    "name": "Increased Maximum HP\n"
   },
   "6610500": {
-    "name": "Increased Maximum FP%"
+    "name": "Increased Maximum FP\n"
   },
   "6610600": {
-    "name": "Increased Maximum Stamina%"
+    "name": "Increased Maximum Stamina\n"
   },
   "6610700": {
     "name": "Reduced FP Consumption"
@@ -483,43 +459,43 @@
     "name": "Improved Affinity Attack Power"
   },
   "6610801": {
-    "name": "Improved Affinity Attack Power +1%"
+    "name": "Improved Affinity Attack Power +1\n"
   },
   "6610802": {
-    "name": "Improved Affinity Attack Power +2%"
+    "name": "Improved Affinity Attack Power +2\n"
   },
   "6611001": {
-    "name": "Improved Physical Damage Negation +1%"
+    "name": "Improved Physical Damage Negation +1\n"
   },
   "6611002": {
-    "name": "Improved Physical Damage Negation +2%"
+    "name": "Improved Physical Damage Negation +2\n"
   },
   "6611100": {
     "name": "Improved Affinity Damage Negation"
   },
   "6611101": {
-    "name": "Improved Affinity Damage Negation +1%"
+    "name": "Improved Affinity Damage Negation +1\n"
   },
   "6611102": {
-    "name": "Improved Affinity Damage Negation +2%"
+    "name": "Improved Affinity Damage Negation +2\n"
   },
   "6611200": {
     "name": "Improved Sorceries"
   },
   "6611201": {
-    "name": "Improved Sorceries +1%"
+    "name": "Improved Sorceries +1\n"
   },
   "6611202": {
-    "name": "Improved Sorceries +2%"
+    "name": "Improved Sorceries +2\n"
   },
   "6611300": {
     "name": "Improved Incantations"
   },
   "6611301": {
-    "name": "Improved Incantations +1%"
+    "name": "Improved Incantations +1\n"
   },
   "6611302": {
-    "name": "Improved Incantations +2%"
+    "name": "Improved Incantations +2\n"
   },
   "6611400": {
     "name": "Improved Flask HP Restoration"
@@ -589,6 +565,9 @@
   },
   "6623100": {
     "name": "Holy-Shrouding Cracked Tear in possession at start of expedition"
+  },
+  "6623200": {
+    "name": "Greenspill Crystal Tear in possession at start of expedition"
   },
   "6624000": {
     "name": "Uplifting Aromatic in possession at start of expedition"
@@ -708,166 +687,64 @@
     "name": "Dormant Power Helps Discover Torches"
   },
   "6640000": {
-    "name": "[Wylder] Improved Mind\t Reduced Vigor"
+    "name": "[Wylder] Improved Mind, Reduced Vigor"
   },
   "6640100": {
-    "name": "[Wylder] Improved Intelligence and Faith\t Reduced Strength and Dexterity"
+    "name": "[Wylder] Improved Intelligence and Faith, Reduced Strength and Dexterity"
   },
   "6641000": {
-    "name": "[Guardian] Improved Strength and Dexterity\t Reduced Vigor"
+    "name": "[Guardian] Improved Strength and Dexterity, Reduced Vigor"
   },
   "6641100": {
-    "name": "[Guardian] Improved Mind and Faith\t Reduced Vigor"
+    "name": "[Guardian] Improved Mind and Faith, Reduced Vigor"
   },
   "6642000": {
-    "name": "[Ironeye] Improved Arcane\t Reduced Dexterity"
+    "name": "[Ironeye] Improved Arcane, Reduced Dexterity"
   },
   "6642100": {
-    "name": "[Ironeye] Improved Vigor and Strength\t Reduced Dexterity"
+    "name": "[Ironeye] Improved Vigor and Strength, Reduced Dexterity"
   },
   "6643000": {
-    "name": "[Duchess] Improved Vigor and Strength\t Reduced Mind"
+    "name": "[Duchess] Improved Vigor and Strength, Reduced Mind"
   },
   "6643100": {
-    "name": "[Duchess] Improved Mind and Faith\t Reduced Intelligence"
+    "name": "[Duchess] Improved Mind and Faith, Reduced Intelligence"
   },
   "6644000": {
-    "name": "[Raider] Improved Mind and Intelligence\t Reduced Vigor and Endurance"
+    "name": "[Raider] Improved Mind and Intelligence, Reduced Vigor and Endurance"
   },
   "6644100": {
-    "name": "[Raider] Improved Arcane\t Reduced Vigor"
+    "name": "[Raider] Improved Arcane, Reduced Vigor"
   },
   "6645000": {
-    "name": "[Revenant] Improved Vigor and Endurance\t Reduced Mind"
+    "name": "[Revenant] Improved Vigor and Endurance, Reduced Mind"
   },
   "6645100": {
-    "name": "[Revenant] Improved Strength\t Reduced Faith"
+    "name": "[Revenant] Improved Strength, Reduced Faith"
   },
   "6646000": {
-    "name": "[Recluse] Improved Vigor\t Endurance\t and Dexterity\t Reduced Intelligence and Faith"
+    "name": "[Recluse] Improved Vigor, Endurance, and Dexterity, Reduced Intelligence and Faith"
   },
   "6646100": {
-    "name": "[Recluse] Improved Intelligence and Faith\t Reduced Mind"
+    "name": "[Recluse] Improved Intelligence and Faith, Reduced Mind"
   },
   "6647000": {
-    "name": "[Executor] Improved Vigor and Endurance\t Reduced Arcane"
+    "name": "[Executor] Improved Vigor and Endurance, Reduced Arcane"
   },
   "6647100": {
-    "name": "[Executor] Improved Dexterity and Arcane\t Reduced Vigor"
+    "name": "[Executor] Improved Dexterity and Arcane, Reduced Vigor"
   },
-  "6000800": {
-    "name": "Character Skill Cooldown Reduction +4"
+  "6647200": {
+    "name": "[Scholar] Improved Mind, Reduced Vigor"
   },
-  "6000801": {
-    "name": "Character Skill Cooldown Reduction +5"
+  "6647300": {
+    "name": "[Scholar] Improved Endurance and Dexterity, Reduced Intelligence and Arcane"
   },
-  "6000900": {
-    "name": "Ultimate Art Gauge +4"
+  "6647400": {
+    "name": "[Undertaker] Improved Dexterity, Reduced Vigor and Faith"
   },
-  "6000901": {
-    "name": "Ultimate Art Gauge +5"
-  },
-  "6001000": {
-    "name": "Poise +4"
-  },
-  "6001001": {
-    "name": "Poise +5"
-  },
-  "6006000": {
-    "name": "Improved Stance-Breaking when Two-Handing +1"
-  },
-  "6006001": {
-    "name": "Improved Stance-Breaking when Two-Handing +2"
-  },
-  "6006100": {
-    "name": "Improved Stance-Breaking when Wielding Two Armaments +1"
-  },
-  "6006101": {
-    "name": "Improved Stance-Breaking when Wielding Two Armaments +2"
-  },
-  "6012300": {
-    "name": "Improved Damage Negation at Low HP +1"
-  },
-  "6012301": {
-    "name": "Improved Damage Negation at Low HP +2"
-  },
-  "6030201": {
-    "name": "HP restored when using medicinal boluses\t etc. +2%"
-  },
-  "6030601": {
-    "name": "Art gauge charged from successful guarding +2%"
-  },
-  "6030801": {
-    "name": "Art gauge fills moderately upon critical hit +2%"
-  },
-  "6031900": {
-    "name": "Critical Hits Earn Runes +1"
-  },
-  "6031901": {
-    "name": "Critical Hits Earn Runes +2"
-  },
-  "6032200": {
-    "name": "Taking attacks improves attack power +1"
-  },
-  "6032201": {
-    "name": "Taking attacks improves attack power +2"
-  },
-  "6035101": {
-    "name": "Critical Hit Boosts Stamina Recovery Speed +2"
-  },
-  "6040000": {
-    "name": "Improved Initial Standard Attack +1"
-  },
-  "6040001": {
-    "name": "Improved Initial Standard Attack +2"
-  },
-  "6040301": {
-    "name": "Improved Throwing Pot Damage +2"
-  },
-  "6040401": {
-    "name": "Improved Throwing Knife Damage +2"
-  },
-  "6040501": {
-    "name": "Improved Glintstone and Gravity Stone Damage +2"
-  },
-  "6043000": {
-    "name": "Improved Roar \\u0026 Breath Attacks +1"
-  },
-  "6043001": {
-    "name": "Improved Roar \\u0026 Breath Attacks +2"
-  },
-  "6043101": {
-    "name": "Improved Perfuming Arts +2"
-  },
-  "6090001": {
-    "name": "Defeating enemies fills more of the Art gauge +2%"
-  },
-  "6160001": {
-    "name": "HP Restoration upon Thrusting Counterattack +2%"
-  },
-  "6600002": {
-    "name": "Sleep in Vicinity Improves Attack Power +2%"
-  },
-  "6600102": {
-    "name": "Madness in Vicinity Improves Attack Power +2%"
-  },
-  "6610701": {
-    "name": "Reduced FP Consumption +1"
-  },
-  "6610702": {
-    "name": "Reduced FP Consumption +2"
-  },
-  "6611000": {
-    "name": "Improved Physical Damage Negation"
-  },
-  "6800000": {
-    "name": "Reduced Vigor"
-  },
-  "6800200": {
-    "name": "Reduced Endurance"
-  },
-  "6810100": {
-    "name": "Impaired Damage Negation"
+  "6647500": {
+    "name": "[Undertaker] Improved Mind and Faith, Reduced Strength"
   },
   "6820000": {
     "name": "Taking Damage Causes Poison Buildup"
@@ -914,26 +791,32 @@
   "6840200": {
     "name": "Ultimate Art Charging Impaired"
   },
-  "6850000": {
-    "name": "Lowers maximum HP"
+  "6850200": {
+    "name": "All Resistances Down"
   },
-  "6850100": {
-    "name": "Lowers maximum FP"
+  "6850500": {
+    "name": "Continuous HP Loss"
   },
-  "6850300": {
-    "name": "Reduced Flask HP Restoration"
+  "6850700": {
+    "name": "Reduced Damage Negation After Evading"
   },
-  "6850400": {
-    "name": "Surge Sprinting Drains More Stamina"
+  "6850800": {
+    "name": "Repeated Evasions Lower Damage Negation"
   },
-  "6851000": {
-    "name": "Sleep Buildup for Flask Usages"
-  },
-  "6851100": {
-    "name": "Receive more damage just after evading"
+  "6850900": {
+    "name": "Reduced Damage Negation for Flask Usages"
   },
   "6851200": {
     "name": "Lower Attack When Below Max HP"
+  },
+  "6851300": {
+    "name": "Poison Buildup When Below Max HP"
+  },
+  "6851400": {
+    "name": "Rot Buildup When Below Max HP"
+  },
+  "6851700": {
+    "name": "Near Death Reduces Max HP"
   },
   "7000000": {
     "name": "Vigor +1"
@@ -1026,13 +909,13 @@
     "name": "Character Skill Cooldown Reduction +3"
   },
   "7000900": {
-    "name": "Ultimate Art Gauge +1"
+    "name": "Ultimate Art Auto Charge +1"
   },
   "7000901": {
-    "name": "Ultimate Art Gauge +2"
+    "name": "Ultimate Art Auto Charge +2"
   },
   "7000902": {
-    "name": "Ultimate Art Gauge +3"
+    "name": "Ultimate Art Auto Charge +3"
   },
   "7001000": {
     "name": "Poise +1"
@@ -1043,20 +926,14 @@
   "7001002": {
     "name": "Poise +3"
   },
-  "7001100": {
-    "name": "Continuous HP Recovery"
-  },
   "7001400": {
-    "name": "Physical Attack Up"
+    "name": "Physical Attack Up\n"
   },
   "7001401": {
     "name": "Physical Attack Up +1"
   },
   "7001402": {
     "name": "Physical Attack Up +2"
-  },
-  "7001403": {
-    "name": "Physical Attack Up +3"
   },
   "7001500": {
     "name": "Magic Attack Power Up"
@@ -1094,63 +971,6 @@
   "7001802": {
     "name": "Holy Attack Power Up +2"
   },
-  "7001900": {
-    "name": "Attacks Inflict Poison"
-  },
-  "7001901": {
-    "name": "Attacks Inflict Poison +1"
-  },
-  "7001902": {
-    "name": "Attacks Inflict Poison +2"
-  },
-  "7002000": {
-    "name": "Attacks Inflict Blood Loss"
-  },
-  "7002001": {
-    "name": "Attacks Inflict Blood Loss +1"
-  },
-  "7002002": {
-    "name": "Attacks Inflict Blood Loss +2"
-  },
-  "7002100": {
-    "name": "Attacks Inflict Sleep"
-  },
-  "7002101": {
-    "name": "Attacks Inflict Sleep +1"
-  },
-  "7002102": {
-    "name": "Attacks Inflict Sleep +2"
-  },
-  "7002103": {
-    "name": "Attacks Inflict Sleep +3"
-  },
-  "7002200": {
-    "name": "Attacks Inflict Death Blight"
-  },
-  "7002300": {
-    "name": "Attacks Inflict Scarlet Rot"
-  },
-  "7002301": {
-    "name": "Attacks Inflict Scarlet Rot +1"
-  },
-  "7002302": {
-    "name": "Attacks Inflict Scarlet Rot +2"
-  },
-  "7002400": {
-    "name": "Attacks Inflict Frost"
-  },
-  "7002401": {
-    "name": "Attacks Inflict Frost +1"
-  },
-  "7002402": {
-    "name": "Attacks Inflict Frost +2"
-  },
-  "7002403": {
-    "name": "Attacks Inflict Frost +3"
-  },
-  "7002500": {
-    "name": "Attacks Inflict Madness"
-  },
   "7002600": {
     "name": "Magic Damage Negation Up"
   },
@@ -1187,125 +1007,77 @@
   "7005600": {
     "name": "Partial HP Restoration upon Post-Damage Attacks"
   },
-  "7006000": {
-    "name": "Improved Stance-Breaking when Two-Handing"
+  "7006500": {
+    "name": "Continuous FP Recovery"
   },
-  "7006001": {
-    "name": "Improved Stance-Breaking when Two-Handing"
+  "7006600": {
+    "name": "Improved Melee Attack Power"
   },
-  "7006100": {
-    "name": "Improved Stance-Breaking when Wielding Two Armaments"
-  },
-  "7006101": {
-    "name": "Improved Stance-Breaking when Wielding Two Armaments"
-  },
-  "7006200": {
-    "name": "Improved Physical Damage Negation"
-  },
-  "7010000": {
-    "name": "[Guardian] Improved Character Skill range"
+  "7006700": {
+    "name": "Improved Skill Attack Power"
   },
   "7010200": {
     "name": "Flask Also Heals Allies"
   },
   "7010500": {
-    "name": "Wylder Art activation spreads fire in area"
+    "name": "[Wylder] Art activation spreads fire in area"
   },
   "7010700": {
-    "name": "Duchess Dagger chain attack reprises event upon nearby enemies"
-  },
-  "7010800": {
-    "name": "[Raider] Character Skill damage up, damage negation impaired during use"
+    "name": "[Duchess] Reprise events upon nearby enemies by landing the final blow of a chain attack with dagger"
   },
   "7010900": {
-    "name": "Revenant Expend own HP to fully heal nearby allies when activating Art"
+    "name": "[Revenant] Expend own HP to fully heal nearby allies\nwhen activating Art"
   },
   "7011000": {
-    "name": "Guardian Increased duration for Character Skill"
-  },
-  "7011100": {
-    "name": "[Guardian] Damage negation for allies improved when using Ultimate Art"
+    "name": "[Guardian] Increased duration for Character Skill"
   },
   "7011200": {
-    "name": "Revenant Trigger ghostflame explosion during Ultimate Art activation"
-  },
-  "7011400": {
-    "name": "[Guardian] Restores allies' HP when Character Skill is used"
-  },
-  "7011500": {
-    "name": "[Wylder] Character Skill inflicts Blood Loss"
+    "name": "[Revenant] Trigger ghostflame explosion during\nUltimate Art activation"
   },
   "7011600": {
-    "name": "Guardian Creates whirlwind when charging halberd attacks"
+    "name": "[Guardian] Creates whirlwind when charging halberd\nattacks"
   },
   "7011700": {
-    "name": "Executor Roaring restores HP while Art is active"
-  },
-  "7011900": {
-    "name": "[Guardian] Character Skill inflicts Holy damage"
+    "name": "[Executor] Roaring restores HP while Art is active"
   },
   "7012000": {
-    "name": "Guardian Slowly restores nearby allies' HP while Art is active"
+    "name": "[Guardian] Slowly restores nearby allies' HP\nwhile Art is active"
   },
   "7012200": {
-    "name": "Slowly restore HP for self and nearby allies when HP is low"
+    "name": "Slowly restore HP for self and nearby allies when HP\nis low"
   },
   "7012300": {
     "name": "Improved Damage Negation at Low HP"
   },
-  "7012400": {
-    "name": "Strong Attack Creates Wide Wave of Heat"
-  },
-  "7012500": {
-    "name": "Jumping Conjures Magic Projectiles"
-  },
-  "7012600": {
-    "name": "Attack Boost from Nearby Allies"
-  },
-  "7012700": {
-    "name": "Guard Counters Cast Light Pillar"
-  },
   "7020000": {
-    "name": "Wylder Follow-up attacks possible when using Character Skill (greatsword only)"
+    "name": "[Wylder] Standard attacks enhanced with fiery\nfollow-ups when using Character Skill (greatsword only)"
   },
   "7030000": {
     "name": "Improved Poise Near Totem Stela"
   },
   "7030200": {
-    "name": "HP restored when using cured meats, medicinal boluses, etc."
-  },
-  "7030500": {
-    "name": "[Wylder] Impaired damage negation, improved attack power & stamina after Art activation"
+    "name": "HP restored when using medicinal boluses, etc."
   },
   "7030600": {
-    "name": "Art gauge charged from successful guarding"
+    "name": "Successful guarding fills more of the Art gauge"
   },
   "7030700": {
     "name": "Draw enemy attention while guarding"
   },
   "7030800": {
-    "name": "Art gauge fills moderately upon critical hit"
+    "name": "Critical hits fill more of the Art gauge"
   },
   "7030900": {
-    "name": "Attack power increases after using grease items"
+    "name": "Physical attack power increases after using grease items"
   },
   "7031200": {
-    "name": "Revenant Strengthens family and allies when Ultimate Art is activated"
+    "name": "[Revenant] Strengthens family and allies when Ultimate Art is activated"
   },
   "7031300": {
-    "name": "Raider Damage taken while using Character Skill improves attack power and stamina"
-  },
-  "7031400": {
-    "name": "[Wylder] Reduced cooldown time for Character Skill"
-  },
-  "7031600": {
-    "name": "Performing consecutive successful guards improves guard ability and deflects big attacks"
-  },
-  "7031700": {
-    "name": "Shockwave Produced From Successful Guarding"
+    "name": "[Raider] Damage taken while using Character Skill\nimproves attack power and stamina"
   },
   "7031800": {
-    "name": "Duchess Become difficult to spot and silence footsteps after landing critical from behind"
+    "name": "[Duchess] Become difficult to spot and silence\nfootsteps after landing critical from behind"
   },
   "7031900": {
     "name": "Critical Hits Earn Runes"
@@ -1313,104 +1085,47 @@
   "7032200": {
     "name": "Taking attacks improves attack power"
   },
-  "7032300": {
-    "name": "[Wylder] Improved attack power when Character Skill is activated"
-  },
   "7032400": {
-    "name": "Wylder Art gauge greatly filled when ability is activated"
+    "name": "[Wylder] Art gauge greatly filled when ability is\nactivated"
   },
   "7032700": {
-    "name": "Duchess Defeating enemies while Art is active ups attack power"
+    "name": "[Duchess] Defeating enemies while Art is active ups\nattack power"
   },
   "7032800": {
-    "name": "Recluse Collecting affinity residue activates Terra Magica"
+    "name": "[Recluse] Collecting affinity residue activates\nTerra Magica"
   },
   "7032900": {
-    "name": "Recluse Suffer blood loss and increase attack power upon Art activation"
-  },
-  "7033000": {
-    "name": "[Wylder] Improved attack power when ability is activated"
+    "name": "[Recluse] Suffer blood loss and increase attack\npower upon Art activation"
   },
   "7033200": {
-    "name": "Wylder +1 additional Character Skill use"
-  },
-  "7033300": {
-    "name": "Guardian Become the target of enemy aggression when ability is activated"
+    "name": "[Wylder] +1 additional Character Skill use"
   },
   "7033400": {
-    "name": "Guardian Reflect a portion of damage received when ability is activated"
-  },
-  "7033600": {
-    "name": "[Duchess] Duration of Ultimate Art extended"
-  },
-  "7033700": {
-    "name": "Colossal armaments are coated in rock when performing charged attacks"
-  },
-  "7033800": {
-    "name": "[Raider] Permanently increase attack power when performing Character Skill's final attack"
-  },
-  "7033900": {
-    "name": "[Recluse] Extends duration of blood sigils"
-  },
-  "7034000": {
-    "name": "[Recluse] Collecting 4 Affinity Residues Improves Affinity Attack Power"
-  },
-  "7040201": {
-    "name": "Improved Critical Hits +1 (Night of the Baron)"
+    "name": "[Guardian] Successful guards send out shockwaves while\nability is active"
   },
   "7034100": {
-    "name": "Recluse Activating Ultimate Art raises Max HP"
-  },
-  "7034200": {
-    "name": "[Executor] Attack power up while Ultimate Art is active"
-  },
-  "7034300": {
-    "name": "[Executor] Improves effect of ability but lowers resistance to status ailments"
+    "name": "[Recluse] Activating Ultimate Art raises Max HP"
   },
   "7034400": {
-    "name": "Executor Character Skill Boosts Attack but Attacking Drains HP"
+    "name": "[Executor] Character Skill Boosts Attack but Lowers Damage Negation While Attacking"
   },
   "7034500": {
-    "name": "Executor While Character Skill is active, unlocking use of cursed sword restores HP"
+    "name": "[Executor] While Character Skill is active,\nunlocking use of cursed sword restores HP"
   },
   "7034600": {
-    "name": "Ironeye Art Charge Activation Adds Poison Effect"
+    "name": "[Ironeye] Art Charge Activation Adds Poison Effect"
   },
   "7034700": {
-    "name": "Ironeye Boosts thrusting counterattacks after executing Art"
-  },
-  "7034800": {
-    "name": "Fire Critical Hit Grants Max Stamina Boost"
-  },
-  "7034900": {
-    "name": "Critical Hit HP Restoration"
-  },
-  "7035000": {
-    "name": "Critical Hit Adds Lightning Effect"
+    "name": "[Ironeye] Boosts thrusting counterattacks after executing Art"
   },
   "7035100": {
     "name": "Critical Hit Boosts Stamina Recovery Speed"
   },
-  "7035200": {
-    "name": "Consecutive Guards Harden Skin"
-  },
-  "7035300": {
-    "name": "Critical Hit Creates Sleep Mist"
-  },
   "7035400": {
     "name": "Gesture \"Crossed Legs\" Builds Up Madness"
   },
-  "7035410": {
-    "name": "Gesture \"Crossed Legs\" Builds Up Madness (Dark Night Of The Beast)"
-  },
   "7035500": {
     "name": "Madness Continually Recovers FP"
-  },
-  "7035510": {
-    "name": "Madness Continually Recovers FP (Dark Night of the Demon)"
-  },
-  "7035600": {
-    "name": "Surge Sprint Landings Split Earth"
   },
   "7035700": {
     "name": "Switching Weapons Adds an Affinity Attack"
@@ -1421,11 +1136,35 @@
   "7035900": {
     "name": "Switching Weapons Boosts Attack Power"
   },
-  "7036000": {
-    "name": "FP Restoration upon Successive Attacks"
+  "7036200": {
+    "name": "[Scholar] Prevent slowing of Character Skill progress"
   },
-  "7036100": {
-    "name": "HP Recovery From Successful Guarding"
+  "7036300": {
+    "name": "[Scholar] Allies targeted by Character Skill gain boosted attack"
+  },
+  "7036400": {
+    "name": "[Scholar] Continuous damage inflicted on targets threaded by Ultimate Art"
+  },
+  "7036500": {
+    "name": "[Scholar] Earn runes for each additional specimen acquired with Character Skill"
+  },
+  "7036800": {
+    "name": "[Undertaker] Activating Ultimate Art increases attack power"
+  },
+  "7036900": {
+    "name": "[Undertaker] Attack power increased by landing the final blow of a chain attack"
+  },
+  "7037000": {
+    "name": "[Undertaker] Physical attacks boosted while assist effect from incantation is active for self"
+  },
+  "7037300": {
+    "name": "[Undertaker] Contact with allies restores their HP while Ultimate Art is activated"
+  },
+  "7037700": {
+    "name": "Status Ailment Gauges Slowly Increase Attack Power"
+  },
+  "7037800": {
+    "name": "Occasionally Nullify Attacks When Damage Negation is Lowered"
   },
   "7040000": {
     "name": "Improved Initial Standard Attack"
@@ -1436,9 +1175,6 @@
   "7040200": {
     "name": "Improved Critical Hits"
   },
-  "7040290": {
-    "name": "Improved Critical Hits +1"
-  },
   "7040300": {
     "name": "Improved Throwing Pot Damage"
   },
@@ -1446,13 +1182,7 @@
     "name": "Improved Throwing Knife Damage"
   },
   "7040500": {
-    "name": "Improved Throwing Stone Damage"
-  },
-  "7043000": {
-    "name": "Improved Roar & Breath Attacks"
-  },
-  "7043100": {
-    "name": "Improved Perfuming Attacks"
+    "name": "Improved Glintstone and Gravity Stone Damage"
   },
   "7043200": {
     "name": "Improved Stonedigger Sorcery"
@@ -1474,9 +1204,6 @@
   },
   "7043800": {
     "name": "Improved Thorn Sorcery"
-  },
-  "7043900": {
-    "name": "Improved Night Sorcery"
   },
   "7044000": {
     "name": "Improved Fundamentalist Incantations"
@@ -1500,19 +1227,19 @@
     "name": "Improved Dragon Communion Incantations"
   },
   "7050000": {
-    "name": "Raised stamina recovery for nearby allies, but not for self"
+    "name": "Raised stamina recovery for nearby allies, but not\nfor self"
   },
   "7050100": {
     "name": "Items confer effect to all nearby allies"
   },
   "7060000": {
-    "name": "Attack power permanently increased for each evergaol prisoner defeated"
+    "name": "Attack power increased for each evergaol prisoner defeated"
   },
   "7060100": {
-    "name": "Max FP permanently increased after releasing Sorcerer's Rise mechanism"
+    "name": "Max FP increased for each Sorcerer's Rise unlocked"
   },
   "7060200": {
-    "name": "Attack power up after defeating a Night Invader"
+    "name": "Attack power increased for each Night Invader defeated"
   },
   "7070000": {
     "name": "Treasure marked upon map"
@@ -1608,22 +1335,13 @@
     "name": "Defeating enemies fills more of the Art gauge"
   },
   "7090100": {
-    "name": "Defeating enemies restores HP for allies but not for self"
+    "name": "Defeating enemies restores HP for allies but not for\nself"
   },
   "7090300": {
     "name": "Defeating enemies near Totem Stela restores HP"
   },
-  "7100000": {
-    "name": "Critical hits deal huge damage on poisoned enemies"
-  },
   "7100100": {
-    "name": "Stamina recovers with each successful attack"
-  },
-  "7100110": {
-    "name": "Stamina recovers with each successful attack +1 (Night of the Beast)"
-  },
-  "7100190": {
-    "name": "Stamina recovers with each successful attack +1"
+    "name": "Stamina Recovery upon Landing Attacks"
   },
   "7110000": {
     "name": "Increased rune acquisition for self and allies"
@@ -1633,9 +1351,6 @@
   },
   "7120100": {
     "name": "Starting armament deals fire damage"
-  },
-  "7120101": {
-    "name": "Armament deals fire damage +1 at start of expedition"
   },
   "7120200": {
     "name": "Starting armament deals lightning damage"
@@ -1651,9 +1366,6 @@
   },
   "7120600": {
     "name": "Starting armament inflicts blood loss"
-  },
-  "7120700": {
-    "name": "Starting armament inflicts scarlet rot"
   },
   "7120900": {
     "name": "Stonesword Key in possession at start of expedition"
@@ -1674,25 +1386,25 @@
     "name": "Holy Water Pots in possession at start of expedition"
   },
   "7121500": {
-    "name": "Poisonbone Darts in possession at start of expedition"
+    "name": "Poisonbone Darts in possession at start of\nexpedition"
   },
   "7121600": {
     "name": "Crystal Darts in possession at start of expedition"
   },
   "7121700": {
-    "name": "Throwing Daggers in possession at start of expedition"
+    "name": "Throwing Daggers in possession at start of\nexpedition"
   },
   "7121800": {
-    "name": "Glintstone Scraps in possession at start of expedition"
+    "name": "Glintstone Scraps in possession at start of\nexpedition"
   },
   "7121900": {
-    "name": "Gravity Stone Chunks in possession at start of expedition"
+    "name": "Gravity Stone Chunks in possession at start of\nexpedition"
   },
   "7122000": {
-    "name": "Bewitching Branches in possession at start of expedition"
+    "name": "Bewitching Branches in possession at start of\nexpedition"
   },
   "7122100": {
-    "name": "Wraith Calling Bell in possession at start of expedition"
+    "name": "Wraith Calling Bell in possession at start of\nexpedition"
   },
   "7122200": {
     "name": "Fire Grease in possession at start of expedition"
@@ -1701,7 +1413,7 @@
     "name": "Magic Grease in possession at start of expedition"
   },
   "7122400": {
-    "name": "Lightning Grease in possession at start of expedition"
+    "name": "Lightning Grease in possession at start of\nexpedition"
   },
   "7122500": {
     "name": "Holy Grease in possession at start of expedition"
@@ -1710,72 +1422,66 @@
     "name": "Shield Grease in possession at start of expedition"
   },
   "7122700": {
-    "name": "Changes compatible armament's skill to Glintblade Phalanx at start of expedition"
+    "name": "Changes compatible armament's skill to Glintblade\nPhalanx at start of expedition"
   },
   "7122800": {
-    "name": "Changes compatible armament's skill to Gravitas at start of expedition"
+    "name": "Changes compatible armament's skill to Gravitas at\nstart of expedition"
   },
   "7122900": {
-    "name": "Changes compatible armament's skill to Flaming Strike at start of expedition"
+    "name": "Changes compatible armament's skill to Flaming\nStrike at start of expedition"
   },
   "7123000": {
-    "name": "Changes compatible armament's skill to Eruption at start of expedition"
+    "name": "Changes compatible armament's skill to\nEruption at start of expedition"
   },
   "7123100": {
-    "name": "Changes compatible armament's skill to Thunderbolt at start of expedition"
+    "name": "Changes compatible armament's skill to Thunderbolt\nat start of expedition"
   },
   "7123200": {
-    "name": "Changes compatible armament's skill to Lightning Slash at start of expedition"
+    "name": "Changes compatible armament's skill to Lightning\nSlash at start of expedition"
   },
   "7123300": {
-    "name": "Changes compatible armament's skill to Sacred Blade at start of expedition"
+    "name": "Changes compatible armament's skill to Sacred Blade\nat start of expedition"
   },
   "7123400": {
-    "name": "Changes compatible armament's skill to Prayerful Strike at start of expedition"
+    "name": "Changes compatible armament's skill to Prayerful\nStrike at start of expedition"
   },
   "7123500": {
-    "name": "Changes compatible armament's skill to Poisonous Mist at start of expedition"
+    "name": "Changes compatible armament's skill to Poisonous\nMist at start of expedition"
   },
   "7123600": {
-    "name": "Changes compatible armament's skill to Poison Moth Flight at start of expedition"
+    "name": "Changes compatible armament's skill to Poison Moth\nFlight at start of expedition"
   },
   "7123700": {
-    "name": "Changes compatible armament's skill to Blood Blade at start of expedition"
+    "name": "Changes compatible armament's skill to Blood Blade\nat start of expedition"
   },
   "7123800": {
-    "name": "Changes compatible armament's skill to Seppuku at start of expedition"
+    "name": "Changes compatible armament's skill to Seppuku at\nstart of expedition"
   },
   "7123900": {
-    "name": "Changes compatible armament's skill to Chilling Mist at start of expedition"
+    "name": "Changes compatible armament's skill to Chilling Mist\nat start of expedition"
   },
   "7124000": {
-    "name": "Changes compatible armament's skill to Hoarfrost Stomp at start of expedition"
+    "name": "Changes compatible armament's skill to Hoarfrost\nStomp at start of expedition"
   },
   "7124100": {
-    "name": "Changes compatible armament's skill to White Shadow's Lure at start of expedition"
+    "name": "Changes compatible armament's skill to White\nShadow's Lure at start of expedition"
   },
   "7124300": {
-    "name": "Changes compatible armament's skill to Endure at start of expedition"
+    "name": "Changes compatible armament's skill to Endure at\nstart of expedition"
   },
   "7124400": {
-    "name": "Changes compatible armament's skill to Quickstep at start of expedition"
+    "name": "Changes compatible armament's skill to Quickstep at\nstart of expedition"
   },
   "7124500": {
-    "name": "Changes compatible armament's skill to Storm Stomp at start of expedition"
+    "name": "Changes compatible armament's skill to Storm Stomp\nat start of expedition"
   },
   "7124600": {
-    "name": "Changes compatible armament's skill to Determination at start of expedition"
+    "name": "Changes compatible armament's skill to Determination\nat start of expedition"
   },
   "7124700": {
-    "name": "Changes compatible armament's skill to Rain of Arrows at start of expedition"
+    "name": "Changes compatible armament's skill to Rain of\nArrows at start of expedition"
   },
   "7126000": {
-    "name": "Starlight Shards in possession at start of expedition"
-  },
-  "7126001": {
-    "name": "Starlight Shards in possession at start of expedition"
-  },
-  "7126002": {
     "name": "Starlight Shards in possession at start of expedition"
   },
   "7150000": {
@@ -1784,65 +1490,47 @@
   "7160000": {
     "name": "HP Restoration upon Thrusting Counterattack"
   },
-  "7200000": {
-    "name": "HP Restoration with Head Shots"
-  },
-  "7200100": {
-    "name": "Improved Stance-Breaking with Head Shots"
+  "7170100": {
+    "name": "Attacks Inflict Rot when Damage is Taken"
   },
   "7220000": {
-    "name": "Revenant Power up while fighting alongside family"
+    "name": "[Revenant] Power up while fighting alongside family"
   },
   "7230000": {
     "name": "Rune discount for shop purchases while on expedition"
   },
   "7230001": {
-    "name": "Huge rune discount for shop purchases while on expedition"
+    "name": "Huge rune discount for shop purchases while on\nexpedition"
   },
   "7240000": {
-    "name": "Improved Poise & Damage Negation When Knocked Back by Damage"
+    "name": "Improved Poise & Damage Negation When Knocked Back\nby Damage"
   },
   "7260000": {
     "name": "Attack power up when facing poison-afflicted enemy"
   },
-  "7260200": {
-    "name": "Attack power up when facing sleep-afflicted enemy"
-  },
   "7260300": {
-    "name": "Attack power up when facing scarlet rot-afflicted enemy"
+    "name": "Attack power up when facing scarlet rot-afflicted\nenemy"
   },
   "7260400": {
-    "name": "Attack power up when facing frostbite-afflicted enemy"
-  },
-  "7260600": {
-    "name": "Attacks Create Magic Bursts Versus Sleeping Enemies"
+    "name": "Attack power up when facing frostbite-afflicted\nenemy"
   },
   "7260700": {
-    "name": "Nearby Frostbite Conceals Self"
+    "name": "Frostbite in Vicinity Conceals Self"
   },
-  "7260710": {
-    "name": "Poison & Rot in Vicinity Increases Attack Power"
-  },
-  "7260800": {
-    "name": "Poison & Rot in Vicinity Increases Attack Power (Night of the Wise)"
+  "7260900": {
+    "name": "Rot in Vicinity Causes Continuous HP Recovery"
   },
   "7270100": {
-    "name": "Ironeye +1 additional Character Skill use"
+    "name": "[Ironeye] +1 additional Character Skill use"
   },
   "7280000": {
-    "name": "Ironeye Extends duration of weak point"
+    "name": "[Ironeye] Extends duration of weak point"
   },
   "7290000": {
-    "name": "Duchess Improved Character Skill Attack Power"
-  },
-  "7300000": {
-    "name": "[Duchess] Character Skill inflicts sleep upon enemies"
+    "name": "[Duchess] Improved Character Skill Attack Power"
   },
   "7310000": {
-    "name": "Raider Duration of Ultimate Art extended"
-  },
-  "7320000": {
-    "name": "[Revenant] Ability activation chance increased"
+    "name": "[Raider] Duration of Ultimate Art extended"
   },
   "7330000": {
     "name": "Improved Dagger Attack Power"
@@ -1891,9 +1579,6 @@
   },
   "7331500": {
     "name": "Improved Spear Attack Power"
-  },
-  "7331600": {
-    "name": "Improved Pike Attack Power"
   },
   "7331700": {
     "name": "Improved Great Spear Attack Power"
@@ -1967,9 +1652,6 @@
   "7341500": {
     "name": "HP Restoration upon Spear Attacks"
   },
-  "7341600": {
-    "name": "HP Restoration upon Pike Attacks"
-  },
   "7341700": {
     "name": "HP Restoration upon Great Spear Attacks"
   },
@@ -2042,9 +1724,6 @@
   "7351500": {
     "name": "FP Restoration upon Spear Attacks"
   },
-  "7351600": {
-    "name": "FP Restoration upon Pike Attacks"
-  },
   "7351700": {
     "name": "FP Restoration upon Great Spear Attacks"
   },
@@ -2069,38 +1748,65 @@
   "7352400": {
     "name": "FP Restoration upon Bow Attacks"
   },
+  "7360600": {
+    "name": "Changes compatible armament's sorcery to Magic\nGlintblade at start of expedition"
+  },
+  "7360900": {
+    "name": "Changes compatible armament's sorcery to Carian\nGreatsword at start of expedition"
+  },
+  "7361200": {
+    "name": "Changes compatible armament's sorcery to Night\nShard at start of expedition"
+  },
+  "7361300": {
+    "name": "Changes compatible armament's sorcery to Magma\nShot at start of expedition"
+  },
+  "7362100": {
+    "name": "Changes compatible armament's sorcery to Briars of\nPunishment at start of expedition"
+  },
+  "7370300": {
+    "name": "Changes compatible armament's incantation to\nWrath of Gold at start of expedition"
+  },
+  "7370400": {
+    "name": "Changes compatible armament's incantation to\nLightning Spear at start of expedition"
+  },
+  "7370600": {
+    "name": "Changes compatible armament's incantation to\nO, Flame! at start of expedition"
+  },
+  "7370900": {
+    "name": "Changes compatible armament's incantation to\nBeast Claw at start of expedition"
+  },
+  "7371500": {
+    "name": "Changes compatible armament's incantation to\nDragonfire at start of expedition"
+  },
   "8000000": {
-    "name": "Increased Maximum HP x1.10"
+    "name": "Increased Maximum HP"
   },
   "8010000": {
-    "name": "Increased Maximum FP x1.10"
+    "name": "Increased Maximum FP"
   },
   "8010100": {
-    "name": "Reduced FP Consumption x0.90"
+    "name": "Reduced FP Consumption"
   },
   "8020000": {
-    "name": "Increased Maximum Stamina x1.10"
-  },
-  "8020100": {
-    "name": "Reduced Stamina Consumption"
+    "name": "Increased Maximum Stamina"
   },
   "8020200": {
-    "name": "Improved Stamina Recovery 4/s"
+    "name": "Improved Stamina Recovery"
   },
   "8100000": {
-    "name": "Improved Physical Attack Power x1.06"
+    "name": "Improved Physical Attack Power"
   },
   "8100100": {
-    "name": "Improved Magic Attack Power x1.05"
+    "name": "Improved Magic Attack Power"
   },
   "8100200": {
-    "name": "Improved Fire Attack Power x1.05"
+    "name": "Improved Fire Attack Power"
   },
   "8100300": {
-    "name": "Improved Lightning Attack Power x1.05"
+    "name": "Improved Lightning Attack Power"
   },
   "8100400": {
-    "name": "Improved Holy Attack Power x1.05"
+    "name": "Improved Holy Attack Power"
   },
   "8110000": {
     "name": "Attacks Inflict Poison"
@@ -2111,17 +1817,11 @@
   "8110200": {
     "name": "Attacks Inflict Sleep"
   },
-  "8110300": {
-    "name": "Attacks Inflict Death Blight"
-  },
   "8110400": {
     "name": "Attacks Inflict Rot"
   },
   "8110500": {
     "name": "Attacks Inflict Frost"
-  },
-  "8110600": {
-    "name": "Attacks Inflict Madness"
   },
   "8110700": {
     "name": "Add Fire to Weapon"
@@ -2136,115 +1836,106 @@
     "name": "Add Holy to Weapon"
   },
   "8120000": {
-    "name": "Improved Stance-Breaking x1.10"
+    "name": "Improved Stance-Breaking"
   },
   "8130000": {
     "name": "Improved Critical Hits"
   },
   "8140000": {
-    "name": "Improved Guard Breaking +1"
-  },
-  "8150000": {
-    "name": "Attack Boost [Lifeforms Born of Falling Stars]"
-  },
-  "8150100": {
-    "name": "Attack Boost [Those Who Live in Death]"
-  },
-  "8150300": {
-    "name": "Attack Boost [Dragons]"
+    "name": "Improved Guard Breaking"
   },
   "8200000": {
-    "name": "Improved Physical Damage Negation 12%"
+    "name": "Improved Physical Damage Negation"
   },
   "8200100": {
-    "name": "Improved Magic Damage Negation +1"
+    "name": "Improved Magic Damage Negation"
   },
   "8200200": {
-    "name": "Improved Fire Damage Negation +1"
+    "name": "Improved Fire Damage Negation"
   },
   "8200300": {
-    "name": "Improved Lightning Damage Negation +1"
+    "name": "Improved Lightning Damage Negation"
   },
   "8200400": {
-    "name": "Improved Holy Damage Negation +1"
+    "name": "Improved Holy Damage Negation"
   },
   "8200500": {
-    "name": "Improved Non-Physical Damage Negation 12%"
+    "name": "Improved Affinity Damage Negation"
   },
   "8210000": {
-    "name": "Improved Poison Resistance +1"
+    "name": "Improved Poison Resistance"
   },
   "8210100": {
-    "name": "Improved Blood Loss Resistance +1"
+    "name": "Improved Blood Loss Resistance"
   },
   "8210200": {
-    "name": "Improved Sleep Resistance +1"
+    "name": "Improved Sleep Resistance"
   },
   "8210300": {
-    "name": "Improved Death Blight Resistance +1"
+    "name": "Improved Death Blight Resistance"
   },
   "8210400": {
-    "name": "Improved Rot Resistance +1"
+    "name": "Improved Rot Resistance"
   },
   "8210500": {
-    "name": "Improved Frost Resistance +1"
+    "name": "Improved Frost Resistance"
   },
   "8210600": {
-    "name": "Improved Madness Resistance +1"
+    "name": "Improved Madness Resistance"
   },
   "8220000": {
-    "name": "Improved Guarding Ability +1"
+    "name": "Improved Guarding Ability"
   },
   "8220001": {
-    "name": "Improved Guarding Ability +2"
+    "name": "Improved Guarding Ability +1"
   },
   "8220002": {
-    "name": "Improved Guarding Ability +3"
+    "name": "Improved Guarding Ability +2"
   },
   "8230000": {
-    "name": "Improved Poise x0.75"
+    "name": "Improved Poise"
   },
   "8300000": {
-    "name": "Improved Attack Power when Two-Handing x1.07"
-  },
-  "8300100": {
-    "name": "Improved Stance-Breaking when Two-Handing +1"
+    "name": "Improved Attack Power when Two-Handing"
   },
   "8310000": {
-    "name": "Attack Up when Wielding Two Armaments x1.07"
-  },
-  "8310100": {
-    "name": "Improved Stance-Breaking when Wielding Two Armaments +1"
+    "name": "Attack Up when Wielding Two Armaments"
   },
   "8320000": {
-    "name": "Improved Chain Attack Finishers x1.10"
+    "name": "Improved Chain Attack Finishers"
   },
   "8320100": {
-    "name": "Improved Charge Attacks x1.06"
-  },
-  "8320200": {
-    "name": "Strong Attacks Improve Poise"
+    "name": "Improved Charge Attacks"
   },
   "8320300": {
-    "name": "Improved Jump Attacks +1"
+    "name": "Improved Jump Attacks"
   },
   "8320400": {
-    "name": "Dmg Negation Up while Charging Attacks +1"
+    "name": "Dmg Negation Up upon Landing Charge Attacks"
+  },
+  "8320500": {
+    "name": "Improved Melee Attack Power"
+  },
+  "8320600": {
+    "name": "Improved Dash Attacks"
+  },
+  "8320700": {
+    "name": "Improved Rolling Attacks"
   },
   "8330000": {
-    "name": "Improved Sorceries x1.07"
+    "name": "Improved Sorceries"
   },
   "8330100": {
-    "name": "Improved Incantations x1.07"
+    "name": "Improved Incantations"
   },
   "8330200": {
-    "name": "Improved Charged Sorceries +1"
+    "name": "Improved Charged Sorceries"
   },
   "8330300": {
-    "name": "Improved Charged Incantation +1"
+    "name": "Improved Charged Incantation"
   },
   "8330400": {
-    "name": "Improved Spell Casting Speed +1"
+    "name": "Improved Spell Casting Speed"
   },
   "8330500": {
     "name": "Extended Spell Duration"
@@ -2256,43 +1947,28 @@
     "name": "Communion Grants Anti-Dragon Effect"
   },
   "8330900": {
-    "name": "Dmg Negation Up While Casting Spells +1"
+    "name": "Dmg Negation Up While Casting Spells"
   },
   "8340000": {
-    "name": "Improved Ranged Weapon Attacks +1"
+    "name": "Improved Ranged Weapon Attacks"
   },
   "8340100": {
-    "name": "Projectile Damage Drop-Off Reduced +1"
+    "name": "Projectile Damage Drop-Off Reduced"
   },
   "8350000": {
-    "name": "Improved Skill Attack Power x1.05"
-  },
-  "8350100": {
-    "name": "Improved Charged Skill Attack Power"
+    "name": "Improved Skill Attack Power"
   },
   "8350200": {
-    "name": "Reduced Skill FP Cost +1"
-  },
-  "8350300": {
-    "name": "Skill Activation Improves Poise"
+    "name": "Reduced Skill FP Cost"
   },
   "8350400": {
     "name": "Parries Activate Golden Retaliation"
   },
   "8360000": {
-    "name": "Ultimate Art Gauge Charge Speed Up x1.06"
+    "name": "Ultimate Art Auto Charge +"
   },
   "8370000": {
-    "name": "Character Skill Cooldown Reduction x0.9"
-  },
-  "8380000": {
-    "name": "Improved Roar & Breath Attacks x1.2"
-  },
-  "8390000": {
-    "name": "Improved Throwing Pots x1.2"
-  },
-  "8400000": {
-    "name": "Improved Perfuming Arts x1.2"
+    "name": "Character Skill Cooldown Reduction"
   },
   "8410000": {
     "name": "Improved Dodging"
@@ -2301,7 +1977,7 @@
     "name": "Lightning upon Dodging"
   },
   "8420000": {
-    "name": "Improved Guard Counters x1.10"
+    "name": "Improved Guard Counters"
   },
   "8420100": {
     "name": "Guard Counters Activate Holy Attacks"
@@ -2310,13 +1986,10 @@
     "name": "Guard Counters Launch Summoning Attack"
   },
   "8430000": {
-    "name": "Improved Thrusting Counterattack x1.2"
+    "name": "Improved Thrusting Counterattack"
   },
   "8440000": {
-    "name": "Improved Flask HP Restoration x1.2"
-  },
-  "8440100": {
-    "name": "Flask Also Heals Allies"
+    "name": "Improved Flask HP Restoration"
   },
   "8440200": {
     "name": "Gradual Restoration by Flask"
@@ -2327,11 +2000,8 @@
   "8450100": {
     "name": "Ice Storm Surge Sprint"
   },
-  "8460000": {
-    "name": "Darkness Conceals Caster While Walking"
-  },
   "8460100": {
-    "name": "Savage Flames Roar While Walking"
+    "name": "Savage Pillars of Flame Rise While Walking"
   },
   "8460200": {
     "name": "Flame of Frenzy While Walking"
@@ -2346,10 +2016,10 @@
     "name": "Storm of Red Lightning While Walking"
   },
   "8500000": {
-    "name": "More Runes From Defeated Enemies x1.1"
+    "name": "More Runes From Defeated Enemies"
   },
   "8510000": {
-    "name": "Improved Item Discovery 20"
+    "name": "Improved Item Discovery"
   },
   "8520000": {
     "name": "Less Likely to Be Targeted"
@@ -2367,13 +2037,13 @@
     "name": "Continuous HP Recovery"
   },
   "8600100": {
-    "name": "HP Restoration upon Attacks +3"
+    "name": "HP Restoration upon Landing Attacks"
   },
   "8600200": {
-    "name": "FP Restoration upon Attacks +1"
+    "name": "FP Restoration upon Landing Attacks"
   },
   "8600300": {
-    "name": "Sudden Enemy Death upon Attacks"
+    "name": "Sudden Enemy Death upon Landing Attacks"
   },
   "8610000": {
     "name": "HP Restoration upon Successive Attacks"
@@ -2381,95 +2051,59 @@
   "8610100": {
     "name": "FP Restoration upon Successive Attacks"
   },
-  "8610200": {
-    "name": "Successive Attacks Boost Attack Power"
-  },
   "8610300": {
-    "name": "Magic Attack Follows Charge Attacks"
+    "name": "Magic Attack Follows Charge Attacks that Land"
   },
   "8610400": {
-    "name": "Fire Attack Follows Charge Attacks"
+    "name": "Fire Attack Follows Charge Attacks that Land"
   },
   "8610500": {
-    "name": "Lightning Follows Charge Attacks"
+    "name": "Lightning Follows Charge Attacks that Land"
   },
   "8610600": {
-    "name": "Holy Attack Follows Charge Attacks"
+    "name": "Holy Attack Follows Charge Attacks that Land"
   },
   "8610700": {
-    "name": "Successive Attacks Negate Damage +1"
+    "name": "Successive Attacks Negate Damage"
   },
   "8620000": {
-    "name": "Taking Damage Restores FP +1"
+    "name": "Taking Damage Restores FP"
   },
   "8620100": {
-    "name": "Taking Damage Boosts Damage Negation +1"
+    "name": "Taking Damage Boosts Damage Negation"
   },
   "8630000": {
-    "name": "Defeating Enemies Restores HP +1"
+    "name": "Defeating Enemies Restores HP"
   },
   "8630100": {
-    "name": "Defeating Enemies Restores FP +1"
+    "name": "Defeating Enemies Restores FP"
   },
   "8630200": {
-    "name": "Defeating Group Summons Wraiths"
+    "name": "Attacks Summon Wraiths"
   },
   "8630300": {
-    "name": "Defeating Group Releases Mist of Charm"
+    "name": "Attacks Release Mist of Charm"
   },
   "8630400": {
-    "name": "Defeating Group Calls Vengeful Spirits"
+    "name": "Attacks Call Vengeful Spirits"
   },
   "8630500": {
-    "name": "Magma upon Defeating Multiple Enemies"
+    "name": "Attacks Generate Lava"
   },
   "8630600": {
-    "name": "Defeating Group Releases Mist of Frost"
+    "name": "Attacks Release Mist of Frost"
   },
   "8630700": {
-    "name": "Defeating Group Unleashes Lightning"
+    "name": "Attacks Unleash Lightning"
   },
   "8630800": {
-    "name": "Defeating Group Fires Golden Shockwave"
+    "name": "Attacks Generate Golden Shockwave"
   },
   "8640000": {
     "name": "Critical Hit HP Restoration"
   },
   "8640100": {
     "name": "Critical Hit FP Restoration"
-  },
-  "8640200": {
-    "name": "Damage Boosted after Critical Hit"
-  },
-  "8640300": {
-    "name": "Sacred Order upon Holy Critical Hit"
-  },
-  "8640400": {
-    "name": "Magma upon Fire Critical Hit"
-  },
-  "8640500": {
-    "name": "Lightning Critical Hit Imbues Armament"
-  },
-  "8640600": {
-    "name": "Crystal Shards upon Magic Critical Hit"
-  },
-  "8640700": {
-    "name": "Poison Mist upon Poison Critical Hit"
-  },
-  "8640800": {
-    "name": "Blood Loss Crit: Thorns of Punishment"
-  },
-  "8640900": {
-    "name": "Rot Critical Hit Fires Pest Threads"
-  },
-  "8641000": {
-    "name": "Ice Storm upon Critical Hit with Frost"
-  },
-  "8641100": {
-    "name": "Madness Crit. Hit Fires Frenzied Flame"
-  },
-  "8641200": {
-    "name": "Death Crit. Hit Calls Death Lightning"
   },
   "8650000": {
     "name": "HP Recovery From Successful Guarding"
@@ -2478,13 +2112,13 @@
     "name": "FP Recovery From Successful Guarding"
   },
   "8652000": {
-    "name": "Successful Guarding Ups Poise +1"
+    "name": "Successful Guarding Ups Poise"
   },
   "8652100": {
-    "name": "Successful Guarding Ups Dmg Negation +1"
+    "name": "Successful Guarding Ups Dmg Negation"
   },
   "8660000": {
-    "name": "Improved Attack Power at Low HP x1.07"
+    "name": "Improved Attack Power at Low HP"
   },
   "8660101": {
     "name": "Improved Damage Negation at Low HP"
@@ -2495,11 +2129,8 @@
   "8660300": {
     "name": "Creates Holy Ground at Low HP"
   },
-  "8660400": {
-    "name": "Low HP Crit. Hit Fully Restores HP"
-  },
   "8670000": {
-    "name": "Improved Attack Power at Full HP x1.07"
+    "name": "Improved Attack Power at Full HP"
   },
   "8670101": {
     "name": "Improved Damage Negation at Full HP"
@@ -2508,7 +2139,7 @@
     "name": "Poison Produces a Mist of Poison"
   },
   "8690100": {
-    "name": "Madness Produces a Flame of Frenzy"
+    "name": "Madness Produces a Frenzied Burst"
   },
   "8690200": {
     "name": "Rot Produces a Mist of Scarlet Rot"
@@ -2519,77 +2150,98 @@
   "8690400": {
     "name": "Sleep Produces a Mist of Sleep"
   },
-  "8700000": {
-    "name": "Poison Increases Attack Power"
+  "8760000": {
+    "name": "Reduced Maximum HP"
   },
-  "8710000": {
-    "name": "Blood Loss Increases Attack Power"
+  "8760100": {
+    "name": "Reduced Maximum FP"
   },
-  "8720000": {
-    "name": "Sleep Increases Attack Power"
+  "8760200": {
+    "name": "Reduced Maximum Stamina"
   },
-  "8740000": {
-    "name": "Frostbite Increases Attack Power"
+  "8761000": {
+    "name": "Impaired Physical Damage Negation"
   },
-  "8750000": {
-    "name": "Madness Increases Attack Power"
+  "8761100": {
+    "name": "Impaired Affinity Damage Negation"
+  },
+  "8762000": {
+    "name": "All Resistances Down"
+  },
+  "8763000": {
+    "name": "Reduced Flask HP Restoration"
+  },
+  "8766000": {
+    "name": "Continuous HP Loss"
+  },
+  "8770000": {
+    "name": "Night's Tide Damage Increased"
+  },
+  "8771000": {
+    "name": "Damage Increased by Night's Encroachment"
+  },
+  "8800100": {
+    "name": "Reduced Damage Negation After Evading"
+  },
+  "8800200": {
+    "name": "Repeated Evasions Lower Damage Negation"
+  },
+  "8801000": {
+    "name": "Reduced Damage Negation for Flask Usages"
+  },
+  "8810000": {
+    "name": "Lower Attack When Below Max HP"
+  },
+  "8810200": {
+    "name": "Slower Art Gauge When Below Max HP"
+  },
+  "8810300": {
+    "name": "Poison Buildup When Below Max HP"
+  },
+  "8810400": {
+    "name": "Rot Buildup When Below Max HP"
+  },
+  "8813100": {
+    "name": "Lower Stamina Impairs Dmg Negation"
+  },
+  "8821000": {
+    "name": "Attacks Impaired on Occasion"
+  },
+  "8830000": {
+    "name": "Ailments Cause Increased Damage"
+  },
+  "8831000": {
+    "name": "Near Death Reduces Art Gauge"
+  },
+  "8831200": {
+    "name": "Near Death Reduces Max HP"
   },
   "8880000": {
-    "name": "Ice Storm upon Charged Slash"
-  },
-  "8880100": {
-    "name": "Ring of Light upon Charged Slash"
+    "name": "Ice Storm upon Charge Attacks"
   },
   "8880200": {
-    "name": "Black Flames upon Charged Slash"
+    "name": "Black Flames upon Charge Attacks"
   },
   "8880300": {
-    "name": "Phantom Attack upon Charged Slash"
-  },
-  "8880400": {
-    "name": "Roaring Flames upon Charged Slash"
+    "name": "Phantom Attack upon Charge Attacks"
   },
   "8881000": {
-    "name": "Holy Shockwave upon Charged Strike"
-  },
-  "8881100": {
-    "name": "Projectiles upon Charged Strike"
+    "name": "Holy Shockwave upon Charge Attacks"
   },
   "8881200": {
-    "name": "Luring Enemies upon Charged Strike"
-  },
-  "8881300": {
-    "name": "Shockwave upon Charged Strike"
-  },
-  "8881400": {
-    "name": "Phantom Attack upon Charged Strike"
+    "name": "Luring Enemies upon Charge Attacks"
   },
   "8881500": {
-    "name": "Magma upon Charged Strike"
-  },
-  "8881600": {
-    "name": "Magic Bubbles upon Charged Strike"
-  },
-  "8882000": {
-    "name": "Phantom Attack upon Charged Thrust"
+    "name": "Magma upon Charge Attacks"
   },
   "8882100": {
-    "name": "Lightning upon Charged Thrust"
-  },
-  "8882200": {
-    "name": "Acid Mist upon Charged Thrust"
-  },
-  "8882300": {
-    "name": "Pest Threads upon Charged Thrust"
-  },
-  "8882400": {
-    "name": "Poison Mist upon Charged Thrust"
+    "name": "Lightning upon Charge Attacks"
   },
   "8882500": {
-    "name": "Charged Thrust Invokes Sleep Mist"
+    "name": "Charge Attacks Invoke Sleep Mist"
   },
   "8883000": {
-    "name": "Projectiles Launched upon Attacks"
+    "name": "Projectiles Launched upon Charge Attacks"
   },
   "8883100": {
     "name": "Lightning upon Precision Aiming"
@@ -2603,12 +2255,6 @@
   "8883400": {
     "name": "Bloodflies upon Precision Aiming"
   },
-  "8884000": {
-    "name": "Shielding Improves Damage Negation"
-  },
-  "8884100": {
-    "name": "Shielding Invokes Indomitable Vow"
-  },
   "8884200": {
     "name": "Shielding Creates Holy Ground"
   },
@@ -2619,22 +2265,10 @@
     "name": "Flask Healing Also Restores FP"
   },
   "8885100": {
-    "name": "Failing to Cast Sorcery Restores FP"
+    "name": "Failing to Cast Spell Restores FP"
   },
   "8885200": {
-    "name": "Guarding Ups Attack & Casting Speeds"
-  },
-  "8920100": {
-    "name": "Improved Non-Physical Attack Power +1"
-  },
-  "8921400": {
-    "name": "Critical Hits Boost Attack Power"
-  },
-  "8960100": {
-    "name": "Changed Strong Attacks"
-  },
-  "8960200": {
-    "name": "Strong Jump Attacks Create Shockwave"
+    "name": "Continued Guarding Grants Increased Potency of Sorceries/Incantations and Faster Casting"
   },
   "9021400": {
     "name": "Power of Night and Flame"
@@ -2715,534 +2349,33 @@
     "name": "Power of the General"
   },
   "9990100": {
-    "name": "The Wylder's Grief +1"
+    "name": "The Wylder's Grief"
   },
   "9990200": {
-    "name": "The Guardian's Grief +1"
+    "name": "The Guardian's Grief"
   },
   "9990300": {
-    "name": "The Ironeye's Grief +1"
+    "name": "The Ironeye's Grief"
   },
   "9990400": {
-    "name": "The Duchess' Grief +1"
+    "name": "The Duchess' Grief"
   },
   "9990500": {
-    "name": "The Raider's Grief +1"
+    "name": "The Raider's Grief"
   },
   "9990600": {
-    "name": "The Revenant's Grief +1"
+    "name": "The Revenant's Grief"
   },
   "9990700": {
-    "name": "The Recluse's Grief +1"
+    "name": "The Recluse's Grief"
   },
   "9990800": {
-    "name": "The Executor's Grief +1"
+    "name": "The Executor's Grief"
   },
-  "8500102": {
-    "name": "Rune of the Strong 30000"
+  "9990900": {
+    "name": "The Scholar's Grief"
   },
-  "8330104": {
-    "name": "Raises sorcery/incantation potency"
-  },
-  "8210700": {
-    "name": "All Resistance Up 57"
-  },
-  "8100001": {
-    "name": "Improved Physical Attack Power x1.09"
-  },
-  "8200001": {
-    "name": "Improved Physical Damage Negation 18%"
-  },
-  "8200501": {
-    "name": "Improved Non-Physical Damage Negation 18%"
-  },
-  "8330602": {
-    "name": "Reduced Spell FP Cost +3"
-  },
-  "8010001": {
-    "name": "Increased Maximum FP x1.15"
-  },
-  "8020201": {
-    "name": "Improved Stamina Recovery 6/s"
-  },
-  "8340102": {
-    "name": "Projectile Damage Drop-Off Reduced +3"
-  },
-  "6850900": {
-    "name": "Slowly lowers HP"
-  },
-  "6850800": {
-    "name": "Slows the charging speed of Ultimate Art gauge"
-  },
-  "6850700": {
-    "name": "Surge sprinting consumes more stamina"
-  },
-  "6850500": {
-    "name": "Lowers resistance to all ailments"
-  },
-  "6850200": {
-    "name": "Lowers maximum stamina"
-  },
-  "6851300": {
-    "name": "Using flask reduces damage negation"
-  },
-  "6851400": {
-    "name": "Using flask causes sleep buildup"
-  },
-  "6851700": {
-    "name": "Slower charging of Ultimate Art when below max HP level"
-  },
-  "4294967295": {
-    "name": "Empty"
-  },
-  "7170100": {
-    "name": "Attacks Inflict Rot when Damage is Taken"
-  },
-  "7370900": {
-    "name": "Changes compatible armament's incantation to Beast Claw at start of expedition"
-  },
-  "7371500": {
-    "name": "Changes compatible armament's incantation to Dragonfire at start of expedition"
-  },
-  "7370400": {
-    "name": "Changes compatible armament's incantation to Lightning Spear at start of expedition"
-  },
-  "7370600": {
-    "name": "Changes compatible armament's incantation to O, Flame! at start of expedition"
-  },
-  "7370300": {
-    "name": "Changes compatible armament's incantation to Wrath of Gold at start of expedition"
-  },
-  "7362100": {
-    "name": "Changes compatible armament's sorcery to Briars of Punishment at start of expedition"
-  },
-  "7360900": {
-    "name": "Changes compatible armament's sorcery to Carian Greatsword at start of expedition"
-  },
-  "7360600": {
-    "name": "Changes compatible armament's sorcery to Magic Glintblade at start of expedition"
-  },
-  "7361300": {
-    "name": "Changes compatible armament's sorcery to Magma Shot at start of expedition"
-  },
-  "7361200": {
-    "name": "Changes compatible armament's sorcery to Night Shard at start of expedition"
-  },
-  "7006500": {
-    "name": "Continuous FP Recovery"
-  },
-  "7006400": {
-    "name": "Extended Spell Duration"
-  },
-  "6623200": {
-    "name": "Greenspill Crystal Tear in possession at start of expedition"
-  },
-  "7006300": {
-    "name": "Improved Affinity Damage Negation"
-  },
-  "7006600": {
-    "name": "Improved Melee Attack Power"
-  },
-  "7006700": {
-    "name": "Improved Skill Attack Power"
-  },
-  "7037800": {
-    "name": "Occasionally Nullify Attacks When Damage Negations is Lowered"
-  },
-  "7001409": {
-    "name": "Physical Attack Up +2"
-  },
-  "7260900": {
-    "name": "Rot in Vicinity Causes ContinuousHP Recovery"
-  },
-  "19001": {
-    "name": "Scholar Allies Targeted by Character Skill gain boosted attack"
-  },
-  "7036300": {
-    "name": "Scholar Allies Targeted by Character Skill gain boosted attack"
-  },
-  "7036400": {
-    "name": "Scholar Continuous damage inflicted on targets threaded by Ultimate Art"
-  },
-  "7036500": {
-    "name": "Scholar Earn runes for each additional specimen acquired with Character Skill"
-  },
-  "6647300": {
-    "name": "Scholar Improved Endurance and Dexterity, Reduced Intelligence and Arcane"
-  },
-  "6647200": {
-    "name": "Scholar Improved Mind, Reduced Vigor"
-  },
-  "7036200": {
-    "name": "Scholar Prevent slowing of Character Skill Progress"
-  },
-  "6500800": {
-    "name": "Scholar Reduced FP consumption when using Character Skill on self"
-  },
-  "7121001": {
-    "name": "Small Pouch in possession at start of expedition"
-  },
-  "7037700": {
-    "name": "Status Ailment Gauges Slowly Increase Attack Power"
-  },
-  "7037600": {
-    "name": "Successive Attacks Boost Attack Power"
-  },
-  "7036800": {
-    "name": "Undertaker Activating Ultimate Art increases attack power"
-  },
-  "7036900": {
-    "name": "Undertaker Attack power increased by landing the final blow of a chain attack"
-  },
-  "7037300": {
-    "name": "Undertaker Contact with allies restores their HP while Ultimate Art is activated"
-  },
-  "6500900": {
-    "name": "Undertaker Executing Art readies Character Skill"
-  },
-  "6647400": {
-    "name": "Undertaker Improved Dexterity, Reduced Vigor and Faith"
-  },
-  "6647500": {
-    "name": "Undertaker Improved Mind and Faith, Reduced Strength"
-  },
-  "7037000": {
-    "name": "Undertaker Physical attacks boosted while assist effect from incantation is active for self"
-  },
-  "6851600": {
-    "name": "Near Death Spills Flask"
-  },
-  "6850600": {
-    "name": "Lowers HP restoration from flasks"
-  },
-  "6851500": {
-    "name": "Using flask causes madness buildup"
-  },
-  "8210701": {
-    "name": "All Resistance Up 75"
-  },
-  "8310001": {
-    "name": "Attack Up when Wielding Two Armaments x1.10"
-  },
-  "8310002": {
-    "name": "Attack Up when Wielding Two Armaments x1.13"
-  },
-  "8630101": {
-    "name": "Defeating Enemies Restores FP +2"
-  },
-  "8630102": {
-    "name": "Defeating Enemies Restores FP +3"
-  },
-  "8630001": {
-    "name": "Defeating Enemies Restores HP +2"
-  },
-  "8630002": {
-    "name": "Defeating Enemies Restores HP +3"
-  },
-  "8330901": {
-    "name": "Dmg Negation Up While Casting Spells +2"
-  },
-  "8330902": {
-    "name": "Dmg Negation Up While Casting Spells +3"
-  },
-  "8320401": {
-    "name": "Dmg Negation Up while Charging Attacks +2"
-  },
-  "8320402": {
-    "name": "Dmg Negation Up while Charging Attacks +3"
-  },
-  "8600201": {
-    "name": "FP Restoration upon Attacks +2"
-  },
-  "8600202": {
-    "name": "FP Restoration upon Attacks +3"
-  },
-  "8670001": {
-    "name": "Improved Attack Power at Full HP x1.10"
-  },
-  "8670002": {
-    "name": "Improved Attack Power at Full HP x1.13"
-  },
-  "8660001": {
-    "name": "Improved Attack Power at Low HP x1.10"
-  },
-  "8660002": {
-    "name": "Improved Attack Power at Low HP x1.13"
-  },
-  "8300001": {
-    "name": "Improved Attack Power when Two-Handing x1.10"
-  },
-  "8300002": {
-    "name": "Improved Attack Power when Two-Handing x1.13"
-  },
-  "8210101": {
-    "name": "Improved Blood Loss Resistance +2"
-  },
-  "8210102": {
-    "name": "Improved Blood Loss Resistance +3"
-  },
-  "8320001": {
-    "name": "Improved Chain Attack Finishers x1.15"
-  },
-  "8320002": {
-    "name": "Improved Chain Attack Finishers x1.20"
-  },
-  "8320101": {
-    "name": "Improved Charge Attacks x1.09"
-  },
-  "8320102": {
-    "name": "Improved Charge Attacks x1.12"
-  },
-  "8330301": {
-    "name": "Improved Charged Incantation +2"
-  },
-  "8330302": {
-    "name": "Improved Charged Incantation +3"
-  },
-  "8330201": {
-    "name": "Improved Charged Sorceries +2"
-  },
-  "8330202": {
-    "name": "Improved Charged Sorceries +3"
-  },
-  "8130001": {
-    "name": "Improved Critical Hits +1"
-  },
-  "8130002": {
-    "name": "Improved Critical Hits +2"
-  },
-  "8130003": {
-    "name": "Improved Critical Hits +3"
-  },
-  "8210301": {
-    "name": "Improved Death Blight Resistance +2"
-  },
-  "8210302": {
-    "name": "Improved Death Blight Resistance +3"
-  },
-  "8100201": {
-    "name": "Improved Fire Attack Power x1.08"
-  },
-  "8200201": {
-    "name": "Improved Fire Damage Negation +2"
-  },
-  "8200202": {
-    "name": "Improved Fire Damage Negation +3"
-  },
-  "8440001": {
-    "name": "Improved Flask HP Restoration x1.3"
-  },
-  "8210501": {
-    "name": "Improved Frost Resistance +2"
-  },
-  "8210502": {
-    "name": "Improved Frost Resistance +3"
-  },
-  "8140001": {
-    "name": "Improved Guard Breaking +2"
-  },
-  "8140002": {
-    "name": "Improved Guard Breaking +3"
-  },
-  "8420001": {
-    "name": "Improved Guard Counters x1.15"
-  },
-  "8420002": {
-    "name": "Improved Guard Counters x1.20"
-  },
-  "8100401": {
-    "name": "Improved Holy Attack Power x1.08"
-  },
-  "8200401": {
-    "name": "Improved Holy Damage Negation +2"
-  },
-  "8200402": {
-    "name": "Improved Holy Damage Negation +3"
-  },
-  "8510001": {
-    "name": "Improved Item Discovery 30"
-  },
-  "8510002": {
-    "name": "Improved Item Discovery 40"
-  },
-  "8320301": {
-    "name": "Improved Jump Attacks +2"
-  },
-  "8320302": {
-    "name": "Improved Jump Attacks +3"
-  },
-  "8100301": {
-    "name": "Improved Lightning Attack Power x1.08"
-  },
-  "8200301": {
-    "name": "Improved Lightning Damage Negation +2"
-  },
-  "8200302": {
-    "name": "Improved Lightning Damage Negation +3"
-  },
-  "8210601": {
-    "name": "Improved Madness Resistance +2"
-  },
-  "8210602": {
-    "name": "Improved Madness Resistance +3"
-  },
-  "8100101": {
-    "name": "Improved Magic Attack Power x1.08"
-  },
-  "8200101": {
-    "name": "Improved Magic Damage Negation +2"
-  },
-  "8200102": {
-    "name": "Improved Magic Damage Negation +3"
-  },
-  "8920101": {
-    "name": "Improved Non-Physical Attack Power +2"
-  },
-  "8920102": {
-    "name": "Improved Non-Physical Attack Power +3"
-  },
-  "8230001": {
-    "name": "Improved Poise x0.62"
-  },
-  "8210001": {
-    "name": "Improved Poison Resistance +2"
-  },
-  "8210002": {
-    "name": "Improved Poison Resistance +3"
-  },
-  "8340001": {
-    "name": "Improved Ranged Weapon Attacks +2"
-  },
-  "8340002": {
-    "name": "Improved Ranged Weapon Attacks +3"
-  },
-  "8210401": {
-    "name": "Improved Rot Resistance +2"
-  },
-  "8210402": {
-    "name": "Improved Rot Resistance +3"
-  },
-  "8350001": {
-    "name": "Improved Skill Attack Power x1.08"
-  },
-  "8350002": {
-    "name": "Improved Skill Attack Power x1.10"
-  },
-  "8210201": {
-    "name": "Improved Sleep Resistance +2"
-  },
-  "8210202": {
-    "name": "Improved Sleep Resistance +3"
-  },
-  "8330401": {
-    "name": "Improved Spell Casting Speed +2"
-  },
-  "8300101": {
-    "name": "Improved Stance-Breaking when Two-Handing +2"
-  },
-  "8310101": {
-    "name": "Improved Stance-Breaking when Wielding Two Armaments +2"
-  },
-  "8120001": {
-    "name": "Improved Stance-Breaking x1.15"
-  },
-  "8000001": {
-    "name": "Increased Maximum HP x1.15"
-  },
-  "8020001": {
-    "name": "Increased Maximum Stamina x1.15"
-  },
-  "8340101": {
-    "name": "Projectile Damage Drop-Off Reduced +2"
-  },
-  "8010101": {
-    "name": "Reduced FP Consumption x0.85"
-  },
-  "8350201": {
-    "name": "Reduced Skill FP Cost +2"
-  },
-  "8350202": {
-    "name": "Reduced Skill FP Cost +3"
-  },
-  "8330601": {
-    "name": "Reduced Spell FP Cost +2"
-  },
-  "8500100": {
-    "name": "Rune of the Strong 10000"
-  },
-  "8500101": {
-    "name": "Rune of the Strong 20000"
-  },
-  "8652101": {
-    "name": "Successful Guarding Ups Dmg Negation +2"
-  },
-  "8652102": {
-    "name": "Successful Guarding Ups Dmg Negation +3"
-  },
-  "8652001": {
-    "name": "Successful Guarding Ups Poise +2"
-  },
-  "8652002": {
-    "name": "Successful Guarding Ups Poise +3"
-  },
-  "8610701": {
-    "name": "Successive Attacks Negate Damage +2"
-  },
-  "8610702": {
-    "name": "Successive Attacks Negate Damage +3"
-  },
-  "8620101": {
-    "name": "Taking Damage Boosts Damage Negation +2"
-  },
-  "8620102": {
-    "name": "Taking Damage Boosts Damage Negation +3"
-  },
-  "8620001": {
-    "name": "Taking Damage Restores FP +2"
-  },
-  "8620002": {
-    "name": "Taking Damage Restores FP +3"
-  },
-  "9990801": {
-    "name": "The Executor's Grief +2"
-  },
-  "9990802": {
-    "name": "The Executor's Grief +3"
-  },
-  "9990201": {
-    "name": "The Guardian's Grief +2"
-  },
-  "9990202": {
-    "name": "The Guardian's Grief +3"
-  },
-  "9990301": {
-    "name": "The Ironeye's Grief +2"
-  },
-  "9990302": {
-    "name": "The Ironeye's Grief +3"
-  },
-  "9990501": {
-    "name": "The Raider's Grief +2"
-  },
-  "9990502": {
-    "name": "The Raider's Grief +3"
-  },
-  "9990701": {
-    "name": "The Recluse's Grief +2"
-  },
-  "9990702": {
-    "name": "The Recluse's Grief +3"
-  },
-  "9990601": {
-    "name": "The Revenant's Grief +2"
-  },
-  "9990602": {
-    "name": "The Revenant's Grief +3"
-  },
-  "9990101": {
-    "name": "The Wylder's Grief +2"
-  },
-  "9990102": {
-    "name": "The Wylder's Grief +3"
+  "9991000": {
+    "name": "The Undertaker's Grief"
   }
 }
