@@ -29,6 +29,7 @@ class VesselOptimizer:
 
         # Precompute conflict penalty weights once per optimization call.
         desired_cw = self.scorer.get_desired_conflict_weights(build)
+        desired_compat_effs = self.scorer.get_desired_compat_effects(build)
 
         # Pre-assign pinned relics; returns (None, ...) if any can't fit this vessel.
         pinned_map, slot_owner = self._pre_assign_pinned(
@@ -45,7 +46,7 @@ class VesselOptimizer:
             candidates = inventory.get_candidates(slot_colors[i], is_deep)
             candidates = [
                 r for r in candidates
-                if not self.scorer.has_excluded_effect(r, build)
+                if not self.scorer.has_excluded_effect(r, build, desired_compat_effs)
                 and r.ga_handle not in pinned_handles
             ]
             scored = sorted(
@@ -62,10 +63,12 @@ class VesselOptimizer:
             total = sum(len(c) for c in candidates_per_free_slot)
             if total <= 200 and num_free <= 6:
                 raw_free = self._backtrack_solve(
-                    candidates_per_free_slot, num_free, build, top_n, desired_cw)
+                    candidates_per_free_slot, num_free, build, top_n, desired_cw,
+                    desired_compat_effs)
             else:
                 raw_free = self._greedy_solve(
-                    candidates_per_free_slot, num_free, build, top_n, desired_cw)
+                    candidates_per_free_slot, num_free, build, top_n, desired_cw,
+                    desired_compat_effs)
 
         # Merge free-slot results back into full num_slots assignments
         raw: list[list] = []
@@ -80,7 +83,8 @@ class VesselOptimizer:
 
         return [
             self._build_vessel_result(
-                assignment, num_slots, slot_colors, vessel_data, build, desired_cw)
+                assignment, num_slots, slot_colors, vessel_data, build, desired_cw,
+                desired_compat_effs)
             for assignment in raw
         ]
 
@@ -142,6 +146,7 @@ class VesselOptimizer:
                              slot_colors: tuple, vessel_data: dict,
                              build: BuildDefinition,
                              desired_conflict_weights: dict[int, int] | None = None,
+                             desired_compat_effects: dict[int, set[int]] | None = None,
                              ) -> VesselResult:
         """Construct VesselResult from raw slot assignments (left-to-right priority)."""
         slot_results: list[tuple] = [(None, 0, [])] * num_slots
@@ -151,6 +156,7 @@ class VesselOptimizer:
         vessel_no_stack_excl: set[int] = set()
         vessel_no_stack_compat: set[int] = set()
         vessel_curse_counts: dict[int, int] = {}
+        vessel_desired_compat_placed: set[int] = set()
         total_score = 0
 
         for i in range(num_slots):
@@ -159,10 +165,12 @@ class VesselOptimizer:
                 score = self.scorer.score_relic_in_context(
                     relic, build, vessel_eff, vessel_excl, vessel_no_stack_excl,
                     vessel_curse_counts, vessel_no_stack_compat,
-                    desired_conflict_weights)
+                    desired_conflict_weights,
+                    vessel_desired_compat_placed, desired_compat_effects)
                 breakdown = self.scorer.get_breakdown(
                     relic, build, vessel_eff, vessel_excl, vessel_no_stack_excl,
-                    vessel_no_stack_compat, desired_conflict_weights)
+                    vessel_no_stack_compat, desired_conflict_weights,
+                    vessel_desired_compat_placed, desired_compat_effects)
                 assigned_effect_ids.update(relic.all_effects)
                 for eff in relic.all_effects:
                     text_id = self.data_source.get_effect_text_id(eff)
@@ -171,6 +179,9 @@ class VesselOptimizer:
                 e, c, ns, nsc = self._get_relic_stacking_adds(relic)
                 vessel_eff.update(e); vessel_excl.update(c); vessel_no_stack_excl.update(ns)
                 vessel_no_stack_compat.update(nsc)
+                dcp = self._get_relic_desired_compat_adds(
+                    relic, desired_compat_effects)
+                vessel_desired_compat_placed.update(dcp)
                 for curse in self._get_relic_curse_ids(relic):
                     vessel_curse_counts[curse] = vessel_curse_counts.get(curse, 0) + 1
             else:
@@ -242,14 +253,17 @@ class VesselOptimizer:
 
     def _greedy_solve(self, candidates_per_slot: list, num_slots: int,
                       build: BuildDefinition, top_n: int = 3,
-                      desired_cw: dict[int, int] | None = None) -> list[list]:
+                      desired_cw: dict[int, int] | None = None,
+                      desired_compat_effs: dict[int, set[int]] | None = None,
+                      ) -> list[list]:
         results: list[list] = []
         excluded: set[int] = set()
         seen: set[frozenset] = set()
 
         for _ in range(top_n):
             assignment = self._greedy_solve_once(
-                candidates_per_slot, num_slots, build, excluded, desired_cw)
+                candidates_per_slot, num_slots, build, excluded, desired_cw,
+                desired_compat_effs)
             handles = frozenset(r.ga_handle for r, _ in assignment if r is not None)
             if not handles or handles in seen:
                 break
@@ -269,7 +283,9 @@ class VesselOptimizer:
     def _greedy_solve_once(self, candidates_per_slot: list, num_slots: int,
                            build: BuildDefinition,
                            excluded_handles: set[int] | None = None,
-                           desired_cw: dict[int, int] | None = None) -> list:
+                           desired_cw: dict[int, int] | None = None,
+                           desired_compat_effs: dict[int, set[int]] | None = None,
+                           ) -> list:
         assigned: list = [None] * num_slots
         used: set[int] = set(excluded_handles or ())
         vessel_eff: set[int] = set()
@@ -277,6 +293,7 @@ class VesselOptimizer:
         vessel_no_stack_excl: set[int] = set()
         vessel_no_stack_compat: set[int] = set()
         vessel_curse_counts: dict[int, int] = {}
+        vessel_desired_compat_placed: set[int] = set()
 
         for slot_idx in range(num_slots):
             best: tuple | None = None
@@ -285,7 +302,8 @@ class VesselOptimizer:
                     continue
                 score = self.scorer.score_relic_in_context(
                     relic, build, vessel_eff, vessel_excl, vessel_no_stack_excl,
-                    vessel_curse_counts, vessel_no_stack_compat, desired_cw)
+                    vessel_curse_counts, vessel_no_stack_compat, desired_cw,
+                    vessel_desired_compat_placed, desired_compat_effs)
                 if best is None or score > best[0]:
                     best = (score, relic)
 
@@ -299,6 +317,8 @@ class VesselOptimizer:
             e, c, ns, nsc = self._get_relic_stacking_adds(relic)
             vessel_eff.update(e); vessel_excl.update(c); vessel_no_stack_excl.update(ns)
             vessel_no_stack_compat.update(nsc)
+            dcp = self._get_relic_desired_compat_adds(relic, desired_compat_effs)
+            vessel_desired_compat_placed.update(dcp)
             for curse in self._get_relic_curse_ids(relic):
                 vessel_curse_counts[curse] = vessel_curse_counts.get(curse, 0) + 1
 
@@ -306,7 +326,9 @@ class VesselOptimizer:
 
     def _backtrack_solve(self, candidates_per_slot: list, num_slots: int,
                          build: BuildDefinition, top_n: int = 3,
-                         desired_cw: dict[int, int] | None = None) -> list[list]:
+                         desired_cw: dict[int, int] | None = None,
+                         desired_compat_effs: dict[int, set[int]] | None = None,
+                         ) -> list[list]:
         top: list[tuple[int, list]] = []
         seen: set[frozenset] = set()
         min_threshold = -1
@@ -315,7 +337,9 @@ class VesselOptimizer:
         def backtrack(slot_idx: int, current: list, used: set[int],
                       v_eff: set, v_excl: set, v_no_stack_excl: set,
                       v_no_stack_compat: set,
-                      curse_counts: dict[int, int], score: int) -> None:
+                      curse_counts: dict[int, int],
+                      v_desired_compat: set,
+                      score: int) -> None:
             nonlocal min_threshold
             if time.time() > deadline:
                 return
@@ -337,7 +361,7 @@ class VesselOptimizer:
             # Try empty slot
             current[slot_idx] = (None, 0)
             backtrack(slot_idx + 1, current, used, v_eff, v_excl, v_no_stack_excl,
-                      v_no_stack_compat, curse_counts, score)
+                      v_no_stack_compat, curse_counts, v_desired_compat, score)
 
             remaining_max = sum(
                 candidates_per_slot[s][0][0] if candidates_per_slot[s] else 0
@@ -351,32 +375,38 @@ class VesselOptimizer:
 
                 ctx_score = self.scorer.score_relic_in_context(
                     relic, build, v_eff, v_excl, v_no_stack_excl,
-                    curse_counts, v_no_stack_compat, desired_cw)
+                    curse_counts, v_no_stack_compat, desired_cw,
+                    v_desired_compat, desired_compat_effs)
                 if score + ctx_score + remaining_max <= min_threshold:
                     continue  # actual-score prune
 
                 added_eff, added_excl, added_ns, added_nsc = self._get_relic_stacking_adds(relic)
                 added_curses = self._get_relic_curse_ids(relic)
+                added_dcp = self._get_relic_desired_compat_adds(relic, desired_compat_effs)
 
                 current[slot_idx] = (relic, ctx_score)
                 used.add(relic.ga_handle)
                 v_eff.update(added_eff); v_excl.update(added_excl); v_no_stack_excl.update(added_ns)
                 v_no_stack_compat.update(added_nsc)
+                v_desired_compat.update(added_dcp)
                 for cid in added_curses:
                     curse_counts[cid] = curse_counts.get(cid, 0) + 1
 
                 backtrack(slot_idx + 1, current, used, v_eff, v_excl, v_no_stack_excl,
-                          v_no_stack_compat, curse_counts, score + ctx_score)
+                          v_no_stack_compat, curse_counts, v_desired_compat,
+                          score + ctx_score)
 
                 used.discard(relic.ga_handle)
                 v_eff -= added_eff; v_excl -= added_excl; v_no_stack_excl -= added_ns
                 v_no_stack_compat -= added_nsc
+                v_desired_compat -= added_dcp
                 for cid in added_curses:
                     curse_counts[cid] -= 1
                     if curse_counts[cid] == 0:
                         del curse_counts[cid]
 
-        backtrack(0, [(None, 0)] * num_slots, set(), set(), set(), set(), set(), {}, 0)
+        backtrack(0, [(None, 0)] * num_slots, set(), set(), set(), set(), set(), {},
+                  set(), 0)
         return [assignment for _, assignment in top] or [[(None, 0)] * num_slots]
 
     # ------------------------------------------------------------------
@@ -557,6 +587,27 @@ class VesselOptimizer:
                         and self.data_source.get_effect_stacking_type(compat) == "no_stack"):
                     effect_ids.add(compat)
         return effect_ids, exclusivity_ids, no_stack_exclusivity_ids, no_stack_compat_ids
+
+    def _get_relic_desired_compat_adds(
+        self, relic: OwnedRelic,
+        desired_compat_effects: dict[int, set[int]] | None,
+    ) -> set[int]:
+        """Return compat IDs for which this relic places a desired/protected effect."""
+        if not desired_compat_effects:
+            return set()
+        result: set[int] = set()
+        for eff in relic.all_effects:
+            compat = self.data_source.get_effect_conflict_id(eff)
+            if compat == -1 or compat not in desired_compat_effects:
+                continue
+            desired_set = desired_compat_effects[compat]
+            if eff in desired_set:
+                result.add(compat)
+            else:
+                text_id = self.data_source.get_effect_text_id(eff)
+                if text_id != -1 and text_id in desired_set:
+                    result.add(compat)
+        return result
 
     @staticmethod
     def _get_relic_curse_ids(relic: OwnedRelic) -> list[int]:

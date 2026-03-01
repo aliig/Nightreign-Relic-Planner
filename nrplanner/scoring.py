@@ -105,8 +105,16 @@ class BuildScorer:
                 return True
         return False
 
-    def has_excluded_effect(self, relic: OwnedRelic, build: BuildDefinition) -> bool:
-        """True if the relic contains any excluded effect, family, or stacking category."""
+    def has_excluded_effect(self, relic: OwnedRelic, build: BuildDefinition,
+                            desired_compat_effects: dict[int, set[int]] | None = None,
+                            ) -> bool:
+        """True if the relic contains any excluded effect, family, or stacking category.
+
+        For stacking categories where a desired effect exists (in
+        ``desired_compat_effects``), the relic is NOT pre-filtered — positional
+        scoring in ``score_relic_in_context`` handles it instead.  Categories
+        with no desired effect still trigger hard exclusion.
+        """
         excl_ids = set(build.excluded_effects)
         excl_families = build.excluded_families
         excl_categories = set(build.excluded_stacking_categories)
@@ -117,6 +125,7 @@ class BuildScorer:
             for eid in excl_ids
             if self.data_source.get_effect_name(eid) not in ("", "Empty", None)
         }
+        _desired = desired_compat_effects or {}
         for eff in relic.all_effects:
             if eff in excl_ids:
                 return True
@@ -129,17 +138,103 @@ class BuildScorer:
                 family = self.data_source.get_effect_family(eff)
                 if family and family in excl_families:
                     return True
-            # Stacking category exclusion
+            # Stacking category exclusion — only hard-exclude when
+            # no desired effect exists for the category.
             if excl_categories:
                 compat = self.data_source.get_effect_conflict_id(eff)
                 if compat != -1 and compat in excl_categories:
                     if not self._is_effect_protected(eff, build):
-                        return True
+                        if compat not in _desired:
+                            return True
+                        # Desired effect exists → let positional scoring handle it
         return False
 
     # Keep old name as alias for backwards compatibility during transition
-    def has_blacklisted_effect(self, relic: OwnedRelic, build: BuildDefinition) -> bool:
-        return self.has_excluded_effect(relic, build)
+    def has_blacklisted_effect(self, relic: OwnedRelic, build: BuildDefinition,
+                               desired_compat_effects: dict[int, set[int]] | None = None,
+                               ) -> bool:
+        return self.has_excluded_effect(relic, build, desired_compat_effects)
+
+    # ------------------------------------------------------------------
+    # Excluded stacking category helpers
+    # ------------------------------------------------------------------
+
+    def _all_build_effect_ids(self, build: BuildDefinition) -> set[int]:
+        """All effect IDs referenced by the build (direct + family-expanded)."""
+        result: set[int] = set()
+        result.update(build.required_effects)
+        for g in build.groups:
+            result.update(g.effects)
+        for family in build.required_families:
+            result.update(self.data_source.get_family_effect_ids(family))
+        for g in build.groups:
+            for family in g.families:
+                result.update(self.data_source.get_family_effect_ids(family))
+        return result
+
+    def get_desired_compat_effects(self, build: BuildDefinition) -> dict[int, set[int]]:
+        """Map compatibilityId -> set of protected effect IDs in that category.
+
+        Only populated for categories in build.excluded_stacking_categories.
+        Used to determine if a competing effect would block a desired one.
+        """
+        result: dict[int, set[int]] = {}
+        excl_cats = set(build.excluded_stacking_categories)
+        if not excl_cats:
+            return result
+        for eff_id in self._all_build_effect_ids(build):
+            compat = self.data_source.get_effect_conflict_id(eff_id)
+            if compat != -1 and compat in excl_cats:
+                if self._is_effect_protected(eff_id, build):
+                    result.setdefault(compat, set()).add(eff_id)
+        return result
+
+    def _excluded_category_score(
+        self, eff_id: int, base_weight: int,
+        build: BuildDefinition,
+        vessel_desired_compat_placed: set[int],
+        desired_compat_effects: dict[int, set[int]],
+    ) -> tuple[int, str | None]:
+        """Score for a non-protected effect in an excluded stacking category.
+
+        Returns (score, override_status):
+        - Desired effect already placed to the left: (0, "excl_category_nullified")
+        - No desired effect in category: (0, "excl_category_nullified")
+        - Desired effect NOT yet placed (would block it): (-penalty, "excl_category_blocking")
+        """
+        compat = self.data_source.get_effect_conflict_id(eff_id)
+        desired_in_cat = desired_compat_effects.get(compat)
+
+        if not desired_in_cat:
+            return 0, "excl_category_nullified"
+
+        if compat in vessel_desired_compat_placed:
+            # Desired effect is already to the LEFT — this is harmless dead weight
+            return 0, "excl_category_nullified"
+
+        # Desired effect NOT yet placed — this would block it from the LEFT
+        max_desired_weight = 0
+        for desired_eff in desired_in_cat:
+            _, w = self._resolve_category_and_weight(desired_eff, build)
+            max_desired_weight = max(max_desired_weight, w)
+        return -max_desired_weight, "excl_category_blocking"
+
+    def _is_excl_category_effect(self, eff_id: int,
+                                  build: BuildDefinition,
+                                  desired_compat_effects: dict[int, set[int]],
+                                  ) -> bool:
+        """True if effect is a non-protected member of an excluded stacking
+        category that has desired effects (positional scoring applies)."""
+        compat = self.data_source.get_effect_conflict_id(eff_id)
+        if compat == -1:
+            return False
+        if compat not in set(build.excluded_stacking_categories):
+            return False
+        if compat not in desired_compat_effects:
+            return False  # no desired effect → handled by pre-filter
+        if self._is_effect_protected(eff_id, build):
+            return False  # desired effect itself → scores normally
+        return True
 
     # ------------------------------------------------------------------
     # Scoring
@@ -250,29 +345,44 @@ class BuildScorer:
                                 vessel_curse_counts: dict[int, int] | None = None,
                                 vessel_no_stack_compat_ids: set[int] | None = None,
                                 desired_conflict_weights: dict[int, int] | None = None,
+                                vessel_desired_compat_placed: set[int] | None = None,
+                                desired_compat_effects: dict[int, set[int]] | None = None,
                                 ) -> int:
         """Score considering stacking state of already-assigned relics."""
         score = 0
+        _dce = desired_compat_effects or {}
+        _vdcp = vessel_desired_compat_placed if vessel_desired_compat_placed is not None else set()
         for eff in relic.effects:
             if eff in (EMPTY_EFFECT, 0):
                 continue
             cat, weight = self._resolve_category_and_weight(eff, build)
             if cat is not None and cat != "excluded":
-                score += self._effect_stacking_score(
-                    eff, cat, weight,
-                    vessel_effect_ids, vessel_exclusivity_ids,
-                    vessel_no_stack_exclusivity_ids, vessel_no_stack_compat_ids,
-                    desired_conflict_weights)
+                # Positional stacking category handling
+                if _dce and self._is_excl_category_effect(eff, build, _dce):
+                    adj, _ = self._excluded_category_score(
+                        eff, weight, build, _vdcp, _dce)
+                    score += adj
+                else:
+                    score += self._effect_stacking_score(
+                        eff, cat, weight,
+                        vessel_effect_ids, vessel_exclusivity_ids,
+                        vessel_no_stack_exclusivity_ids, vessel_no_stack_compat_ids,
+                        desired_conflict_weights)
         for curse in relic.curses:
             if curse in (EMPTY_EFFECT, 0):
                 continue
             cat, weight = self._resolve_category_and_weight(curse, build)
             if cat is not None and cat != "excluded":
-                score += self._effect_stacking_score(
-                    curse, cat, weight,
-                    vessel_effect_ids, vessel_exclusivity_ids,
-                    vessel_no_stack_exclusivity_ids, vessel_no_stack_compat_ids,
-                    desired_conflict_weights)
+                if _dce and self._is_excl_category_effect(curse, build, _dce):
+                    adj, _ = self._excluded_category_score(
+                        curse, weight, build, _vdcp, _dce)
+                    score += adj
+                else:
+                    score += self._effect_stacking_score(
+                        curse, cat, weight,
+                        vessel_effect_ids, vessel_exclusivity_ids,
+                        vessel_no_stack_exclusivity_ids, vessel_no_stack_compat_ids,
+                        desired_conflict_weights)
         if vessel_curse_counts is not None:
             for curse in relic.curses:
                 if curse in (EMPTY_EFFECT, 0):
@@ -307,6 +417,8 @@ class BuildScorer:
                       other_no_stack_exclusivity_ids: set[int] | None = None,
                       other_no_stack_compat_ids: set[int] | None = None,
                       desired_conflict_weights: dict[int, int] | None = None,
+                      vessel_desired_compat_placed: set[int] | None = None,
+                      desired_compat_effects: dict[int, set[int]] | None = None,
                       ) -> list[dict]:
         """Per-effect scoring detail for UI / API display."""
         breakdown = []
@@ -314,6 +426,8 @@ class BuildScorer:
         _excl_ids = other_exclusivity_ids or set()
         _ns_ids   = other_no_stack_exclusivity_ids or set()
         _ns_compat = other_no_stack_compat_ids
+        _dce = desired_compat_effects or {}
+        _vdcp = vessel_desired_compat_placed if vessel_desired_compat_placed is not None else set()
 
         for is_curse, effs in ((False, relic.effects), (True, relic.curses)):
             for eff in effs:
@@ -322,6 +436,24 @@ class BuildScorer:
                 cat, weight = self._resolve_category_and_weight(eff, build)
                 base_score = weight if (cat is not None and cat != "excluded") else 0
                 override_status = None
+
+                # Positional stacking category handling
+                if (_dce and cat is not None and cat != "excluded"
+                        and self._is_excl_category_effect(eff, build, _dce)):
+                    adj, excl_status = self._excluded_category_score(
+                        eff, weight, build, _vdcp, _dce)
+                    breakdown.append({
+                        "effect_id": eff,
+                        "name": self.data_source.get_effect_name(eff),
+                        "category": cat,
+                        "weight": weight,
+                        "score": adj,
+                        "is_curse": is_curse,
+                        "redundant": True,
+                        "override_status": excl_status,
+                    })
+                    continue
+
                 if other_effect_ids is not None and cat is not None and cat != "excluded":
                     ctx_score = self._effect_stacking_score(
                         eff, cat, weight, _eff_ids, _excl_ids, _ns_ids, _ns_compat,
