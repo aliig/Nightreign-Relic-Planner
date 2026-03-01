@@ -94,6 +94,49 @@ const DEFAULT_GROUPS: WeightGroup[] = [
 const REQUIRED_COLOR = "#FF8C00"
 const EXCLUDED_COLOR = "#CC4444"
 
+/** Weight input that buffers keystrokes locally and only commits on blur/Enter,
+ *  so the sort order doesn't jump around while the user is typing. */
+function WeightInput({ value, onChange, className, title }: {
+  value: number
+  onChange: (v: number) => void
+  className?: string
+  title?: string
+}) {
+  const [draft, setDraft] = useState(String(value))
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  // Sync draft when external value changes (e.g. undo, load) but not while focused
+  useEffect(() => {
+    if (document.activeElement !== inputRef.current) {
+      setDraft(String(value))
+    }
+  }, [value])
+
+  function commit() {
+    const n = Number(draft)
+    if (!Number.isNaN(n) && n !== value) {
+      onChange(Math.max(-100, Math.min(100, n)))
+    } else {
+      setDraft(String(value)) // revert invalid input
+    }
+  }
+
+  return (
+    <input
+      ref={inputRef}
+      type="number"
+      min={-100}
+      max={100}
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => { if (e.key === "Enter") { e.currentTarget.blur() } }}
+      className={className}
+      title={title}
+    />
+  )
+}
+
 function getLabelForWeight(weight: number): { label: string; color: string } {
   if (weight >= 75) return { label: "Essential", color: "#FF4444" }
   if (weight >= 35) return { label: "Preferred", color: "#4488FF" }
@@ -825,14 +868,11 @@ function BuildEditorUI({
                   const isEmpty = group.effects.length === 0 && group.families.length === 0
                   return (
                     <div key={idx} className="flex items-start gap-2">
-                      <input
-                        type="number"
-                        min={-100}
-                        max={100}
+                      <WeightInput
                         value={group.weight}
-                        onChange={(e) =>
+                        onChange={(w) =>
                           onGroupsChange(
-                            groups.map((g, i) => i === idx ? { ...g, weight: Number(e.target.value) } : g),
+                            groups.map((g, i) => i === idx ? { ...g, weight: w } : g),
                           )
                         }
                         className="mt-2 w-14 text-xs text-center bg-transparent border border-border/60 rounded px-1 py-0.5 focus:border-primary focus:outline-none focus:ring-0 shrink-0 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
