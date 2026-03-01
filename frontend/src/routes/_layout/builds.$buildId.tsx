@@ -132,15 +132,15 @@ function DraggableChip({
 }
 
 function DroppableZone({
-  zoneId, color, children,
+  zoneId, color, children, className,
 }: {
-  zoneId: string; color: string; children: React.ReactNode
+  zoneId: string; color: string; children: React.ReactNode; className?: string
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: zoneId })
   return (
     <div
       ref={setNodeRef}
-      className={cn("rounded-md border border-border/60 p-4 space-y-3 transition-colors", isOver && "bg-muted/20")}
+      className={cn("rounded-md border border-border/60 p-3 transition-colors", isOver && "bg-muted/20", className)}
       style={isOver ? { borderColor: color } : undefined}
     >
       {children}
@@ -458,6 +458,23 @@ function BuildEditorUI({
     [groups],
   )
 
+  // Groups sectioned by derived label so same-label groups share one section header
+  const groupSections = useMemo(() => {
+    const map = new Map<string, { label: string; color: string; indices: number[] }>()
+    const ordered: { label: string; color: string; indices: number[] }[] = []
+    for (const idx of sortedGroupIndices) {
+      const { label, color } = getLabelForWeight(groups[idx].weight)
+      if (!map.has(label)) {
+        const s = { label, color, indices: [idx] }
+        map.set(label, s)
+        ordered.push(s)
+      } else {
+        map.get(label)!.indices.push(idx)
+      }
+    }
+    return ordered
+  }, [sortedGroupIndices, groups])
+
   // All effect IDs and family names currently assigned to any zone
   const assignedEffectIds = useMemo(() => {
     const ids = new Set<number>()
@@ -568,8 +585,8 @@ function BuildEditorUI({
     }
   }
 
-  // Default click-to-add target: first group (index 0), or required if no groups
-  const defaultClickTarget = groups.length > 0 ? "zone:group:0" : "zone:required"
+  // Default click-to-add target: highest-weight group (first in sorted order), or required if no groups
+  const defaultClickTarget = sortedGroupIndices.length > 0 ? `zone:group:${sortedGroupIndices[0]}` : "zone:required"
 
   const maxPins = includeDeep ? 6 : 3
   const atPinLimit = pinnedRelics.length >= maxPins
@@ -694,10 +711,14 @@ function BuildEditorUI({
 
         <div className="grid lg:grid-cols-[1fr_320px] gap-6">
           {/* Priority zones */}
-          <div className="space-y-4">
+          <div className="space-y-5">
             {/* Required */}
             <div>
-              <h3 className="text-sm font-semibold mb-1" style={{ color: REQUIRED_COLOR }}>Required</h3>
+              <div className="flex items-center gap-3 mb-2">
+                <span className="text-xs font-bold uppercase tracking-wider" style={{ color: REQUIRED_COLOR }}>Required</span>
+                <div className="flex-1 h-px opacity-25" style={{ background: REQUIRED_COLOR }} />
+                <span className="text-xs text-muted-foreground">hard constraint · always included</span>
+              </div>
               <DroppableZone zoneId="zone:required" color={REQUIRED_COLOR}>
                 {requiredEffects.length === 0 && requiredFamilies.length === 0 ? (
                   <p className="text-xs text-muted-foreground italic">
@@ -734,15 +755,20 @@ function BuildEditorUI({
               </DroppableZone>
             </div>
 
-            {/* Weight groups */}
-            {sortedGroupIndices.map((idx) => {
-              const group = groups[idx]
-              const { label, color } = getLabelForWeight(group.weight)
-              const isEmpty = group.effects.length === 0 && group.families.length === 0
-              return (
-                <div key={idx}>
-                  <div className="flex items-center justify-between mb-1">
-                    <div className="flex items-center gap-2">
+            {/* Weight groups — same-label groups share one section header */}
+            {groupSections.map((section) => (
+              <div key={section.label} className="space-y-2">
+                <div className="flex items-center gap-3">
+                  <span className="text-xs font-bold uppercase tracking-wider" style={{ color: section.color }}>
+                    {section.label}
+                  </span>
+                  <div className="flex-1 h-px opacity-20" style={{ background: section.color }} />
+                </div>
+                {section.indices.map((idx) => {
+                  const group = groups[idx]
+                  const isEmpty = group.effects.length === 0 && group.families.length === 0
+                  return (
+                    <div key={idx} className="flex items-start gap-2">
                       <input
                         type="number"
                         min={-100}
@@ -753,69 +779,68 @@ function BuildEditorUI({
                             groups.map((g, i) => i === idx ? { ...g, weight: Number(e.target.value) } : g),
                           )
                         }
-                        className="w-16 text-xs text-right text-muted-foreground bg-transparent border-b border-transparent hover:border-muted-foreground/30 focus:border-primary focus:outline-none focus:ring-0 py-0.5 transition-colors [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                        title="Group weight"
+                        className="mt-2 w-14 text-xs text-center bg-transparent border border-border/60 rounded px-1 py-0.5 focus:border-primary focus:outline-none focus:ring-0 shrink-0 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                        title="Group weight (−100 to 100)"
                       />
-                      <span className="text-xs font-semibold" style={{ color }}>{label}</span>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => onGroupsChange(groups.filter((_, i) => i !== idx))}
-                      className="text-muted-foreground hover:text-destructive transition-colors"
-                      aria-label="Remove group"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                  <DroppableZone zoneId={`zone:group:${idx}`} color={color}>
-                    {isEmpty ? (
-                      <p className="text-xs text-muted-foreground italic">
-                        Drop effects here, or click in the browser to add
-                      </p>
-                    ) : (
-                      <div className="flex flex-wrap gap-2">
-                        {group.families.map((familyName) => (
-                          <DraggableChip
-                            key={`family:${familyName}`}
-                            dragId={`family:${familyName}`}
-                            name={`${familyName} (group)`}
-                            color={color}
-                            dragData={{ type: "family", familyName, sourceZone: `zone:group:${idx}` }}
-                            onRemove={() =>
-                              onGroupsChange(
-                                groups.map((g, i) =>
-                                  i === idx ? { ...g, families: g.families.filter((n) => n !== familyName) } : g,
-                                ),
+                      <DroppableZone zoneId={`zone:group:${idx}`} color={section.color} className="flex-1 min-h-[40px]">
+                        {isEmpty ? (
+                          <p className="text-xs text-muted-foreground italic">
+                            Drop effects here, or click in the browser to add
+                          </p>
+                        ) : (
+                          <div className="flex flex-wrap gap-2">
+                            {group.families.map((familyName) => (
+                              <DraggableChip
+                                key={`family:${familyName}`}
+                                dragId={`family:${familyName}`}
+                                name={`${familyName} (group)`}
+                                color={section.color}
+                                dragData={{ type: "family", familyName, sourceZone: `zone:group:${idx}` }}
+                                onRemove={() =>
+                                  onGroupsChange(
+                                    groups.map((g, i) =>
+                                      i === idx ? { ...g, families: g.families.filter((n) => n !== familyName) } : g,
+                                    ),
+                                  )
+                                }
+                              />
+                            ))}
+                            {group.effects.map((id) => {
+                              const e = effectMap.get(id)
+                              if (!e) return null
+                              return (
+                                <DraggableChip
+                                  key={id}
+                                  dragId={`effect:${id}`}
+                                  name={e.source === "deep" ? `${e.name} (deep)` : e.name}
+                                  color={section.color}
+                                  dragData={{ type: "effect", effectId: id, sourceZone: `zone:group:${idx}` }}
+                                  onRemove={() =>
+                                    onGroupsChange(
+                                      groups.map((g, i) =>
+                                        i === idx ? { ...g, effects: g.effects.filter((x) => x !== id) } : g,
+                                      ),
+                                    )
+                                  }
+                                />
                               )
-                            }
-                          />
-                        ))}
-                        {group.effects.map((id) => {
-                          const e = effectMap.get(id)
-                          if (!e) return null
-                          return (
-                            <DraggableChip
-                              key={id}
-                              dragId={`effect:${id}`}
-                              name={e.source === "deep" ? `${e.name} (deep)` : e.name}
-                              color={color}
-                              dragData={{ type: "effect", effectId: id, sourceZone: `zone:group:${idx}` }}
-                              onRemove={() =>
-                                onGroupsChange(
-                                  groups.map((g, i) =>
-                                    i === idx ? { ...g, effects: g.effects.filter((x) => x !== id) } : g,
-                                  ),
-                                )
-                              }
-                            />
-                          )
-                        })}
-                      </div>
-                    )}
-                  </DroppableZone>
-                </div>
-              )
-            })}
+                            })}
+                          </div>
+                        )}
+                      </DroppableZone>
+                      <button
+                        type="button"
+                        onClick={() => onGroupsChange(groups.filter((_, i) => i !== idx))}
+                        className="mt-2 text-muted-foreground hover:text-destructive transition-colors shrink-0"
+                        aria-label="Remove group"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  )
+                })}
+              </div>
+            ))}
 
             <Button
               type="button"
@@ -828,7 +853,11 @@ function BuildEditorUI({
 
             {/* Excluded */}
             <div>
-              <h3 className="text-sm font-semibold mb-1" style={{ color: EXCLUDED_COLOR }}>Excluded</h3>
+              <div className="flex items-center gap-3 mb-2">
+                <span className="text-xs font-bold uppercase tracking-wider" style={{ color: EXCLUDED_COLOR }}>Excluded</span>
+                <div className="flex-1 h-px opacity-25" style={{ background: EXCLUDED_COLOR }} />
+                <span className="text-xs text-muted-foreground">blocks relic assignment</span>
+              </div>
               <DroppableZone zoneId="zone:excluded" color={EXCLUDED_COLOR}>
                 {excludedEffects.length === 0 && excludedFamilies.length === 0 ? (
                   <p className="text-xs text-muted-foreground italic">
