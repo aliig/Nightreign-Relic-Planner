@@ -70,6 +70,11 @@ class VesselOptimizer:
                     candidates_per_free_slot, num_free, build, top_n, desired_cw,
                     desired_compat_effs)
 
+        # When solvers find no useful free-slot relics, still produce one
+        # result so pinned relics (if any) are represented.
+        if not raw_free:
+            raw_free = [[(None, 0)] * num_free]
+
         # Merge free-slot results back into full num_slots assignments
         raw: list[list] = []
         for free_assignment in raw_free:
@@ -80,6 +85,9 @@ class VesselOptimizer:
                 if slot_owner[i] is not None:
                     full[i] = (pinned_map[slot_owner[i]], 0)
             raw.append(full)
+
+        # Drop results where no relic was assigned at all
+        raw = [r for r in raw if any(relic is not None for relic, _ in r)]
 
         return [
             self._build_vessel_result(
@@ -278,7 +286,7 @@ class VesselOptimizer:
             if best_handle:
                 excluded.add(best_handle)
 
-        return results or [[(None, 0)] * num_slots]
+        return results
 
     def _greedy_solve_once(self, candidates_per_slot: list, num_slots: int,
                            build: BuildDefinition,
@@ -307,7 +315,7 @@ class VesselOptimizer:
                 if best is None or score > best[0]:
                     best = (score, relic)
 
-            if best is None:
+            if best is None or best[0] <= 0:
                 assigned[slot_idx] = (None, 0)
                 continue
 
@@ -377,6 +385,8 @@ class VesselOptimizer:
                     relic, build, v_eff, v_excl, v_no_stack_excl,
                     curse_counts, v_no_stack_compat, desired_cw,
                     v_desired_compat, desired_compat_effs)
+                if ctx_score <= 0:
+                    continue  # empty slot is at least as good
                 if score + ctx_score + remaining_max <= min_threshold:
                     continue  # actual-score prune
 
@@ -407,7 +417,8 @@ class VesselOptimizer:
 
         backtrack(0, [(None, 0)] * num_slots, set(), set(), set(), set(), set(), {},
                   set(), 0)
-        return [assignment for _, assignment in top] or [[(None, 0)] * num_slots]
+        valid = [(s, a) for s, a in top if any(r is not None for r, _ in a)]
+        return [assignment for _, assignment in valid]
 
     # ------------------------------------------------------------------
     # Pinned relic pre-assignment

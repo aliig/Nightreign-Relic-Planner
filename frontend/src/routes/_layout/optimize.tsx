@@ -296,9 +296,12 @@ function AuthOptimizeForm() {
   const [results, setResults] = useState<VesselResult[]>(() => resultCache.get(key) ?? [])
   const [isPending, setIsPending] = useState(false)
   const [progress, setProgress] = useState<OptimizeProgress | null>(null)
+  const [hasRun, setHasRun] = useState(() => resultCache.has(key))
 
   useEffect(() => {
-    setResults(resultCache.get(key) ?? [])
+    const cached = resultCache.get(key)
+    setResults(cached ?? [])
+    setHasRun(cached !== undefined)
   }, [key])
 
   const handleOptimize = async () => {
@@ -317,6 +320,7 @@ function AuthOptimizeForm() {
     } finally {
       setIsPending(false)
       setProgress(null)
+      setHasRun(true)
     }
   }
 
@@ -376,6 +380,12 @@ function AuthOptimizeForm() {
       {chars.length === 0 && (
         <p className="text-sm text-muted-foreground">
           No inventory found. <a href="/upload" className="underline">Upload a save file</a> first.
+        </p>
+      )}
+
+      {!isPending && hasRun && results.length === 0 && (
+        <p className="text-sm text-muted-foreground">
+          No matching relics found for this build. Check that your inventory has relics with the effects your build is looking for.
         </p>
       )}
 
@@ -449,9 +459,12 @@ function AnonOptimizeForm() {
   const [results, setResults] = useState<VesselResult[]>(() => resultCache.get(key) ?? [])
   const [isPending, setIsPending] = useState(false)
   const [progress, setProgress] = useState<OptimizeProgress | null>(null)
+  const [hasRun, setHasRun] = useState(() => resultCache.has(key))
 
   useEffect(() => {
-    setResults(resultCache.get(key) ?? [])
+    const cached = resultCache.get(key)
+    setResults(cached ?? [])
+    setHasRun(cached !== undefined)
   }, [key])
 
   const handleOptimize = async () => {
@@ -501,6 +514,7 @@ function AnonOptimizeForm() {
     } finally {
       setIsPending(false)
       setProgress(null)
+      setHasRun(true)
     }
   }
 
@@ -581,6 +595,12 @@ function AnonOptimizeForm() {
         </Link>{" "}
         to persist builds and inventory across devices.
       </p>
+
+      {!isPending && hasRun && results.length === 0 && (
+        <p className="text-sm text-muted-foreground">
+          No matching relics found for this build. Check that your inventory has relics with the effects your build is looking for.
+        </p>
+      )}
 
       {results.length > 0 && (
         <div className="space-y-3">

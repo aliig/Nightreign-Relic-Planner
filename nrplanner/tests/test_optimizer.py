@@ -88,17 +88,14 @@ class TestOptimizeAllVessels:
         assert hasattr(r, "meets_requirements")
         assert hasattr(r, "slot_colors")
 
-    def test_empty_inventory_no_crash(
+    def test_empty_inventory_returns_no_results(
         self, optimizer: VesselOptimizer
     ) -> None:
         build = _make_build()
         empty_inventory = RelicInventory.from_owned_relics([])
         results = optimizer.optimize_all_vessels(build, empty_inventory, 1)
         assert isinstance(results, list)
-        # All assignments should have no relic assigned
-        for result in results:
-            for assignment in result.assignments:
-                assert assignment.relic is None
+        assert len(results) == 0, "Empty inventory should produce no vessel results"
 
     def test_top_n_respected(
         self, optimizer: VesselOptimizer, small_inventory: RelicInventory
@@ -141,12 +138,14 @@ class TestOptimizeAllVessels:
             assert r.vessel_character == "All"
 
     def test_valid_hero_includes_character_specific_vessels(
-        self, optimizer: VesselOptimizer, small_inventory: RelicInventory
+        self, optimizer: VesselOptimizer, small_inventory: RelicInventory,
+        all_effects: list[dict]
     ) -> None:
         """A valid hero_type must return character-specific vessels, not only
         the shared 'All' vessels.  This catches the NPC-ID-vs-hero-index bug
         where passing e.g. 100000 instead of 1 produced only 'All' results."""
-        build = _make_build()
+        eff_id = all_effects[0]["id"]
+        build = _make_build(required=[eff_id])
         results = optimizer.optimize_all_vessels(build, small_inventory, 1)
         characters = {r.vessel_character for r in results}
         assert "Wylder" in characters, (
