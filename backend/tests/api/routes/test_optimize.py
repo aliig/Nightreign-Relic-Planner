@@ -14,7 +14,7 @@ _MINIMAL_BUILD = {
     "name": "Test Build",
     "character": "Wylder",
     "groups": [],
-    "required_effects": [],
+    "required_effects": [100],
     "required_families": [],
     "excluded_effects": [],
     "excluded_families": [],
@@ -27,11 +27,23 @@ _MINIMAL_RELIC = {
     "item_id": 100 + 2147483648,
     "real_id": 100,
     "color": "Red",
-    "effects": [EMPTY, EMPTY, EMPTY],
+    "effects": [100, EMPTY, EMPTY],
     "curses": [EMPTY, EMPTY, EMPTY],
     "is_deep": False,
     "name": "Test Relic",
     "tier": "Delicate",
+}
+
+_MINIMAL_RELIC_BLUE = {
+    **_MINIMAL_RELIC,
+    "ga_handle": 0xC0000002,
+    "color": "Blue",
+}
+
+_MINIMAL_RELIC_GREEN = {
+    **_MINIMAL_RELIC,
+    "ga_handle": 0xC0000003,
+    "color": "Green",
 }
 
 
@@ -130,7 +142,7 @@ class TestInlineMode:
             "/api/v1/optimize/",
             json={
                 "build": _MINIMAL_BUILD,
-                "relics": [_MINIMAL_RELIC],
+                "relics": [_MINIMAL_RELIC, _MINIMAL_RELIC_BLUE, _MINIMAL_RELIC_GREEN],
                 "top_n": 50,
             },
         )
