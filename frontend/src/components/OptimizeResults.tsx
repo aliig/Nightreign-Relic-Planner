@@ -1,5 +1,12 @@
+import {
+  CheckCircle2,
+  ChevronDown,
+  ChevronUp,
+  Pin,
+  Trophy,
+  XCircle,
+} from "lucide-react"
 import { useState } from "react"
-import { ChevronDown, ChevronUp, CheckCircle2, XCircle, Trophy, Pin } from "lucide-react"
 
 import type { VesselResult } from "@/client"
 import { COLOR_HEX, RelicNameCell } from "@/components/RelicDisplay"
@@ -19,7 +26,9 @@ export interface OptimizeProgress {
 
 // --- Helpers ---
 
-export function getBreakdownColor(b: Record<string, unknown>): string | undefined {
+export function getBreakdownColor(
+  b: Record<string, unknown>,
+): string | undefined {
   const category = b.category as string | null
   if (!category || category === "excluded") return undefined
   if (category === "required") return "#FF8C00"
@@ -35,7 +44,9 @@ export function getBreakdownColor(b: Record<string, unknown>): string | undefine
 
 export const resultCache = new Map<string, VesselResult[]>()
 
-export function cacheKey(...parts: (string | number | null | undefined)[]): string {
+export function cacheKey(
+  ...parts: (string | number | null | undefined)[]
+): string {
   return parts.map((p) => String(p ?? "")).join(":")
 }
 
@@ -47,7 +58,8 @@ export async function runOptimizeStream(
 ): Promise<VesselResult[]> {
   const token = localStorage.getItem("access_token")
   const headers: HeadersInit = { "Content-Type": "application/json" }
-  if (token) (headers as Record<string, string>)["Authorization"] = `Bearer ${token}`
+  if (token)
+    (headers as Record<string, string>).Authorization = `Bearer ${token}`
 
   const response = await fetch("/api/v1/optimize/stream", {
     method: "POST",
@@ -56,7 +68,9 @@ export async function runOptimizeStream(
   })
 
   if (!response.ok) {
-    const err = await response.json().catch(() => ({ detail: "Optimization failed" }))
+    const err = await response
+      .json()
+      .catch(() => ({ detail: "Optimization failed" }))
     throw new Error(err.detail ?? "Optimization failed")
   }
 
@@ -79,7 +93,11 @@ export async function runOptimizeStream(
       const payload = JSON.parse(dataLine.slice(6))
 
       if (payload.type === "progress") {
-        onProgress({ vessel: payload.vessel, total: payload.total, name: payload.name })
+        onProgress({
+          vessel: payload.vessel,
+          total: payload.total,
+          name: payload.name,
+        })
       } else if (payload.type === "result") {
         return payload.data as VesselResult[]
       } else if (payload.type === "error") {
@@ -93,13 +111,23 @@ export async function runOptimizeStream(
 
 // --- Components ---
 
-export function SlotCard({ slot, isPinned = false }: { slot: SlotAssignment; isPinned?: boolean }) {
+export function SlotCard({
+  slot,
+  isPinned = false,
+}: {
+  slot: SlotAssignment
+  isPinned?: boolean
+}) {
   const relic = slot.relic
-  const effects = slot.breakdown?.filter((b: Record<string, unknown>) => !b.is_curse) ?? []
-  const curses = slot.breakdown?.filter((b: Record<string, unknown>) => b.is_curse) ?? []
+  const effects =
+    slot.breakdown?.filter((b: Record<string, unknown>) => !b.is_curse) ?? []
+  const curses =
+    slot.breakdown?.filter((b: Record<string, unknown>) => b.is_curse) ?? []
 
   return (
-    <div className={`rounded-md border p-3 space-y-1.5${isPinned ? " border-primary/40 bg-primary/5" : ""}`}>
+    <div
+      className={`rounded-md border p-3 space-y-1.5${isPinned ? " border-primary/40 bg-primary/5" : ""}`}
+    >
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <span
@@ -117,7 +145,9 @@ export function SlotCard({ slot, isPinned = false }: { slot: SlotAssignment; isP
               <Pin className="h-3 w-3 text-primary shrink-0" />
             </span>
           )}
-          <span className="text-xs font-mono font-semibold">{slot.score} pts</span>
+          <span className="text-xs font-mono font-semibold">
+            {slot.score} pts
+          </span>
         </div>
       </div>
       {relic ? (
@@ -131,7 +161,10 @@ export function SlotCard({ slot, isPinned = false }: { slot: SlotAssignment; isP
           {effects.length > 0 && (
             <div className="space-y-0.5 mt-1">
               {effects.map((b: Record<string, unknown>, i: number) => (
-                <div key={i} className="flex items-center justify-between text-xs">
+                <div
+                  key={i}
+                  className="flex items-center justify-between text-xs"
+                >
                   <span
                     className="truncate"
                     style={{ color: getBreakdownColor(b) }}
@@ -140,7 +173,8 @@ export function SlotCard({ slot, isPinned = false }: { slot: SlotAssignment; isP
                     {b.redundant ? " (redundant)" : ""}
                   </span>
                   <span className="font-mono ml-2 shrink-0">
-                    {(b.score as number) >= 0 ? "+" : ""}{b.score as number}
+                    {(b.score as number) >= 0 ? "+" : ""}
+                    {b.score as number}
                   </span>
                 </div>
               ))}
@@ -150,13 +184,17 @@ export function SlotCard({ slot, isPinned = false }: { slot: SlotAssignment; isP
             <div className="mt-1.5 pt-1.5 border-t border-destructive/20">
               <div className="space-y-0.5">
                 {curses.map((b: Record<string, unknown>, i: number) => (
-                  <div key={i} className="flex items-center justify-between text-xs">
+                  <div
+                    key={i}
+                    className="flex items-center justify-between text-xs"
+                  >
                     <span className="truncate text-destructive/80">
                       {b.name as string}
                       {b.redundant ? " (redundant)" : ""}
                     </span>
                     <span className="font-mono ml-2 shrink-0 text-destructive/80">
-                      {(b.score as number) >= 0 ? "+" : ""}{b.score as number}
+                      {(b.score as number) >= 0 ? "+" : ""}
+                      {b.score as number}
                     </span>
                   </div>
                 ))}
@@ -165,7 +203,9 @@ export function SlotCard({ slot, isPinned = false }: { slot: SlotAssignment; isP
           )}
         </>
       ) : (
-        <p className="text-xs text-muted-foreground italic">No relic assigned</p>
+        <p className="text-xs text-muted-foreground italic">
+          No relic assigned
+        </p>
       )}
     </div>
   )
@@ -188,7 +228,11 @@ export function VesselCard({
 
   return (
     <Card
-      className={highlighted ? "ring-2 ring-primary/40 shadow-lg border-primary/30" : undefined}
+      className={
+        highlighted
+          ? "ring-2 ring-primary/40 shadow-lg border-primary/30"
+          : undefined
+      }
     >
       <CardHeader
         className="cursor-pointer pb-3"
@@ -213,7 +257,9 @@ export function VesselCard({
             )}
           </div>
         </div>
-        <p className="text-xs text-muted-foreground">{vessel.vessel_character}</p>
+        <p className="text-xs text-muted-foreground">
+          {vessel.vessel_character}
+        </p>
       </CardHeader>
       {expanded && (
         <CardContent className="pt-0">
@@ -223,22 +269,26 @@ export function VesselCard({
               <SlotCard
                 key={slot.slot_index}
                 slot={slot}
-                isPinned={slot.relic != null && pinnedHandles.has((slot.relic as any).ga_handle)}
+                isPinned={
+                  slot.relic != null &&
+                  pinnedHandles.has((slot.relic as any).ga_handle)
+                }
               />
             ))}
           </div>
-          {!vessel.meets_requirements && vessel.missing_requirements?.length > 0 && (
-            <p className="text-xs text-destructive mt-3">
-              Missing required effects:{" "}
-              {vessel.missing_requirements
-                .map((m) =>
-                  typeof m === "number"
-                    ? (effectMap.get(m) ?? `Effect ${m}`)
-                    : m,
-                )
-                .join(", ")}
-            </p>
-          )}
+          {!vessel.meets_requirements &&
+            vessel.missing_requirements?.length > 0 && (
+              <p className="text-xs text-destructive mt-3">
+                Missing required effects:{" "}
+                {vessel.missing_requirements
+                  .map((m) =>
+                    typeof m === "number"
+                      ? (effectMap.get(m) ?? `Effect ${m}`)
+                      : m,
+                  )
+                  .join(", ")}
+              </p>
+            )}
         </CardContent>
       )}
     </Card>

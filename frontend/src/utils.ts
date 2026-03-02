@@ -21,7 +21,9 @@ export const handleError = function (
   this(errorMessage)
 }
 
-export function formatRelativeTime(isoString: string | null | undefined): string {
+export function formatRelativeTime(
+  isoString: string | null | undefined,
+): string {
   if (!isoString) return "unknown"
   const date = new Date(isoString)
   const diffMs = Date.now() - date.getTime()

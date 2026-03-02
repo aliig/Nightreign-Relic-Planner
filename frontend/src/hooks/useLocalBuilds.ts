@@ -45,7 +45,10 @@ export interface LocalBuild {
 // ---------------------------------------------------------------------------
 
 const _LEGACY_WEIGHTS: Record<string, number> = {
-  preferred: 50, nice_to_have: 25, bonus: 10, avoid: -20,
+  preferred: 50,
+  nice_to_have: 25,
+  bonus: 10,
+  avoid: -20,
 }
 
 function _migrateFromLegacy(build: Record<string, unknown>): LocalBuild {
@@ -58,7 +61,11 @@ function _migrateFromLegacy(build: Record<string, unknown>): LocalBuild {
     const effs = tiers[key] ?? []
     const fams = familyTiers[key] ?? []
     if (effs.length > 0 || fams.length > 0) {
-      groups.push({ weight: tierWeights[key] ?? defaultWeight, effects: effs, families: fams })
+      groups.push({
+        weight: tierWeights[key] ?? defaultWeight,
+        effects: effs,
+        families: fams,
+      })
     }
   }
 
@@ -66,7 +73,8 @@ function _migrateFromLegacy(build: Record<string, unknown>): LocalBuild {
     id: build.id as string,
     name: build.name as string,
     character: build.character as string,
-    groups: groups.length > 0 ? groups : [...DEFAULT_GROUPS.map(g => ({ ...g }))],
+    groups:
+      groups.length > 0 ? groups : [...DEFAULT_GROUPS.map((g) => ({ ...g }))],
     required_effects: (tiers.required ?? []) as number[],
     required_families: (familyTiers.required ?? []) as string[],
     excluded_effects: (tiers.blacklist ?? []) as number[],
@@ -74,7 +82,8 @@ function _migrateFromLegacy(build: Record<string, unknown>): LocalBuild {
     include_deep: (build.include_deep as boolean) ?? false,
     curse_max: (build.curse_max as number) ?? 1,
     pinned_relics: (build.pinned_relics as number[]) ?? [],
-    excluded_stacking_categories: (build.excluded_stacking_categories as number[]) ?? [],
+    excluded_stacking_categories:
+      (build.excluded_stacking_categories as number[]) ?? [],
     created_at: build.created_at as string,
     updated_at: build.updated_at as string,
   }
@@ -110,7 +119,7 @@ export function useLocalBuilds() {
       id: crypto.randomUUID(),
       name: data.name,
       character: data.character,
-      groups: DEFAULT_GROUPS.map(g => ({ ...g })),
+      groups: DEFAULT_GROUPS.map((g) => ({ ...g })),
       required_effects: [],
       required_families: [],
       excluded_effects: [],
@@ -127,9 +136,14 @@ export function useLocalBuilds() {
     return newBuild
   }
 
-  function update(id: string, patch: Partial<Omit<LocalBuild, "id" | "created_at">>): void {
+  function update(
+    id: string,
+    patch: Partial<Omit<LocalBuild, "id" | "created_at">>,
+  ): void {
     const next = builds.map((b) =>
-      b.id === id ? { ...b, ...patch, updated_at: new Date().toISOString() } : b,
+      b.id === id
+        ? { ...b, ...patch, updated_at: new Date().toISOString() }
+        : b,
     )
     setBuilds(next)
     saveToStorage(next)
@@ -162,7 +176,9 @@ export function useLocalBuilds() {
     return copy
   }
 
-  function createFull(data: Omit<LocalBuild, "id" | "created_at" | "updated_at">): LocalBuild {
+  function createFull(
+    data: Omit<LocalBuild, "id" | "created_at" | "updated_at">,
+  ): LocalBuild {
     const now = new Date().toISOString()
     const newBuild: LocalBuild = {
       ...data,
@@ -194,7 +210,9 @@ export async function migrateLocalBuildsToDb(): Promise<number> {
         requestBody: { name: build.name, character: build.character },
       })
       const hasCustomSettings =
-        (build.groups ?? []).some((g) => g.effects.length > 0 || g.families.length > 0) ||
+        (build.groups ?? []).some(
+          (g) => g.effects.length > 0 || g.families.length > 0,
+        ) ||
         (build.required_effects ?? []).length > 0 ||
         (build.excluded_effects ?? []).length > 0 ||
         (build.excluded_stacking_categories ?? []).length > 0 ||

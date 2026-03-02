@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query"
-import { SavesService, type SaveStatusPublic } from "@/client"
+import { type SaveStatusPublic, SavesService } from "@/client"
 import { isLoggedIn } from "@/hooks/useAuth"
 
 const ANON_UPLOAD_KEY = "anon_upload_meta"
@@ -26,7 +26,11 @@ export function getAnonUploadMeta(): AnonSaveStatus | null {
 
 export type SaveStatusResult =
   | { status: SaveStatusPublic | null; isLoading: boolean; isAnon: false }
-  | { status: (AnonSaveStatus & { id: "anon" }) | null; isLoading: false; isAnon: true }
+  | {
+      status: (AnonSaveStatus & { id: "anon" }) | null
+      isLoading: false
+      isAnon: true
+    }
 
 export function useSaveStatus(): SaveStatusResult {
   const loggedIn = isLoggedIn()

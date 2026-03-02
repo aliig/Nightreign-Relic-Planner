@@ -1,17 +1,16 @@
-import { createFileRoute, Link, useParams } from "@tanstack/react-router"
 import { useSuspenseQuery } from "@tanstack/react-query"
+import { createFileRoute, Link, useParams } from "@tanstack/react-router"
 import { Suspense, useEffect, useMemo, useState } from "react"
-
-import { BuildsService, GameService, SavesService } from "@/client"
 import type { VesselResult } from "@/client"
-import { buildEffectMap } from "@/components/RelicDisplay"
+import { BuildsService, GameService, SavesService } from "@/client"
 import {
-  VesselCard,
-  runOptimizeStream,
-  resultCache,
   cacheKey,
   type OptimizeProgress,
+  resultCache,
+  runOptimizeStream,
+  VesselCard,
 } from "@/components/OptimizeResults"
+import { buildEffectMap } from "@/components/RelicDisplay"
 import { Button } from "@/components/ui/button"
 import { Progress } from "@/components/ui/progress"
 import {
@@ -23,9 +22,9 @@ import {
 } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 import { isLoggedIn } from "@/hooks/useAuth"
-import { useLocalBuilds } from "@/hooks/useLocalBuilds"
 import useCustomToast from "@/hooks/useCustomToast"
-import { useSaveStatus, getAnonUploadMeta } from "@/hooks/useSaveStatus"
+import { useLocalBuilds } from "@/hooks/useLocalBuilds"
+import { getAnonUploadMeta, useSaveStatus } from "@/hooks/useSaveStatus"
 
 export const Route = createFileRoute("/_layout/builds/$buildId/optimize")({
   component: BuildOptimizePage,
@@ -52,7 +51,10 @@ function AuthOptimizeForm({ buildId }: { buildId: string }) {
     staleTime: Infinity,
   })
   const { status: saveStatus } = useSaveStatus()
-  const effectMap = useMemo(() => buildEffectMap((effectsData ?? []) as unknown[]), [effectsData])
+  const effectMap = useMemo(
+    () => buildEffectMap((effectsData ?? []) as unknown[]),
+    [effectsData],
+  )
 
   const selectedBuild = buildRaw as any
   const chars = charsData?.data ?? []
@@ -60,9 +62,17 @@ function AuthOptimizeForm({ buildId }: { buildId: string }) {
   const [characterId, setCharacterId] = useState(chars[0]?.id ?? "")
 
   const pinnedHandles = new Set<number>(selectedBuild?.pinned_relics ?? [])
-  const key = cacheKey("auth", buildId, selectedBuild?.updated_at, characterId, saveStatus?.uploaded_at)
+  const key = cacheKey(
+    "auth",
+    buildId,
+    selectedBuild?.updated_at,
+    characterId,
+    saveStatus?.uploaded_at,
+  )
 
-  const [results, setResults] = useState<VesselResult[]>(() => resultCache.get(key) ?? [])
+  const [results, setResults] = useState<VesselResult[]>(
+    () => resultCache.get(key) ?? [],
+  )
   const [isPending, setIsPending] = useState(false)
   const [progress, setProgress] = useState<OptimizeProgress | null>(null)
   const [hasRun, setHasRun] = useState(() => resultCache.has(key))
@@ -104,15 +114,14 @@ function AuthOptimizeForm({ buildId }: { buildId: string }) {
             </SelectTrigger>
             <SelectContent>
               {chars.map((c) => (
-                <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                <SelectItem key={c.id} value={c.id}>
+                  {c.name}
+                </SelectItem>
               ))}
             </SelectContent>
           </Select>
         </div>
-        <Button
-          onClick={handleOptimize}
-          disabled={!characterId || isPending}
-        >
+        <Button onClick={handleOptimize} disabled={!characterId || isPending}>
           {isPending ? "Optimizing…" : "Optimize"}
         </Button>
       </div>
@@ -124,19 +133,26 @@ function AuthOptimizeForm({ buildId }: { buildId: string }) {
               ? `Optimized ${progress.vessel} of ${progress.total} vessels (${progress.name})…`
               : "Starting…"}
           </p>
-          <Progress value={progress ? (progress.vessel / progress.total) * 100 : 0} />
+          <Progress
+            value={progress ? (progress.vessel / progress.total) * 100 : 0}
+          />
         </div>
       )}
 
       {chars.length === 0 && (
         <p className="text-sm text-muted-foreground">
-          No inventory found. <Link to="/upload" className="underline">Upload a save file</Link> first.
+          No inventory found.{" "}
+          <Link to="/upload" className="underline">
+            Upload a save file
+          </Link>{" "}
+          first.
         </p>
       )}
 
       {!isPending && hasRun && results.length === 0 && (
         <p className="text-sm text-muted-foreground">
-          No matching relics found for this build. Check that your inventory has relics with the effects your build is looking for.
+          No matching relics found for this build. Check that your inventory has
+          relics with the effects your build is looking for.
         </p>
       )}
 
@@ -177,35 +193,52 @@ function AnonOptimizeForm({ buildId }: { buildId: string }) {
     queryFn: () => GameService.getEffects(),
     staleTime: Infinity,
   })
-  const effectMap = useMemo(() => buildEffectMap((effectsData ?? []) as unknown[]), [effectsData])
+  const effectMap = useMemo(
+    () => buildEffectMap((effectsData ?? []) as unknown[]),
+    [effectsData],
+  )
   const anonMeta = getAnonUploadMeta()
 
   const allChars: SessionCharacter[] = JSON.parse(
-    sessionStorage.getItem("parsedCharacters") ?? "[]"
+    sessionStorage.getItem("parsedCharacters") ?? "[]",
   )
 
   const defaultSlot = (() => {
     try {
-      const c = JSON.parse(sessionStorage.getItem("selectedCharacter") ?? "null")
+      const c = JSON.parse(
+        sessionStorage.getItem("selectedCharacter") ?? "null",
+      )
       return c?.slot_index ?? allChars[0]?.slot_index ?? null
-    } catch { return allChars[0]?.slot_index ?? null }
+    } catch {
+      return allChars[0]?.slot_index ?? null
+    }
   })()
 
   const [selectedSlot, setSelectedSlot] = useState<number | null>(defaultSlot)
-  const char = allChars.find((c) => c.slot_index === selectedSlot) ?? allChars[0] ?? null
+  const char =
+    allChars.find((c) => c.slot_index === selectedSlot) ?? allChars[0] ?? null
 
   const handleCharChange = (slotStr: string) => {
     const slot = Number(slotStr)
     setSelectedSlot(slot)
     const picked = allChars.find((c) => c.slot_index === slot)
-    if (picked) sessionStorage.setItem("selectedCharacter", JSON.stringify(picked))
+    if (picked)
+      sessionStorage.setItem("selectedCharacter", JSON.stringify(picked))
   }
 
   const build = getById(buildId)
   const pinnedHandles = new Set<number>(build?.pinned_relics ?? [])
-  const key = cacheKey("anon", buildId, build?.updated_at, selectedSlot, anonMeta?.uploaded_at)
+  const key = cacheKey(
+    "anon",
+    buildId,
+    build?.updated_at,
+    selectedSlot,
+    anonMeta?.uploaded_at,
+  )
 
-  const [results, setResults] = useState<VesselResult[]>(() => resultCache.get(key) ?? [])
+  const [results, setResults] = useState<VesselResult[]>(
+    () => resultCache.get(key) ?? [],
+  )
   const [isPending, setIsPending] = useState(false)
   const [progress, setProgress] = useState<OptimizeProgress | null>(null)
   const [hasRun, setHasRun] = useState(() => resultCache.has(key))
@@ -270,7 +303,10 @@ function AnonOptimizeForm({ buildId }: { buildId: string }) {
     return (
       <p className="text-sm text-muted-foreground py-8">
         No inventory loaded.{" "}
-        <Link to="/upload" className="underline">Upload a save file</Link> first.
+        <Link to="/upload" className="underline">
+          Upload a save file
+        </Link>{" "}
+        first.
       </p>
     )
   }
@@ -278,7 +314,8 @@ function AnonOptimizeForm({ buildId }: { buildId: string }) {
   if (!build) {
     return (
       <p className="text-sm text-muted-foreground py-8">
-        Build not found. It may have been deleted or stored in a different browser.
+        Build not found. It may have been deleted or stored in a different
+        browser.
       </p>
     )
   }
@@ -289,7 +326,10 @@ function AnonOptimizeForm({ buildId }: { buildId: string }) {
         {allChars.length > 1 && (
           <div className="space-y-1.5">
             <label className="text-sm font-medium">Character</label>
-            <Select value={String(char?.slot_index ?? "")} onValueChange={handleCharChange}>
+            <Select
+              value={String(char?.slot_index ?? "")}
+              onValueChange={handleCharChange}
+            >
               <SelectTrigger className="w-56">
                 <SelectValue placeholder="Select character" />
               </SelectTrigger>
@@ -303,10 +343,7 @@ function AnonOptimizeForm({ buildId }: { buildId: string }) {
             </Select>
           </div>
         )}
-        <Button
-          onClick={handleOptimize}
-          disabled={isPending}
-        >
+        <Button onClick={handleOptimize} disabled={isPending}>
           {isPending ? "Optimizing…" : "Optimize"}
         </Button>
       </div>
@@ -318,13 +355,19 @@ function AnonOptimizeForm({ buildId }: { buildId: string }) {
               ? `Optimized ${progress.vessel} of ${progress.total} vessels (${progress.name})…`
               : "Starting…"}
           </p>
-          <Progress value={progress ? (progress.vessel / progress.total) * 100 : 0} />
+          <Progress
+            value={progress ? (progress.vessel / progress.total) * 100 : 0}
+          />
         </div>
       )}
 
       <p className="text-xs text-muted-foreground border rounded-md px-3 py-2 bg-muted/40">
         Running in session mode with data from your uploaded save.{" "}
-        <Link to="/login" search={{ redirect: `/builds/${buildId}/optimize` }} className="underline">
+        <Link
+          to="/login"
+          search={{ redirect: `/builds/${buildId}/optimize` }}
+          className="underline"
+        >
           Sign in
         </Link>{" "}
         to persist builds and inventory across devices.
@@ -332,7 +375,8 @@ function AnonOptimizeForm({ buildId }: { buildId: string }) {
 
       {!isPending && hasRun && results.length === 0 && (
         <p className="text-sm text-muted-foreground">
-          No matching relics found for this build. Check that your inventory has relics with the effects your build is looking for.
+          No matching relics found for this build. Check that your inventory has
+          relics with the effects your build is looking for.
         </p>
       )}
 
@@ -364,7 +408,11 @@ function BuildOptimizePage() {
 
   return (
     <Suspense fallback={<Skeleton className="h-32 w-full" />}>
-      {isLoggedIn() ? <AuthOptimizeForm buildId={buildId} /> : <AnonOptimizeForm buildId={buildId} />}
+      {isLoggedIn() ? (
+        <AuthOptimizeForm buildId={buildId} />
+      ) : (
+        <AnonOptimizeForm buildId={buildId} />
+      )}
     </Suspense>
   )
 }

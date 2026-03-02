@@ -1,5 +1,5 @@
-import { createFileRoute, Link, useNavigate } from "@tanstack/react-router"
 import { useSuspenseQuery } from "@tanstack/react-query"
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router"
 import { Suspense, useEffect } from "react"
 
 import { BuildsService } from "@/client"
@@ -26,8 +26,10 @@ function AuthRedirect() {
   useEffect(() => {
     if (builds.length > 0) {
       // Pick the most recently updated build
-      const sorted = [...builds].sort((a, b) =>
-        new Date(b.updated_at ?? 0).getTime() - new Date(a.updated_at ?? 0).getTime(),
+      const sorted = [...builds].sort(
+        (a, b) =>
+          new Date(b.updated_at ?? 0).getTime() -
+          new Date(a.updated_at ?? 0).getTime(),
       )
       navigate({
         to: "/builds/$buildId/optimize",
@@ -41,8 +43,10 @@ function AuthRedirect() {
     return (
       <p className="text-sm text-muted-foreground py-8">
         No builds found.{" "}
-        <Link to="/builds" className="underline">Create a build</Link> first,
-        then use the Optimize tab on the build page.
+        <Link to="/builds" className="underline">
+          Create a build
+        </Link>{" "}
+        first, then use the Optimize tab on the build page.
       </p>
     )
   }
@@ -56,8 +60,10 @@ function AnonRedirect() {
 
   useEffect(() => {
     if (builds.length > 0) {
-      const sorted = [...builds].sort((a, b) =>
-        new Date(b.updated_at ?? 0).getTime() - new Date(a.updated_at ?? 0).getTime(),
+      const sorted = [...builds].sort(
+        (a, b) =>
+          new Date(b.updated_at ?? 0).getTime() -
+          new Date(a.updated_at ?? 0).getTime(),
       )
       navigate({
         to: "/builds/$buildId/optimize",
@@ -71,8 +77,10 @@ function AnonRedirect() {
     return (
       <p className="text-sm text-muted-foreground py-8">
         No builds found.{" "}
-        <Link to="/builds" className="underline">Create a build</Link> first,
-        then use the Optimize tab on the build page.
+        <Link to="/builds" className="underline">
+          Create a build
+        </Link>{" "}
+        first, then use the Optimize tab on the build page.
       </p>
     )
   }

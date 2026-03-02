@@ -22,8 +22,8 @@ export function buildEffectMap(effectsData: unknown[]): Map<number, string> {
     const e = raw as Record<string, unknown>
     if (typeof e.id === "number" && typeof e.name === "string") {
       m.set(e.id, e.name)
-      if (Array.isArray(e["alias_ids"])) {
-        for (const aliasId of e["alias_ids"] as unknown[]) {
+      if (Array.isArray(e.alias_ids)) {
+        for (const aliasId of e.alias_ids as unknown[]) {
           if (typeof aliasId === "number") m.set(aliasId, e.name)
         }
       }

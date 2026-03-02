@@ -33,9 +33,13 @@ function UserSettings() {
   if (!currentUser) {
     return (
       <div className="py-16 text-center space-y-3">
-        <p className="text-muted-foreground">Sign in to manage your account settings.</p>
+        <p className="text-muted-foreground">
+          Sign in to manage your account settings.
+        </p>
         <Button asChild variant="outline">
-          <Link to="/login" search={{ redirect: "/settings" }}>Sign In</Link>
+          <Link to="/login" search={{ redirect: "/settings" }}>
+            Sign In
+          </Link>
         </Button>
       </div>
     )

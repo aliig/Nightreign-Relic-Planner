@@ -12,7 +12,7 @@
  * The component itself (UploadPage) is not exported, but createFileRoute is
  * mocked to return its config object, so Route.component gives us UploadPage.
  */
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 // ── mocks (must be declared before the import under test) ──────────────────
@@ -120,7 +120,8 @@ describe("UploadPage — rendering", () => {
 describe("UploadPage — file validation", () => {
   it("rejects files with invalid extension and shows error toast", () => {
     renderUpload()
-    const input = document.querySelector<HTMLInputElement>("input[type='file']")!
+    const input =
+      document.querySelector<HTMLInputElement>("input[type='file']")!
     fireEvent.change(input, {
       target: { files: [makeFile("save.txt")] },
     })
@@ -132,7 +133,8 @@ describe("UploadPage — file validation", () => {
 
   it("accepts .sl2 files and calls mutate", () => {
     renderUpload()
-    const input = document.querySelector<HTMLInputElement>("input[type='file']")!
+    const input =
+      document.querySelector<HTMLInputElement>("input[type='file']")!
     fireEvent.change(input, {
       target: { files: [makeFile("NR0000.sl2")] },
     })
@@ -142,7 +144,8 @@ describe("UploadPage — file validation", () => {
 
   it("accepts .dat files and calls mutate", () => {
     renderUpload()
-    const input = document.querySelector<HTMLInputElement>("input[type='file']")!
+    const input =
+      document.querySelector<HTMLInputElement>("input[type='file']")!
     fireEvent.change(input, {
       target: { files: [makeFile("memory.dat")] },
     })
@@ -199,10 +202,12 @@ describe("UploadPage — success state with uploadResult", () => {
     // We need to trigger the onSuccess callback that useMutation uses.
     // Since useMutation is mocked, we patch mutate to directly set state.
     // The cleanest way: provide the actual onSuccess via a custom mutate mock.
-    let capturedOnSuccess: ((data: typeof fakeResult) => void) | undefined
+    let _capturedOnSuccess: ((data: typeof fakeResult) => void) | undefined
 
     // Re-mock useMutation for this test to capture the onSuccess callback
-    const { QueryClient, QueryClientProvider } = await import("@tanstack/react-query")
+    const { QueryClient, QueryClientProvider } = await import(
+      "@tanstack/react-query"
+    )
 
     // Unmock react-query temporarily and use real implementation with a mock API
     // Instead, simulate by rendering with mutation already succeeded by directly
@@ -211,16 +216,19 @@ describe("UploadPage — success state with uploadResult", () => {
 
     // Strategy: mock mutate to invoke onSuccess immediately
     mockMutationState = {
-      mutate: vi.fn((file, opts?: { onSuccess?: (data: typeof fakeResult) => void }) => {
-        opts?.onSuccess?.(fakeResult)
-      }) as unknown as typeof mockMutate,
+      mutate: vi.fn(
+        (_file, opts?: { onSuccess?: (data: typeof fakeResult) => void }) => {
+          opts?.onSuccess?.(fakeResult)
+        },
+      ) as unknown as typeof mockMutate,
       isPending: false,
       isError: false,
       error: null,
     }
 
     renderUpload()
-    const input = document.querySelector<HTMLInputElement>("input[type='file']")!
+    const input =
+      document.querySelector<HTMLInputElement>("input[type='file']")!
     fireEvent.change(input, {
       target: { files: [makeFile("NR0000.sl2")] },
     })

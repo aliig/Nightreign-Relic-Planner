@@ -1,34 +1,72 @@
-import { createFileRoute, useParams } from "@tanstack/react-router"
-import { useMutation, useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query"
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { X, Search, Pin, Plus, Trash2 } from "lucide-react"
 import {
   DndContext,
-  DragEndEvent,
+  type DragEndEvent,
   DragOverlay,
-  DragStartEvent,
+  type DragStartEvent,
   PointerSensor,
   useDraggable,
   useDroppable,
   useSensor,
   useSensors,
 } from "@dnd-kit/core"
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+  useSuspenseQuery,
+} from "@tanstack/react-query"
+import { createFileRoute, useParams } from "@tanstack/react-router"
+import { Pin, Plus, Search, Trash2, X } from "lucide-react"
+import {
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react"
 
-import { BuildsService, GameService, SavesService, type ParsedRelicData } from "@/client"
+import {
+  BuildsService,
+  GameService,
+  type ParsedRelicData,
+  SavesService,
+} from "@/client"
+import {
+  buildEffectMap,
+  DEEP_COLOR,
+  EffectList,
+  EMPTY_EFFECT,
+} from "@/components/RelicDisplay"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Skeleton } from "@/components/ui/skeleton"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { Separator } from "@/components/ui/separator"
-import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip"
-import { buildEffectMap, DEEP_COLOR, EffectList, EMPTY_EFFECT } from "@/components/RelicDisplay"
-import { cn } from "@/lib/utils"
+import { Skeleton } from "@/components/ui/skeleton"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import { isLoggedIn } from "@/hooks/useAuth"
-import { useLocalBuilds, type WeightGroup } from "@/hooks/useLocalBuilds"
 import useCustomToast from "@/hooks/useCustomToast"
+import { useLocalBuilds, type WeightGroup } from "@/hooks/useLocalBuilds"
+import { cn } from "@/lib/utils"
 import { handleError } from "@/utils"
 
 export const Route = createFileRoute("/_layout/builds/$buildId/edit")({
@@ -42,7 +80,13 @@ export const Route = createFileRoute("/_layout/builds/$buildId/edit")({
 // Types
 // ---------------------------------------------------------------------------
 
-type EffectMeta = { id: number; name: string; family?: string; is_debuff?: boolean; source?: string | null }
+type EffectMeta = {
+  id: number
+  name: string
+  family?: string
+  is_debuff?: boolean
+  source?: string | null
+}
 type FamilyMeta = { name: string; member_names: string[]; member_ids: number[] }
 type RelicForPicker = {
   ga_handle: number
@@ -81,7 +125,11 @@ type BuildApiData = {
 // ---------------------------------------------------------------------------
 
 const COLOR_HEX: Record<string, string> = {
-  Red: "#FF4444", Blue: "#4488FF", Yellow: "#B8860B", Green: "#44BB44", White: "#AAAAAA",
+  Red: "#FF4444",
+  Blue: "#4488FF",
+  Yellow: "#B8860B",
+  Green: "#44BB44",
+  White: "#AAAAAA",
 }
 
 const DEFAULT_GROUPS: WeightGroup[] = [
@@ -96,7 +144,12 @@ const EXCLUDED_COLOR = "#CC4444"
 
 /** Weight input that buffers keystrokes locally and only commits on blur/Enter,
  *  so the sort order doesn't jump around while the user is typing. */
-function WeightInput({ value, onChange, className, title }: {
+function WeightInput({
+  value,
+  onChange,
+  className,
+  title,
+}: {
   value: number
   onChange: (v: number) => void
   className?: string
@@ -130,7 +183,11 @@ function WeightInput({ value, onChange, className, title }: {
       value={draft}
       onChange={(e) => setDraft(e.target.value)}
       onBlur={commit}
-      onKeyDown={(e) => { if (e.key === "Enter") { e.currentTarget.blur() } }}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          e.currentTarget.blur()
+        }
+      }}
       className={className}
       title={title}
     />
@@ -151,13 +208,21 @@ function getLabelForWeight(weight: number): { label: string; color: string } {
 // ---------------------------------------------------------------------------
 
 function DraggableChip({
-  dragId, name, color, dragData, onRemove,
+  dragId,
+  name,
+  color,
+  dragData,
+  onRemove,
 }: {
-  dragId: string; name: string; color: string
-  dragData: DragData; onRemove: () => void
+  dragId: string
+  name: string
+  color: string
+  dragData: DragData
+  onRemove: () => void
 }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
-    id: dragId, data: dragData,
+    id: dragId,
+    data: dragData,
   })
   return (
     <span
@@ -165,7 +230,13 @@ function DraggableChip({
       {...listeners}
       {...attributes}
       className="inline-flex items-center gap-1 rounded-none px-2.5 py-0.5 text-xs font-medium border cursor-grab active:cursor-grabbing tracking-wide"
-      style={{ borderColor: color, color, opacity: isDragging ? 0.3 : 1, backgroundColor: `${color}10`, boxShadow: `inset 0 0 10px ${color}05` }}
+      style={{
+        borderColor: color,
+        color,
+        opacity: isDragging ? 0.3 : 1,
+        backgroundColor: `${color}10`,
+        boxShadow: `inset 0 0 10px ${color}05`,
+      }}
     >
       {name}
       <button
@@ -182,15 +253,25 @@ function DraggableChip({
 }
 
 function DroppableZone({
-  zoneId, color, children, className,
+  zoneId,
+  color,
+  children,
+  className,
 }: {
-  zoneId: string; color: string; children: React.ReactNode; className?: string
+  zoneId: string
+  color: string
+  children: React.ReactNode
+  className?: string
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: zoneId })
   return (
     <div
       ref={setNodeRef}
-      className={cn("rounded-none border border-border/60 p-3 transition-all duration-300 shadow-[inset_0_4px_12px_rgba(0,0,0,0.3)] bg-black/20", isOver && "bg-muted/40 shadow-[inset_0_4px_20px_rgba(0,0,0,0.5)]", className)}
+      className={cn(
+        "rounded-none border border-border/60 p-3 transition-all duration-300 shadow-[inset_0_4px_12px_rgba(0,0,0,0.3)] bg-black/20",
+        isOver && "bg-muted/40 shadow-[inset_0_4px_20px_rgba(0,0,0,0.5)]",
+        className,
+      )}
       style={isOver ? { borderColor: color } : undefined}
     >
       {children}
@@ -199,12 +280,19 @@ function DroppableZone({
 }
 
 function DraggableBrowserRow({
-  dragId, data, onClick, children,
+  dragId,
+  data,
+  onClick,
+  children,
 }: {
-  dragId: string; data: DragData; onClick: () => void; children: React.ReactNode
+  dragId: string
+  data: DragData
+  onClick: () => void
+  children: React.ReactNode
 }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
-    id: dragId, data,
+    id: dragId,
+    data,
   })
   return (
     <div
@@ -227,9 +315,13 @@ function DraggableBrowserRow({
 // ---------------------------------------------------------------------------
 
 function PinnedRelicPickerContent({
-  characterId, onSelect, effects,
+  characterId,
+  onSelect,
+  effects,
 }: {
-  characterId: string; onSelect: (relic: RelicForPicker) => void; effects: EffectMeta[]
+  characterId: string
+  onSelect: (relic: RelicForPicker) => void
+  effects: EffectMeta[]
 }) {
   const { data } = useSuspenseQuery({
     queryKey: ["relics", characterId],
@@ -237,8 +329,8 @@ function PinnedRelicPickerContent({
     staleTime: 5 * 60 * 1000,
   })
   const [search, setSearch] = useState("")
-  const relics = (data.data ?? []).filter((r) =>
-    !search || r.name.toLowerCase().includes(search.toLowerCase()),
+  const relics = (data.data ?? []).filter(
+    (r) => !search || r.name.toLowerCase().includes(search.toLowerCase()),
   )
   const effectMap = useMemo(() => buildEffectMap(effects), [effects])
 
@@ -258,14 +350,21 @@ function PinnedRelicPickerContent({
         {relics.map((r) => {
           const effectIds = [r.effect_1, r.effect_2, r.effect_3]
           const curseIds = [r.curse_1, r.curse_2, r.curse_3]
-          const hasEffects = effectIds.some((id) => id !== 0 && id !== EMPTY_EFFECT)
+          const hasEffects = effectIds.some(
+            (id) => id !== 0 && id !== EMPTY_EFFECT,
+          )
           return (
             <Tooltip key={r.id}>
               <TooltipTrigger asChild>
                 <button
                   type="button"
                   onClick={() =>
-                    onSelect({ ga_handle: r.ga_handle, name: r.name, color: r.color, is_deep: r.is_deep })
+                    onSelect({
+                      ga_handle: r.ga_handle,
+                      name: r.name,
+                      color: r.color,
+                      is_deep: r.is_deep,
+                    })
                   }
                   className="w-full text-left rounded px-2 py-1.5 hover:bg-gradient-to-r hover:from-accent/40 hover:to-transparent transition-colors flex items-center gap-2 text-sm"
                 >
@@ -273,7 +372,10 @@ function PinnedRelicPickerContent({
                     className="w-2 h-2 rounded-full shrink-0"
                     style={{ background: COLOR_HEX[r.color] ?? "#888" }}
                   />
-                  <span className="truncate" style={{ color: COLOR_HEX[r.color] ?? undefined }}>
+                  <span
+                    className="truncate"
+                    style={{ color: COLOR_HEX[r.color] ?? undefined }}
+                  >
                     {r.name}
                   </span>
                   <span className="ml-auto text-xs text-muted-foreground shrink-0">
@@ -283,15 +385,25 @@ function PinnedRelicPickerContent({
               </TooltipTrigger>
               {hasEffects && (
                 <TooltipContent side="right" className="max-w-64 space-y-1.5">
-                  <EffectList effectIds={effectIds} isCurse={false} effectMap={effectMap} />
-                  <EffectList effectIds={curseIds} isCurse={true} effectMap={effectMap} />
+                  <EffectList
+                    effectIds={effectIds}
+                    isCurse={false}
+                    effectMap={effectMap}
+                  />
+                  <EffectList
+                    effectIds={curseIds}
+                    isCurse={true}
+                    effectMap={effectMap}
+                  />
                 </TooltipContent>
               )}
             </Tooltip>
           )
         })}
         {relics.length === 0 && (
-          <p className="text-xs text-muted-foreground text-center py-4">No relics match.</p>
+          <p className="text-xs text-muted-foreground text-center py-4">
+            No relics match.
+          </p>
         )}
       </div>
     </>
@@ -299,7 +411,10 @@ function PinnedRelicPickerContent({
 }
 
 function AuthPinnedRelicDialog({
-  pinnedHandles, onAdd, disabled, effects,
+  pinnedHandles,
+  onAdd,
+  disabled,
+  effects,
 }: {
   pinnedHandles: number[]
   onAdd: (relic: RelicForPicker) => void
@@ -366,7 +481,10 @@ function AuthPinnedRelicDialog({
 }
 
 function AnonPinnedRelicDialog({
-  pinnedHandles, onAdd, disabled, effects,
+  pinnedHandles,
+  onAdd,
+  disabled,
+  effects,
 }: {
   pinnedHandles: number[]
   onAdd: (relic: RelicForPicker) => void
@@ -409,7 +527,9 @@ function AnonPinnedRelicDialog({
           {relics.map((r) => {
             const effectIds = [r.effect_1, r.effect_2, r.effect_3]
             const curseIds = [r.curse_1, r.curse_2, r.curse_3]
-            const hasEffects = effectIds.some((id) => id !== 0 && id !== EMPTY_EFFECT)
+            const hasEffects = effectIds.some(
+              (id) => id !== 0 && id !== EMPTY_EFFECT,
+            )
             return (
               <Tooltip key={r.ga_handle}>
                 <TooltipTrigger asChild>
@@ -425,7 +545,10 @@ function AnonPinnedRelicDialog({
                       className="w-2 h-2 rounded-full shrink-0"
                       style={{ background: COLOR_HEX[r.color] ?? "#888" }}
                     />
-                    <span className="truncate" style={{ color: COLOR_HEX[r.color] ?? undefined }}>
+                    <span
+                      className="truncate"
+                      style={{ color: COLOR_HEX[r.color] ?? undefined }}
+                    >
                       {r.name}
                     </span>
                     <span className="ml-auto text-xs text-muted-foreground shrink-0">
@@ -435,15 +558,25 @@ function AnonPinnedRelicDialog({
                 </TooltipTrigger>
                 {hasEffects && (
                   <TooltipContent side="right" className="max-w-64 space-y-1.5">
-                    <EffectList effectIds={effectIds} isCurse={false} effectMap={effectMap} />
-                    <EffectList effectIds={curseIds} isCurse={true} effectMap={effectMap} />
+                    <EffectList
+                      effectIds={effectIds}
+                      isCurse={false}
+                      effectMap={effectMap}
+                    />
+                    <EffectList
+                      effectIds={curseIds}
+                      isCurse={true}
+                      effectMap={effectMap}
+                    />
                   </TooltipContent>
                 )}
               </Tooltip>
             )
           })}
           {relics.length === 0 && (
-            <p className="text-xs text-muted-foreground text-center py-4">No relics match.</p>
+            <p className="text-xs text-muted-foreground text-center py-4">
+              No relics match.
+            </p>
           )}
         </div>
       </DialogContent>
@@ -480,26 +613,50 @@ interface EditorUIProps {
   onExcludedFamiliesChange: (names: string[]) => void
   onIncludeDeepChange: (v: boolean) => void
   onCurseMaxChange: (v: number) => void
-  onPinnedRelicsChange: (handles: number[], meta: Map<number, RelicForPicker>) => void
+  onPinnedRelicsChange: (
+    handles: number[],
+    meta: Map<number, RelicForPicker>,
+  ) => void
   onExcludedStackingCategoriesChange: (ids: number[]) => void
   onRename: (newName: string) => void
 }
 
 function BuildEditorUI({
-  name, character, groups, requiredEffects, requiredFamilies,
-  excludedEffects, excludedFamilies, includeDeep, curseMax,
-  pinnedRelics, pinnedRelicMeta, excludedStackingCategories, stackingCategories,
-  saving, effects, families, isAuth,
-  onGroupsChange, onRequiredEffectsChange, onRequiredFamiliesChange,
-  onExcludedEffectsChange, onExcludedFamiliesChange,
-  onIncludeDeepChange, onCurseMaxChange, onPinnedRelicsChange,
-  onExcludedStackingCategoriesChange, onRename,
+  name,
+  character,
+  groups,
+  requiredEffects,
+  requiredFamilies,
+  excludedEffects,
+  excludedFamilies,
+  includeDeep,
+  curseMax,
+  pinnedRelics,
+  pinnedRelicMeta,
+  excludedStackingCategories,
+  stackingCategories,
+  saving,
+  effects,
+  families,
+  isAuth,
+  onGroupsChange,
+  onRequiredEffectsChange,
+  onRequiredFamiliesChange,
+  onExcludedEffectsChange,
+  onExcludedFamiliesChange,
+  onIncludeDeepChange,
+  onCurseMaxChange,
+  onPinnedRelicsChange,
+  onExcludedStackingCategoriesChange,
+  onRename,
 }: EditorUIProps) {
   const [effectSearch, setEffectSearch] = useState("")
   const [draftName, setDraftName] = useState(name)
   const [activeDragName, setActiveDragName] = useState<string | null>(null)
 
-  useEffect(() => { setDraftName(name) }, [name])
+  useEffect(() => {
+    setDraftName(name)
+  }, [name])
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
@@ -509,13 +666,19 @@ function BuildEditorUI({
 
   // Groups sorted by weight descending for display; zone IDs use original array index
   const sortedGroupIndices = useMemo(
-    () => groups.map((_, i) => i).sort((a, b) => groups[b].weight - groups[a].weight),
+    () =>
+      groups
+        .map((_, i) => i)
+        .sort((a, b) => groups[b].weight - groups[a].weight),
     [groups],
   )
 
   // Groups sectioned by derived label so same-label groups share one section header
   const groupSections = useMemo(() => {
-    const map = new Map<string, { label: string; color: string; indices: number[] }>()
+    const map = new Map<
+      string,
+      { label: string; color: string; indices: number[] }
+    >()
     const ordered: { label: string; color: string; indices: number[] }[] = []
     for (const idx of sortedGroupIndices) {
       const { label, color } = getLabelForWeight(groups[idx].weight)
@@ -550,12 +713,14 @@ function BuildEditorUI({
   const filteredEffects = effects.filter(
     (e) =>
       !assignedEffectIds.has(e.id) &&
-      (effectSearch === "" || e.name.toLowerCase().includes(effectSearch.toLowerCase())),
+      (effectSearch === "" ||
+        e.name.toLowerCase().includes(effectSearch.toLowerCase())),
   )
   const filteredFamilies = families.filter(
     (f) =>
       !assignedFamilyNames.has(f.name) &&
-      (effectSearch === "" || f.name.toLowerCase().includes(effectSearch.toLowerCase())),
+      (effectSearch === "" ||
+        f.name.toLowerCase().includes(effectSearch.toLowerCase())),
   )
 
   function commitRename() {
@@ -570,7 +735,10 @@ function BuildEditorUI({
   // Move effect to a zone (removing it from all other zones first)
   const assignEffect = useCallback(
     (effectId: number, targetZone: string) => {
-      const newGroups = groups.map((g) => ({ ...g, effects: g.effects.filter((id) => id !== effectId) }))
+      const newGroups = groups.map((g) => ({
+        ...g,
+        effects: g.effects.filter((id) => id !== effectId),
+      }))
       const newRequired = requiredEffects.filter((id) => id !== effectId)
       const newExcluded = excludedEffects.filter((id) => id !== effectId)
 
@@ -583,19 +751,33 @@ function BuildEditorUI({
         onRequiredEffectsChange(newRequired)
         onExcludedEffectsChange([...newExcluded, effectId])
       } else if (targetZone.startsWith("zone:group:")) {
-        const idx = parseInt(targetZone.slice("zone:group:".length))
-        onGroupsChange(newGroups.map((g, i) => i === idx ? { ...g, effects: [...g.effects, effectId] } : g))
+        const idx = parseInt(targetZone.slice("zone:group:".length), 10)
+        onGroupsChange(
+          newGroups.map((g, i) =>
+            i === idx ? { ...g, effects: [...g.effects, effectId] } : g,
+          ),
+        )
         onRequiredEffectsChange(newRequired)
         onExcludedEffectsChange(newExcluded)
       }
     },
-    [groups, requiredEffects, excludedEffects, onGroupsChange, onRequiredEffectsChange, onExcludedEffectsChange],
+    [
+      groups,
+      requiredEffects,
+      excludedEffects,
+      onGroupsChange,
+      onRequiredEffectsChange,
+      onExcludedEffectsChange,
+    ],
   )
 
   // Move family to a zone (removing it from all other zones first)
   const assignFamily = useCallback(
     (familyName: string, targetZone: string) => {
-      const newGroups = groups.map((g) => ({ ...g, families: g.families.filter((n) => n !== familyName) }))
+      const newGroups = groups.map((g) => ({
+        ...g,
+        families: g.families.filter((n) => n !== familyName),
+      }))
       const newRequired = requiredFamilies.filter((n) => n !== familyName)
       const newExcluded = excludedFamilies.filter((n) => n !== familyName)
 
@@ -608,13 +790,24 @@ function BuildEditorUI({
         onRequiredFamiliesChange(newRequired)
         onExcludedFamiliesChange([...newExcluded, familyName])
       } else if (targetZone.startsWith("zone:group:")) {
-        const idx = parseInt(targetZone.slice("zone:group:".length))
-        onGroupsChange(newGroups.map((g, i) => i === idx ? { ...g, families: [...g.families, familyName] } : g))
+        const idx = parseInt(targetZone.slice("zone:group:".length), 10)
+        onGroupsChange(
+          newGroups.map((g, i) =>
+            i === idx ? { ...g, families: [...g.families, familyName] } : g,
+          ),
+        )
         onRequiredFamiliesChange(newRequired)
         onExcludedFamiliesChange(newExcluded)
       }
     },
-    [groups, requiredFamilies, excludedFamilies, onGroupsChange, onRequiredFamiliesChange, onExcludedFamiliesChange],
+    [
+      groups,
+      requiredFamilies,
+      excludedFamilies,
+      onGroupsChange,
+      onRequiredFamiliesChange,
+      onExcludedFamiliesChange,
+    ],
   )
 
   function handleDragStart(event: DragStartEvent) {
@@ -641,7 +834,10 @@ function BuildEditorUI({
   }
 
   // Default click-to-add target: highest-weight group (first in sorted order), or required if no groups
-  const defaultClickTarget = sortedGroupIndices.length > 0 ? `zone:group:${sortedGroupIndices[0]}` : "zone:required"
+  const defaultClickTarget =
+    sortedGroupIndices.length > 0
+      ? `zone:group:${sortedGroupIndices[0]}`
+      : "zone:required"
 
   const maxPins = includeDeep ? 6 : 3
   const atPinLimit = pinnedRelics.length >= maxPins
@@ -661,15 +857,23 @@ function BuildEditorUI({
               value={draftName}
               onChange={(e) => setDraftName(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter") { e.preventDefault(); e.currentTarget.blur() }
-                if (e.key === "Escape") { setDraftName(name); e.currentTarget.blur() }
+                if (e.key === "Enter") {
+                  e.preventDefault()
+                  e.currentTarget.blur()
+                }
+                if (e.key === "Escape") {
+                  setDraftName(name)
+                  e.currentTarget.blur()
+                }
               }}
               onBlur={commitRename}
               className="text-2xl font-semibold bg-transparent border-b border-transparent hover:border-muted-foreground/30 focus:border-primary focus:outline-none focus:ring-0 py-0.5 w-64 transition-colors"
             />
             <p className="text-muted-foreground text-sm mt-0.5">{character}</p>
           </div>
-          {saving && <span className="text-sm text-muted-foreground">Saving…</span>}
+          {saving && (
+            <span className="text-sm text-muted-foreground">Saving…</span>
+          )}
         </div>
 
         {/* Settings */}
@@ -711,7 +915,10 @@ function BuildEditorUI({
                   onAdd={(relic) => {
                     const nextMeta = new Map(pinnedRelicMeta)
                     nextMeta.set(relic.ga_handle, relic)
-                    onPinnedRelicsChange([...pinnedRelics, relic.ga_handle], nextMeta)
+                    onPinnedRelicsChange(
+                      [...pinnedRelics, relic.ga_handle],
+                      nextMeta,
+                    )
                   }}
                   disabled={atPinLimit}
                 />
@@ -722,7 +929,10 @@ function BuildEditorUI({
                   onAdd={(relic) => {
                     const nextMeta = new Map(pinnedRelicMeta)
                     nextMeta.set(relic.ga_handle, relic)
-                    onPinnedRelicsChange([...pinnedRelics, relic.ga_handle], nextMeta)
+                    onPinnedRelicsChange(
+                      [...pinnedRelics, relic.ga_handle],
+                      nextMeta,
+                    )
                   }}
                   disabled={atPinLimit}
                 />
@@ -732,7 +942,9 @@ function BuildEditorUI({
               <div className="flex flex-wrap gap-2 mt-2">
                 {pinnedRelics.map((handle) => {
                   const relic = pinnedRelicMeta.get(handle)
-                  const color = relic ? (COLOR_HEX[relic.color] ?? "#888") : "#888"
+                  const color = relic
+                    ? (COLOR_HEX[relic.color] ?? "#888")
+                    : "#888"
                   const label = relic ? relic.name : `#${handle}`
                   return (
                     <span
@@ -767,14 +979,19 @@ function BuildEditorUI({
           {stackingCategories.length > 0 && (
             <div>
               <div className="flex items-center gap-2 mb-1">
-                <span className="text-sm font-medium">Stacking Category Exclusions</span>
+                <span className="text-sm font-medium">
+                  Stacking Category Exclusions
+                </span>
               </div>
               <p className="text-xs text-muted-foreground mb-2">
-                All effects in checked categories will be excluded unless individually listed in a priority group below.
+                All effects in checked categories will be excluded unless
+                individually listed in a priority group below.
               </p>
               <div className="grid sm:grid-cols-2 gap-x-4 gap-y-1 max-h-64 overflow-y-auto">
                 {stackingCategories.map((cat) => {
-                  const checked = excludedStackingCategories.includes(cat.compatibility_id)
+                  const checked = excludedStackingCategories.includes(
+                    cat.compatibility_id,
+                  )
                   return (
                     <Tooltip key={cat.compatibility_id}>
                       <TooltipTrigger asChild>
@@ -783,17 +1000,29 @@ function BuildEditorUI({
                             checked={checked}
                             onCheckedChange={(v: boolean) => {
                               if (v) {
-                                onExcludedStackingCategoriesChange([...excludedStackingCategories, cat.compatibility_id])
+                                onExcludedStackingCategoriesChange([
+                                  ...excludedStackingCategories,
+                                  cat.compatibility_id,
+                                ])
                               } else {
-                                onExcludedStackingCategoriesChange(excludedStackingCategories.filter((id) => id !== cat.compatibility_id))
+                                onExcludedStackingCategoriesChange(
+                                  excludedStackingCategories.filter(
+                                    (id) => id !== cat.compatibility_id,
+                                  ),
+                                )
                               }
                             }}
                           />
                           <span className="truncate">{cat.label}</span>
-                          <span className="ml-auto text-xs text-muted-foreground shrink-0">({cat.effect_ids.length})</span>
+                          <span className="ml-auto text-xs text-muted-foreground shrink-0">
+                            ({cat.effect_ids.length})
+                          </span>
                         </label>
                       </TooltipTrigger>
-                      <TooltipContent side="right" className="max-w-80 max-h-48 overflow-y-auto">
+                      <TooltipContent
+                        side="right"
+                        className="max-w-80 max-h-48 overflow-y-auto"
+                      >
                         <ul className="text-xs space-y-0.5">
                           {cat.member_names.map((name, i) => (
                             <li key={i}>{name}</li>
@@ -814,12 +1043,23 @@ function BuildEditorUI({
             {/* Required */}
             <div>
               <div className="flex items-center gap-3 mb-2">
-                <span className="text-xs font-bold uppercase tracking-[0.2em]" style={{ color: REQUIRED_COLOR }}>Required</span>
-                <div className="flex-1 h-px opacity-25" style={{ background: REQUIRED_COLOR }} />
-                <span className="text-xs text-muted-foreground">hard constraint · always included</span>
+                <span
+                  className="text-xs font-bold uppercase tracking-[0.2em]"
+                  style={{ color: REQUIRED_COLOR }}
+                >
+                  Required
+                </span>
+                <div
+                  className="flex-1 h-px opacity-25"
+                  style={{ background: REQUIRED_COLOR }}
+                />
+                <span className="text-xs text-muted-foreground">
+                  hard constraint · always included
+                </span>
               </div>
               <DroppableZone zoneId="zone:required" color={REQUIRED_COLOR}>
-                {requiredEffects.length === 0 && requiredFamilies.length === 0 ? (
+                {requiredEffects.length === 0 &&
+                requiredFamilies.length === 0 ? (
                   <p className="text-xs text-muted-foreground italic">
                     Drop effects here to require them
                   </p>
@@ -831,8 +1071,16 @@ function BuildEditorUI({
                         dragId={`family:${familyName}`}
                         name={`${familyName} (group)`}
                         color={REQUIRED_COLOR}
-                        dragData={{ type: "family", familyName, sourceZone: "zone:required" }}
-                        onRemove={() => onRequiredFamiliesChange(requiredFamilies.filter((n) => n !== familyName))}
+                        dragData={{
+                          type: "family",
+                          familyName,
+                          sourceZone: "zone:required",
+                        }}
+                        onRemove={() =>
+                          onRequiredFamiliesChange(
+                            requiredFamilies.filter((n) => n !== familyName),
+                          )
+                        }
                       />
                     ))}
                     {requiredEffects.map((id) => {
@@ -842,10 +1090,20 @@ function BuildEditorUI({
                         <DraggableChip
                           key={id}
                           dragId={`effect:${id}`}
-                          name={e.source === "deep" ? `${e.name} (deep)` : e.name}
+                          name={
+                            e.source === "deep" ? `${e.name} (deep)` : e.name
+                          }
                           color={REQUIRED_COLOR}
-                          dragData={{ type: "effect", effectId: id, sourceZone: "zone:required" }}
-                          onRemove={() => onRequiredEffectsChange(requiredEffects.filter((x) => x !== id))}
+                          dragData={{
+                            type: "effect",
+                            effectId: id,
+                            sourceZone: "zone:required",
+                          }}
+                          onRemove={() =>
+                            onRequiredEffectsChange(
+                              requiredEffects.filter((x) => x !== id),
+                            )
+                          }
                         />
                       )
                     })}
@@ -858,27 +1116,40 @@ function BuildEditorUI({
             {groupSections.map((section) => (
               <div key={section.label} className="space-y-2">
                 <div className="flex items-center gap-3">
-                  <span className="text-xs font-bold uppercase tracking-[0.2em]" style={{ color: section.color }}>
+                  <span
+                    className="text-xs font-bold uppercase tracking-[0.2em]"
+                    style={{ color: section.color }}
+                  >
                     {section.label}
                   </span>
-                  <div className="flex-1 h-px opacity-20" style={{ background: section.color }} />
+                  <div
+                    className="flex-1 h-px opacity-20"
+                    style={{ background: section.color }}
+                  />
                 </div>
                 {section.indices.map((idx) => {
                   const group = groups[idx]
-                  const isEmpty = group.effects.length === 0 && group.families.length === 0
+                  const isEmpty =
+                    group.effects.length === 0 && group.families.length === 0
                   return (
                     <div key={idx} className="flex items-start gap-2">
                       <WeightInput
                         value={group.weight}
                         onChange={(w) =>
                           onGroupsChange(
-                            groups.map((g, i) => i === idx ? { ...g, weight: w } : g),
+                            groups.map((g, i) =>
+                              i === idx ? { ...g, weight: w } : g,
+                            ),
                           )
                         }
                         className="mt-2 w-14 text-xs text-center bg-transparent border border-border/60 rounded px-1 py-0.5 focus:border-primary focus:outline-none focus:ring-0 shrink-0 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                         title="Group weight (−100 to 100)"
                       />
-                      <DroppableZone zoneId={`zone:group:${idx}`} color={section.color} className="flex-1 min-h-[40px]">
+                      <DroppableZone
+                        zoneId={`zone:group:${idx}`}
+                        color={section.color}
+                        className="flex-1 min-h-[40px]"
+                      >
                         {isEmpty ? (
                           <p className="text-xs text-muted-foreground italic">
                             Drop effects here, or click in the browser to add
@@ -891,11 +1162,22 @@ function BuildEditorUI({
                                 dragId={`family:${familyName}`}
                                 name={`${familyName} (group)`}
                                 color={section.color}
-                                dragData={{ type: "family", familyName, sourceZone: `zone:group:${idx}` }}
+                                dragData={{
+                                  type: "family",
+                                  familyName,
+                                  sourceZone: `zone:group:${idx}`,
+                                }}
                                 onRemove={() =>
                                   onGroupsChange(
                                     groups.map((g, i) =>
-                                      i === idx ? { ...g, families: g.families.filter((n) => n !== familyName) } : g,
+                                      i === idx
+                                        ? {
+                                            ...g,
+                                            families: g.families.filter(
+                                              (n) => n !== familyName,
+                                            ),
+                                          }
+                                        : g,
                                     ),
                                   )
                                 }
@@ -908,13 +1190,28 @@ function BuildEditorUI({
                                 <DraggableChip
                                   key={id}
                                   dragId={`effect:${id}`}
-                                  name={e.source === "deep" ? `${e.name} (deep)` : e.name}
+                                  name={
+                                    e.source === "deep"
+                                      ? `${e.name} (deep)`
+                                      : e.name
+                                  }
                                   color={section.color}
-                                  dragData={{ type: "effect", effectId: id, sourceZone: `zone:group:${idx}` }}
+                                  dragData={{
+                                    type: "effect",
+                                    effectId: id,
+                                    sourceZone: `zone:group:${idx}`,
+                                  }}
                                   onRemove={() =>
                                     onGroupsChange(
                                       groups.map((g, i) =>
-                                        i === idx ? { ...g, effects: g.effects.filter((x) => x !== id) } : g,
+                                        i === idx
+                                          ? {
+                                              ...g,
+                                              effects: g.effects.filter(
+                                                (x) => x !== id,
+                                              ),
+                                            }
+                                          : g,
                                       ),
                                     )
                                   }
@@ -926,7 +1223,9 @@ function BuildEditorUI({
                       </DroppableZone>
                       <button
                         type="button"
-                        onClick={() => onGroupsChange(groups.filter((_, i) => i !== idx))}
+                        onClick={() =>
+                          onGroupsChange(groups.filter((_, i) => i !== idx))
+                        }
                         className="mt-2 text-muted-foreground hover:text-destructive transition-colors shrink-0"
                         aria-label="Remove group"
                       >
@@ -942,7 +1241,12 @@ function BuildEditorUI({
               type="button"
               variant="outline"
               size="sm"
-              onClick={() => onGroupsChange([...groups, { weight: 0, effects: [], families: [] }])}
+              onClick={() =>
+                onGroupsChange([
+                  ...groups,
+                  { weight: 0, effects: [], families: [] },
+                ])
+              }
             >
               <Plus className="h-3.5 w-3.5 mr-1" /> Add Group
             </Button>
@@ -950,12 +1254,23 @@ function BuildEditorUI({
             {/* Excluded */}
             <div>
               <div className="flex items-center gap-3 mb-2">
-                <span className="text-xs font-bold uppercase tracking-[0.2em]" style={{ color: EXCLUDED_COLOR }}>Excluded</span>
-                <div className="flex-1 h-px opacity-25" style={{ background: EXCLUDED_COLOR }} />
-                <span className="text-xs text-muted-foreground">blocks relic assignment</span>
+                <span
+                  className="text-xs font-bold uppercase tracking-[0.2em]"
+                  style={{ color: EXCLUDED_COLOR }}
+                >
+                  Excluded
+                </span>
+                <div
+                  className="flex-1 h-px opacity-25"
+                  style={{ background: EXCLUDED_COLOR }}
+                />
+                <span className="text-xs text-muted-foreground">
+                  blocks relic assignment
+                </span>
               </div>
               <DroppableZone zoneId="zone:excluded" color={EXCLUDED_COLOR}>
-                {excludedEffects.length === 0 && excludedFamilies.length === 0 ? (
+                {excludedEffects.length === 0 &&
+                excludedFamilies.length === 0 ? (
                   <p className="text-xs text-muted-foreground italic">
                     Drop effects here to block them
                   </p>
@@ -967,8 +1282,16 @@ function BuildEditorUI({
                         dragId={`family:${familyName}`}
                         name={`${familyName} (group)`}
                         color={EXCLUDED_COLOR}
-                        dragData={{ type: "family", familyName, sourceZone: "zone:excluded" }}
-                        onRemove={() => onExcludedFamiliesChange(excludedFamilies.filter((n) => n !== familyName))}
+                        dragData={{
+                          type: "family",
+                          familyName,
+                          sourceZone: "zone:excluded",
+                        }}
+                        onRemove={() =>
+                          onExcludedFamiliesChange(
+                            excludedFamilies.filter((n) => n !== familyName),
+                          )
+                        }
                       />
                     ))}
                     {excludedEffects.map((id) => {
@@ -978,10 +1301,20 @@ function BuildEditorUI({
                         <DraggableChip
                           key={id}
                           dragId={`effect:${id}`}
-                          name={e.source === "deep" ? `${e.name} (deep)` : e.name}
+                          name={
+                            e.source === "deep" ? `${e.name} (deep)` : e.name
+                          }
                           color={EXCLUDED_COLOR}
-                          dragData={{ type: "effect", effectId: id, sourceZone: "zone:excluded" }}
-                          onRemove={() => onExcludedEffectsChange(excludedEffects.filter((x) => x !== id))}
+                          dragData={{
+                            type: "effect",
+                            effectId: id,
+                            sourceZone: "zone:excluded",
+                          }}
+                          onRemove={() =>
+                            onExcludedEffectsChange(
+                              excludedEffects.filter((x) => x !== id),
+                            )
+                          }
                         />
                       )
                     })}
@@ -1008,13 +1341,21 @@ function BuildEditorUI({
               {/* Family groups */}
               {filteredFamilies.length > 0 && (
                 <>
-                  <p className="text-xs font-medium text-muted-foreground px-2 pt-1">Groups (Weighted Effect Scaling)</p>
+                  <p className="text-xs font-medium text-muted-foreground px-2 pt-1">
+                    Groups (Weighted Effect Scaling)
+                  </p>
                   {filteredFamilies.map((family) => (
                     <DraggableBrowserRow
                       key={`family:${family.name}`}
                       dragId={`family:${family.name}`}
-                      data={{ type: "family", familyName: family.name, sourceZone: null }}
-                      onClick={() => assignFamily(family.name, defaultClickTarget)}
+                      data={{
+                        type: "family",
+                        familyName: family.name,
+                        sourceZone: null,
+                      }}
+                      onClick={() =>
+                        assignFamily(family.name, defaultClickTarget)
+                      }
                     >
                       <span
                         className="text-sm truncate italic flex-1"
@@ -1025,7 +1366,9 @@ function BuildEditorUI({
                     </DraggableBrowserRow>
                   ))}
                   {filteredEffects.length > 0 && (
-                    <p className="text-xs font-medium text-muted-foreground px-2 pt-2">Individual</p>
+                    <p className="text-xs font-medium text-muted-foreground px-2 pt-2">
+                      Individual
+                    </p>
                   )}
                 </>
               )}
@@ -1034,25 +1377,37 @@ function BuildEditorUI({
                 <DraggableBrowserRow
                   key={effect.id}
                   dragId={`effect:${effect.id}`}
-                  data={{ type: "effect", effectId: effect.id, sourceZone: null }}
+                  data={{
+                    type: "effect",
+                    effectId: effect.id,
+                    sourceZone: null,
+                  }}
                   onClick={() => assignEffect(effect.id, defaultClickTarget)}
                 >
                   <span className="text-sm truncate flex-1" title={effect.name}>
                     {effect.name}
                     {effect.source === "deep" && (
-                      <span className="ml-1.5 text-xs" style={{ color: DEEP_COLOR }}>(deep)</span>
+                      <span
+                        className="ml-1.5 text-xs"
+                        style={{ color: DEEP_COLOR }}
+                      >
+                        (deep)
+                      </span>
                     )}
                     {effect.is_debuff && (
-                      <span className="ml-1.5 text-xs text-muted-foreground">(debuff)</span>
+                      <span className="ml-1.5 text-xs text-muted-foreground">
+                        (debuff)
+                      </span>
                     )}
                   </span>
                 </DraggableBrowserRow>
               ))}
-              {filteredEffects.length === 0 && filteredFamilies.length === 0 && (
-                <p className="text-xs text-muted-foreground text-center py-4">
-                  No unassigned effects match.
-                </p>
-              )}
+              {filteredEffects.length === 0 &&
+                filteredFamilies.length === 0 && (
+                  <p className="text-xs text-muted-foreground text-center py-4">
+                    No unassigned effects match.
+                  </p>
+                )}
             </div>
           </div>
         </div>
@@ -1093,13 +1448,17 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
   })
   const { data: stackingCategoriesData } = useSuspenseQuery({
     queryKey: ["game", "stacking-categories"],
-    queryFn: () => GameService.getStackingCategories() as unknown as Promise<StackingCategory[]>,
+    queryFn: () =>
+      GameService.getStackingCategories() as unknown as Promise<
+        StackingCategory[]
+      >,
     staleTime: Infinity,
   })
 
   const effects = (effectsData ?? []) as EffectMeta[]
   const families = (familiesData ?? []) as FamilyMeta[]
-  const stackingCategories = (stackingCategoriesData ?? []) as StackingCategory[]
+  const stackingCategories = (stackingCategoriesData ??
+    []) as StackingCategory[]
   // Cast to new schema type (SDK will be regenerated separately)
   const build = buildRaw as unknown as BuildApiData
 
@@ -1120,11 +1479,15 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
   )
   const [includeDeep, setIncludeDeep] = useState(build.include_deep)
   const [curseMax, setCurseMax] = useState(build.curse_max)
-  const [pinnedRelics, setPinnedRelics] = useState<number[]>(build.pinned_relics ?? [])
-  const [pinnedRelicMeta, setPinnedRelicMeta] = useState<Map<number, RelicForPicker>>(new Map())
-  const [excludedStackingCategories, setExcludedStackingCategories] = useState<number[]>(
-    () => build.excluded_stacking_categories ?? [],
+  const [pinnedRelics, setPinnedRelics] = useState<number[]>(
+    build.pinned_relics ?? [],
   )
+  const [pinnedRelicMeta, setPinnedRelicMeta] = useState<
+    Map<number, RelicForPicker>
+  >(new Map())
+  const [excludedStackingCategories, setExcludedStackingCategories] = useState<
+    number[]
+  >(() => build.excluded_stacking_categories ?? [])
 
   const groupsRef = useRef(groups)
   const requiredEffectsRef = useRef(requiredEffects)
@@ -1166,7 +1529,8 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
         if (pinnedSet.size === 0) break
         const relicsResponse = await queryClient.fetchQuery({
           queryKey: ["relics", char.id],
-          queryFn: () => SavesService.getCharacterRelics({ characterId: char.id }),
+          queryFn: () =>
+            SavesService.getCharacterRelics({ characterId: char.id }),
           staleTime: 5 * 60 * 1000,
         })
         for (const r of relicsResponse?.data ?? []) {
@@ -1186,7 +1550,7 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
     }
 
     populateMeta()
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [build.pinned_relics, queryClient]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     setGroups(build.groups ?? DEFAULT_GROUPS.map((g) => ({ ...g })))
@@ -1264,19 +1628,43 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
       effects={effects}
       families={families}
       isAuth={true}
-      onGroupsChange={(g) => { setGroups(g); scheduleAutoSave() }}
-      onRequiredEffectsChange={(ids) => { setRequiredEffects(ids); scheduleAutoSave() }}
-      onRequiredFamiliesChange={(names) => { setRequiredFamilies(names); scheduleAutoSave() }}
-      onExcludedEffectsChange={(ids) => { setExcludedEffects(ids); scheduleAutoSave() }}
-      onExcludedFamiliesChange={(names) => { setExcludedFamilies(names); scheduleAutoSave() }}
-      onIncludeDeepChange={(v) => { setIncludeDeep(v); scheduleAutoSave() }}
-      onCurseMaxChange={(v) => { setCurseMax(v); scheduleAutoSave() }}
+      onGroupsChange={(g) => {
+        setGroups(g)
+        scheduleAutoSave()
+      }}
+      onRequiredEffectsChange={(ids) => {
+        setRequiredEffects(ids)
+        scheduleAutoSave()
+      }}
+      onRequiredFamiliesChange={(names) => {
+        setRequiredFamilies(names)
+        scheduleAutoSave()
+      }}
+      onExcludedEffectsChange={(ids) => {
+        setExcludedEffects(ids)
+        scheduleAutoSave()
+      }}
+      onExcludedFamiliesChange={(names) => {
+        setExcludedFamilies(names)
+        scheduleAutoSave()
+      }}
+      onIncludeDeepChange={(v) => {
+        setIncludeDeep(v)
+        scheduleAutoSave()
+      }}
+      onCurseMaxChange={(v) => {
+        setCurseMax(v)
+        scheduleAutoSave()
+      }}
       onPinnedRelicsChange={(handles, meta) => {
         setPinnedRelics(handles)
         setPinnedRelicMeta(meta)
         scheduleAutoSave()
       }}
-      onExcludedStackingCategoriesChange={(ids) => { setExcludedStackingCategories(ids); scheduleAutoSave() }}
+      onExcludedStackingCategoriesChange={(ids) => {
+        setExcludedStackingCategories(ids)
+        scheduleAutoSave()
+      }}
       onRename={(name) => renameMutation.mutate(name)}
     />
   )
@@ -1301,13 +1689,17 @@ function LocalBuildEditorContent({ buildId }: { buildId: string }) {
   })
   const { data: stackingCategoriesData } = useSuspenseQuery({
     queryKey: ["game", "stacking-categories"],
-    queryFn: () => GameService.getStackingCategories() as unknown as Promise<StackingCategory[]>,
+    queryFn: () =>
+      GameService.getStackingCategories() as unknown as Promise<
+        StackingCategory[]
+      >,
     staleTime: Infinity,
   })
 
   const effects = (effectsData ?? []) as EffectMeta[]
   const families = (familiesData ?? []) as FamilyMeta[]
-  const stackingCategories = (stackingCategoriesData ?? []) as StackingCategory[]
+  const stackingCategories = (stackingCategoriesData ??
+    []) as StackingCategory[]
   const build = getById(buildId)
 
   const [groups, setGroups] = useState<WeightGroup[]>(
@@ -1327,22 +1719,31 @@ function LocalBuildEditorContent({ buildId }: { buildId: string }) {
   )
   const [includeDeep, setIncludeDeep] = useState(build?.include_deep ?? false)
   const [curseMax, setCurseMax] = useState(build?.curse_max ?? 1)
-  const [pinnedRelics, setPinnedRelics] = useState<number[]>(build?.pinned_relics ?? [])
-  const [pinnedRelicMeta, setPinnedRelicMeta] = useState<Map<number, RelicForPicker>>(() => {
+  const [pinnedRelics, setPinnedRelics] = useState<number[]>(
+    build?.pinned_relics ?? [],
+  )
+  const [pinnedRelicMeta, setPinnedRelicMeta] = useState<
+    Map<number, RelicForPicker>
+  >(() => {
     const raw = sessionStorage.getItem("selectedCharacter")
     const char = raw ? JSON.parse(raw) : null
     const handles = new Set(build?.pinned_relics ?? [])
     const map = new Map<number, RelicForPicker>()
     for (const r of (char?.relics ?? []) as RelicForPicker[]) {
       if (handles.has(r.ga_handle)) {
-        map.set(r.ga_handle, { ga_handle: r.ga_handle, name: r.name, color: r.color, is_deep: r.is_deep })
+        map.set(r.ga_handle, {
+          ga_handle: r.ga_handle,
+          name: r.name,
+          color: r.color,
+          is_deep: r.is_deep,
+        })
       }
     }
     return map
   })
-  const [excludedStackingCategories, setExcludedStackingCategories] = useState<number[]>(
-    () => build?.excluded_stacking_categories ?? [],
-  )
+  const [excludedStackingCategories, setExcludedStackingCategories] = useState<
+    number[]
+  >(() => build?.excluded_stacking_categories ?? [])
 
   const groupsRef = useRef(groups)
   const requiredEffectsRef = useRef(requiredEffects)
@@ -1425,7 +1826,8 @@ function LocalBuildEditorContent({ buildId }: { buildId: string }) {
   if (!build) {
     return (
       <p className="text-muted-foreground py-16 text-center">
-        Build not found. It may have been deleted or stored in a different browser.
+        Build not found. It may have been deleted or stored in a different
+        browser.
       </p>
     )
   }
@@ -1449,19 +1851,43 @@ function LocalBuildEditorContent({ buildId }: { buildId: string }) {
       effects={effects}
       families={families}
       isAuth={false}
-      onGroupsChange={(g) => { setGroups(g); scheduleAutoSave() }}
-      onRequiredEffectsChange={(ids) => { setRequiredEffects(ids); scheduleAutoSave() }}
-      onRequiredFamiliesChange={(names) => { setRequiredFamilies(names); scheduleAutoSave() }}
-      onExcludedEffectsChange={(ids) => { setExcludedEffects(ids); scheduleAutoSave() }}
-      onExcludedFamiliesChange={(names) => { setExcludedFamilies(names); scheduleAutoSave() }}
-      onIncludeDeepChange={(v) => { setIncludeDeep(v); scheduleAutoSave() }}
-      onCurseMaxChange={(v) => { setCurseMax(v); scheduleAutoSave() }}
+      onGroupsChange={(g) => {
+        setGroups(g)
+        scheduleAutoSave()
+      }}
+      onRequiredEffectsChange={(ids) => {
+        setRequiredEffects(ids)
+        scheduleAutoSave()
+      }}
+      onRequiredFamiliesChange={(names) => {
+        setRequiredFamilies(names)
+        scheduleAutoSave()
+      }}
+      onExcludedEffectsChange={(ids) => {
+        setExcludedEffects(ids)
+        scheduleAutoSave()
+      }}
+      onExcludedFamiliesChange={(names) => {
+        setExcludedFamilies(names)
+        scheduleAutoSave()
+      }}
+      onIncludeDeepChange={(v) => {
+        setIncludeDeep(v)
+        scheduleAutoSave()
+      }}
+      onCurseMaxChange={(v) => {
+        setCurseMax(v)
+        scheduleAutoSave()
+      }}
       onPinnedRelicsChange={(handles, meta) => {
         setPinnedRelics(handles)
         setPinnedRelicMeta(meta)
         scheduleAutoSave()
       }}
-      onExcludedStackingCategoriesChange={(ids) => { setExcludedStackingCategories(ids); scheduleAutoSave() }}
+      onExcludedStackingCategoriesChange={(ids) => {
+        setExcludedStackingCategories(ids)
+        scheduleAutoSave()
+      }}
       onRename={(name) => updateRef.current(buildId, { name })}
     />
   )
@@ -1476,10 +1902,11 @@ function BuildEditorPage() {
 
   return (
     <Suspense fallback={<Skeleton className="h-64 w-full" />}>
-      {isLoggedIn()
-        ? <AuthBuildEditorContent buildId={buildId} />
-        : <LocalBuildEditorContent buildId={buildId} />
-      }
+      {isLoggedIn() ? (
+        <AuthBuildEditorContent buildId={buildId} />
+      ) : (
+        <LocalBuildEditorContent buildId={buildId} />
+      )}
     </Suspense>
   )
 }

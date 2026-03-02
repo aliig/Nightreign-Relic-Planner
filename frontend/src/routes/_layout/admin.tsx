@@ -1,19 +1,22 @@
-import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query"
+import {
+  useMutation,
+  useQueryClient,
+  useSuspenseQuery,
+} from "@tanstack/react-query"
 import { createFileRoute, redirect } from "@tanstack/react-router"
 import { Star } from "lucide-react"
 import { Suspense } from "react"
 
-import { type UserPublic, BuildsService, UsersService } from "@/client"
+import { BuildsService, type UserPublic, UsersService } from "@/client"
 import AddUser from "@/components/Admin/AddUser"
 import { columns, type UserTableData } from "@/components/Admin/columns"
 import { DataTable } from "@/components/Common/DataTable"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import PendingUsers from "@/components/Pending/PendingUsers"
 import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
-import PendingUsers from "@/components/Pending/PendingUsers"
-import useAuth from "@/hooks/useAuth"
-import { isLoggedIn } from "@/hooks/useAuth"
+import useAuth, { isLoggedIn } from "@/hooks/useAuth"
 import useCustomToast from "@/hooks/useCustomToast"
 import { handleError } from "@/utils"
 
@@ -88,7 +91,10 @@ function FeaturedBuildsContent() {
     return (
       <p className="text-sm text-muted-foreground">
         No featured builds. Star a build from your{" "}
-        <a href="/builds" className="underline">Builds page</a> to feature it.
+        <a href="/builds" className="underline">
+          Builds page
+        </a>{" "}
+        to feature it.
       </p>
     )
   }

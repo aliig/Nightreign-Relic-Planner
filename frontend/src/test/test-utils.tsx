@@ -4,9 +4,10 @@
  * renderWithProviders wraps children in the providers required by most
  * components: React Query and a minimal TanStack Router memory router.
  */
-import type { ReactElement } from "react"
+
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { render, type RenderOptions } from "@testing-library/react"
+import { type RenderOptions, render } from "@testing-library/react"
+import type { ReactElement } from "react"
 
 export function createTestQueryClient(): QueryClient {
   return new QueryClient({
@@ -29,9 +30,7 @@ export function renderWithProviders(
   const client = queryClient ?? createTestQueryClient()
 
   function Wrapper({ children }: { children: React.ReactNode }) {
-    return (
-      <QueryClientProvider client={client}>{children}</QueryClientProvider>
-    )
+    return <QueryClientProvider client={client}>{children}</QueryClientProvider>
   }
 
   return render(ui, { wrapper: Wrapper, ...options })

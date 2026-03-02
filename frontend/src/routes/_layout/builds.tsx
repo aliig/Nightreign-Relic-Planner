@@ -10,7 +10,7 @@ import {
   Outlet,
   useRouterState,
 } from "@tanstack/react-router"
-import { Copy, Pencil, Plus, Star, Trash2, Zap } from "lucide-react"
+import { Copy, MoreVertical, Pencil, Plus, Star, Trash2, Zap } from "lucide-react"
 import { Suspense, useState } from "react"
 import { useForm } from "react-hook-form"
 import { z } from "zod"
@@ -20,7 +20,6 @@ import { Button } from "@/components/ui/button"
 import {
   Card,
   CardContent,
-  CardDescription,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
@@ -31,6 +30,13 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import {
   Form,
   FormControl,
@@ -164,62 +170,6 @@ function NewBuildDialogContent({ onCreate, isPending }: NewBuildDialogProps) {
   )
 }
 
-// --- Delete confirmation dialog (shared) ---
-
-interface DeleteDialogProps {
-  buildId: string
-  buildName: string
-  onDelete: (id: string) => void
-  isPending?: boolean
-}
-
-function DeleteBuildButton({
-  buildId,
-  buildName,
-  onDelete,
-  isPending,
-}: DeleteDialogProps) {
-  const [open, setOpen] = useState(false)
-
-  return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-8 w-8 text-destructive hover:text-destructive"
-          aria-label={`Delete "${buildName}"`}
-        >
-          <Trash2 className="h-4 w-4" />
-        </Button>
-      </DialogTrigger>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Delete "{buildName}"?</DialogTitle>
-        </DialogHeader>
-        <p className="text-sm text-muted-foreground">
-          This action cannot be undone.
-        </p>
-        <div className="flex justify-end gap-2 mt-4">
-          <Button variant="outline" onClick={() => setOpen(false)}>
-            Cancel
-          </Button>
-          <Button
-            variant="destructive"
-            onClick={() => {
-              onDelete(buildId)
-              setOpen(false)
-            }}
-            disabled={isPending}
-          >
-            {isPending ? "Deleting…" : "Delete"}
-          </Button>
-        </div>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
 // --- Shared build card renderer ---
 
 interface BuildCardData {
@@ -250,6 +200,8 @@ function BuildCard({
   isDeleting?: boolean
 }) {
   const [draftName, setDraftName] = useState(build.name)
+  const [deleteOpen, setDeleteOpen] = useState(false)
+  
   const effectCount =
     (build.required_effects ?? []).length +
     (build.groups ?? []).reduce((acc, g) => acc + g.effects.length, 0)
@@ -264,7 +216,7 @@ function BuildCard({
   }
 
   return (
-    <Card>
+    <Card className="flex flex-col min-h-[160px]">
       <CardHeader className="pb-2">
         <div className="flex items-center justify-between gap-2">
           <input
@@ -284,30 +236,6 @@ function BuildCard({
             className="text-base font-semibold bg-transparent border-b border-transparent hover:border-muted-foreground/30 focus:border-primary focus:outline-none focus:ring-0 py-0.5 min-w-0 flex-1 truncate transition-colors"
           />
           <div className="flex items-center gap-1 shrink-0">
-            {onToggleFeatured && (
-              <Button
-                variant="ghost"
-                size="icon"
-                className={`h-8 w-8 ${build.is_featured ? "text-gold" : "text-muted-foreground"}`}
-                onClick={() => onToggleFeatured(build.id)}
-                title={build.is_featured ? "Unfeature build" : "Feature build"}
-              >
-                <Star
-                  className={`h-4 w-4 ${build.is_featured ? "fill-current" : ""}`}
-                />
-              </Button>
-            )}
-            {onDuplicate && (
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-8 w-8"
-                onClick={() => onDuplicate(build.id)}
-                title="Duplicate build"
-              >
-                <Copy className="h-4 w-4" />
-              </Button>
-            )}
             <Button
               asChild
               variant="ghost"
@@ -333,42 +261,100 @@ function BuildCard({
                 <Pencil className="h-4 w-4" />
               </Link>
             </Button>
-            <DeleteBuildButton
-              buildId={build.id}
-              buildName={build.name}
-              onDelete={onDelete}
-              isPending={isDeleting}
-            />
+
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon" className="h-8 w-8">
+                  <MoreVertical className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                {onToggleFeatured && (
+                  <DropdownMenuItem onClick={() => onToggleFeatured(build.id)}>
+                    <Star className={`mr-2 h-4 w-4 ${build.is_featured ? "fill-current text-gold" : "text-muted-foreground"}`} />
+                    {build.is_featured ? "Unfeature" : "Feature"}
+                  </DropdownMenuItem>
+                )}
+                {onDuplicate && (
+                  <DropdownMenuItem onClick={() => onDuplicate(build.id)}>
+                    <Copy className="mr-2 h-4 w-4" />
+                    Duplicate
+                  </DropdownMenuItem>
+                )}
+                <DropdownMenuSeparator />
+                <DropdownMenuItem 
+                  onClick={() => setDeleteOpen(true)}
+                  className="text-destructive focus:bg-destructive focus:text-destructive-foreground"
+                >
+                  <Trash2 className="mr-2 h-4 w-4" />
+                  Delete
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+
+            <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Delete "{build.name}"?</DialogTitle>
+                </DialogHeader>
+                <p className="text-sm text-muted-foreground">
+                  This action cannot be undone.
+                </p>
+                <div className="flex justify-end gap-2 mt-4">
+                  <Button variant="outline" onClick={() => setDeleteOpen(false)}>
+                    Cancel
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    onClick={() => {
+                      onDelete(build.id)
+                      setDeleteOpen(false)
+                    }}
+                    disabled={isDeleting}
+                  >
+                    {isDeleting ? "Deleting…" : "Delete"}
+                  </Button>
+                </div>
+              </DialogContent>
+            </Dialog>
           </div>
         </div>
       </CardHeader>
-      <CardContent>
-        <CardDescription className="flex items-center gap-1">
-          <Select
-            value={build.character}
-            onValueChange={(value) => onChangeCharacter(build.id, value)}
-          >
-            <SelectTrigger className="h-auto border-none bg-transparent p-0 shadow-none text-muted-foreground text-sm font-normal hover:text-foreground transition-colors [&>svg]:h-3 [&>svg]:w-3 [&>svg]:opacity-50 hover:[&>svg]:opacity-100 w-auto gap-1">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {CHARACTER_NAMES.map((c) => (
-                <SelectItem key={c} value={c}>
-                  {c}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <span>
-            · {effectCount} effect{effectCount !== 1 ? "s" : ""} prioritized
-          </span>
-        </CardDescription>
-        {build.updated_at && (
-          <p className="text-xs text-muted-foreground mt-1">
-            Updated {new Date(build.updated_at).toLocaleDateString()}
-          </p>
+      <CardContent className="flex-1 flex flex-col justify-center py-4">
+        {effectCount > 0 ? (
+          <div className="flex flex-col items-center gap-1 text-center">
+            <span className="text-3xl font-bold text-primary">{effectCount}</span>
+            <span className="text-[10px] text-muted-foreground uppercase tracking-wider font-semibold">
+              Prioritized Effect{effectCount !== 1 ? "s" : ""}
+            </span>
+          </div>
+        ) : (
+          <div className="flex flex-col items-center gap-1 text-center text-muted-foreground">
+            <span className="text-sm">No prioritized effects</span>
+            <span className="text-[10px] uppercase tracking-wider font-semibold opacity-75">Edit build to add</span>
+          </div>
         )}
       </CardContent>
+      <div className="mt-auto px-6 pb-4 pt-0 flex items-center justify-between text-xs text-muted-foreground">
+        <Select
+          value={build.character}
+          onValueChange={(value) => onChangeCharacter(build.id, value)}
+        >
+          <SelectTrigger className="h-auto border-none bg-transparent p-0 shadow-none text-muted-foreground text-xs font-medium hover:text-foreground transition-colors [&>svg]:h-3 [&>svg]:w-3 [&>svg]:opacity-50 hover:[&>svg]:opacity-100 w-auto gap-1">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {CHARACTER_NAMES.map((c) => (
+              <SelectItem key={c} value={c}>
+                {c}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        {build.updated_at && (
+          <span>Updated {new Date(build.updated_at).toLocaleDateString()}</span>
+        )}
+      </div>
     </Card>
   )
 }
@@ -397,7 +383,7 @@ function FeaturedBuildCard({
     )
 
   return (
-    <Card>
+    <Card className="flex flex-col min-h-[160px]">
       <CardHeader className="pb-2">
         <div className="flex items-center justify-between gap-2">
           <CardTitle className="text-base truncate">{build.name}</CardTitle>
@@ -424,17 +410,26 @@ function FeaturedBuildCard({
           </div>
         </div>
       </CardHeader>
-      <CardContent>
-        <CardDescription>
-          {build.character} · {effectCount} effect{effectCount !== 1 ? "s" : ""}{" "}
-          prioritized
-        </CardDescription>
-        {build.owner_name && (
-          <p className="text-xs text-muted-foreground mt-1">
-            by {build.owner_name}
-          </p>
+      <CardContent className="flex-1 flex flex-col justify-center py-4">
+        {effectCount > 0 ? (
+          <div className="flex flex-col items-center gap-1 text-center">
+            <span className="text-3xl font-bold text-primary">{effectCount}</span>
+            <span className="text-[10px] text-muted-foreground uppercase tracking-wider font-semibold">
+              Prioritized Effect{effectCount !== 1 ? "s" : ""}
+            </span>
+          </div>
+        ) : (
+          <div className="flex flex-col items-center gap-1 text-center text-muted-foreground">
+            <span className="text-sm">No prioritized effects</span>
+          </div>
         )}
       </CardContent>
+      <div className="mt-auto px-6 pb-4 pt-0 flex items-center justify-between text-xs text-muted-foreground">
+        <span className="font-medium">{build.character}</span>
+        {build.owner_name && (
+          <span>by {build.owner_name}</span>
+        )}
+      </div>
     </Card>
   )
 }

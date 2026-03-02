@@ -60,7 +60,9 @@ const useAuth = () => {
         sessionStorage.removeItem(MIGRATION_FLAG)
         const count = await migrateLocalBuildsToDb()
         if (count > 0) {
-          showSuccessToast(`${count} build${count !== 1 ? "s" : ""} synced to your account.`)
+          showSuccessToast(
+            `${count} build${count !== 1 ? "s" : ""} synced to your account.`,
+          )
         }
       }
 

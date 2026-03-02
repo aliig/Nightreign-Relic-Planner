@@ -15,8 +15,9 @@
  *   in stacking_rules.json have no corresponding effect params).  If the backend
  *   fix regresses and the API returns it as a family, this test will fail.
  */
+
+import { cleanup, fireEvent, render, screen } from "@testing-library/react"
 import React from "react"
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 // ---------------------------------------------------------------------------
@@ -77,7 +78,12 @@ vi.mock("@tanstack/react-query", async (importOriginal) => {
     },
     // useQuery is called by AuthPinnedRelicDialog (not rendered in anon path,
     // but mocked defensively in case the component tree changes)
-    useQuery: () => ({ data: undefined, isLoading: false, isError: false, error: null }),
+    useQuery: () => ({
+      data: undefined,
+      isLoading: false,
+      isError: false,
+      error: null,
+    }),
     useMutation: () => ({ mutate: vi.fn(), isPending: false }),
     useQueryClient: () => ({ invalidateQueries: vi.fn(), fetchQuery: vi.fn() }),
   }
@@ -160,7 +166,11 @@ describe("Effect Browser – Groups section visibility", () => {
 
   it("shows 'Groups' label only when a family name matches the search term", async () => {
     mockFamilies = [
-      { name: "Poise", member_names: ["Poise +1", "Poise +2"], member_ids: [1, 2] },
+      {
+        name: "Poise",
+        member_names: ["Poise +1", "Poise +2"],
+        member_ids: [1, 2],
+      },
     ]
     mockEffects = [
       { id: 1, name: "Poise +1" },
@@ -198,7 +208,11 @@ describe("Effect Browser – 'Improved Damage Negation at Low HP' regression", (
     // Correct backend behaviour: this effect is NOT a family (no real +1/+2 params)
     mockFamilies = [
       // Only legitimate multi-member families are present
-      { name: "Poise", member_names: ["Poise +1", "Poise +2"], member_ids: [1, 2] },
+      {
+        name: "Poise",
+        member_names: ["Poise +1", "Poise +2"],
+        member_ids: [1, 2],
+      },
     ]
     mockEffects = [
       { id: 340800, name: "Improved Damage Negation at Low HP" },
@@ -214,7 +228,9 @@ describe("Effect Browser – 'Improved Damage Negation at Low HP' regression", (
     expect(screen.queryByText(/^Groups/)).not.toBeInTheDocument()
 
     // The individual effect must still appear in the browser
-    expect(screen.getByText("Improved Damage Negation at Low HP")).toBeInTheDocument()
+    expect(
+      screen.getByText("Improved Damage Negation at Low HP"),
+    ).toBeInTheDocument()
   })
 
   it("appears under Groups if backend incorrectly returns it as a family (documents regression)", () => {
@@ -238,6 +254,8 @@ describe("Effect Browser – 'Improved Damage Negation at Low HP' regression", (
     // Groups section (italic chip) AND the Individual section — hence two nodes.
     // This test exists so reviewers understand the failure mode.
     expect(screen.getByText(/^Groups/)).toBeInTheDocument()
-    expect(screen.getAllByText("Improved Damage Negation at Low HP").length).toBeGreaterThanOrEqual(1)
+    expect(
+      screen.getAllByText("Improved Damage Negation at Low HP").length,
+    ).toBeGreaterThanOrEqual(1)
   })
 })

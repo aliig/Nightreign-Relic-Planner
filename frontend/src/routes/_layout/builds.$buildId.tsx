@@ -1,12 +1,18 @@
-import { createFileRoute, Link, Outlet, useParams, useRouterState } from "@tanstack/react-router"
 import { useSuspenseQuery } from "@tanstack/react-query"
-import { Suspense } from "react"
+import {
+  createFileRoute,
+  Link,
+  Outlet,
+  useParams,
+  useRouterState,
+} from "@tanstack/react-router"
 import { Pencil, Zap } from "lucide-react"
+import { Suspense } from "react"
 
 import { BuildsService } from "@/client"
-import { cn } from "@/lib/utils"
 import { isLoggedIn } from "@/hooks/useAuth"
 import { useLocalBuilds } from "@/hooks/useLocalBuilds"
+import { cn } from "@/lib/utils"
 
 export const Route = createFileRoute("/_layout/builds/$buildId")({
   component: BuildDetailLayout,
@@ -43,10 +49,11 @@ function BuildDetailLayout() {
         <span>/</span>
         <span className="text-foreground font-medium truncate max-w-[200px]">
           <Suspense fallback="…">
-            {isLoggedIn()
-              ? <AuthBuildName buildId={buildId} />
-              : <AnonBuildName buildId={buildId} />
-            }
+            {isLoggedIn() ? (
+              <AuthBuildName buildId={buildId} />
+            ) : (
+              <AnonBuildName buildId={buildId} />
+            )}
           </Suspense>
         </span>
       </div>

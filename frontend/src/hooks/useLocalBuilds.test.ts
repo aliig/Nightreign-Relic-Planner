@@ -4,7 +4,7 @@
  * No network layer — localStorage is the only external dependency,
  * provided by jsdom. BuildsService is mocked at the module level.
  */
-import { renderHook, act } from "@testing-library/react"
+import { act, renderHook } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 // vi.mock is hoisted to the top of the file, so variables used inside its
@@ -180,7 +180,7 @@ describe("migrateLocalBuildsToDb", () => {
 
     const count = await migrateLocalBuildsToDb()
 
-    expect(count).toBe(0)  // 0 succeeded
-    expect(localStorage.getItem("anon_builds")).toBeNull()  // still cleared
+    expect(count).toBe(0) // 0 succeeded
+    expect(localStorage.getItem("anon_builds")).toBeNull() // still cleared
   })
 })

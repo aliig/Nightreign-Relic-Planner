@@ -1,15 +1,21 @@
-import { createFileRoute, useNavigate } from "@tanstack/react-router"
-import { useRef, useState } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { Upload, User2, AlertCircle, Info } from "lucide-react"
+import { createFileRoute, useNavigate } from "@tanstack/react-router"
+import { AlertCircle, Info, Upload, User2 } from "lucide-react"
+import { useRef, useState } from "react"
 
 import { SavesService } from "@/client"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
 import useCustomToast from "@/hooks/useCustomToast"
-import { handleError, formatRelativeTime } from "@/utils"
-import { useSaveStatus, storeAnonUploadMeta } from "@/hooks/useSaveStatus"
+import { storeAnonUploadMeta, useSaveStatus } from "@/hooks/useSaveStatus"
+import { formatRelativeTime, handleError } from "@/utils"
 
 export const Route = createFileRoute("/_layout/upload")({
   component: UploadPage,
@@ -26,24 +32,32 @@ function SaveStatusBanner() {
   return (
     <Alert>
       <Info className="h-4 w-4" />
-      <AlertTitle>{isAnon ? "Session data loaded" : "Save data on file"}</AlertTitle>
+      <AlertTitle>
+        {isAnon ? "Session data loaded" : "Save data on file"}
+      </AlertTitle>
       <AlertDescription>
         <div className="flex flex-wrap items-center gap-2 mt-1">
           <Badge variant="secondary">{status.platform}</Badge>
           <span>
-            {status.character_count} character{status.character_count !== 1 ? "s" : ""}
-            {status.character_names.length > 0 && `: ${status.character_names.join(", ")}`}
+            {status.character_count} character
+            {status.character_count !== 1 ? "s" : ""}
+            {status.character_names.length > 0 &&
+              `: ${status.character_names.join(", ")}`}
           </span>
         </div>
         {!isAnon && status.uploaded_at && (
           <p className="mt-1 text-xs">
-            Uploaded {formatRelativeTime(status.uploaded_at)} — drop a new file to replace.
+            Uploaded {formatRelativeTime(status.uploaded_at)} — drop a new file
+            to replace.
           </p>
         )}
         {isAnon && (
           <p className="mt-1 text-xs">
             Session only — drop a new file to refresh, or{" "}
-            <a href="/login" className="underline">sign in</a> to persist your data.
+            <a href="/login" className="underline">
+              sign in
+            </a>{" "}
+            to persist your data.
           </p>
         )}
       </AlertDescription>
@@ -57,11 +71,12 @@ function UploadPage() {
   const { showSuccessToast, showErrorToast } = useCustomToast()
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [dragging, setDragging] = useState(false)
-  const [uploadResult, setUploadResult] = useState<Awaited<ReturnType<typeof SavesService.uploadSave>> | null>(null)
+  const [uploadResult, setUploadResult] = useState<Awaited<
+    ReturnType<typeof SavesService.uploadSave>
+  > | null>(null)
 
   const uploadMutation = useMutation({
-    mutationFn: (file: File) =>
-      SavesService.uploadSave({ formData: { file } }),
+    mutationFn: (file: File) => SavesService.uploadSave({ formData: { file } }),
     onSuccess: (data) => {
       setUploadResult(data)
       queryClient.invalidateQueries({ queryKey: ["characters"] })
@@ -73,10 +88,16 @@ function UploadPage() {
           platform: data.platform,
           uploaded_at: new Date().toISOString(),
         })
-        sessionStorage.setItem("parsedCharacters", JSON.stringify(data.characters))
+        sessionStorage.setItem(
+          "parsedCharacters",
+          JSON.stringify(data.characters),
+        )
         // Default to first character so inventory/optimize have a selection immediately
         if (data.characters.length > 0) {
-          sessionStorage.setItem("selectedCharacter", JSON.stringify(data.characters[0]))
+          sessionStorage.setItem(
+            "selectedCharacter",
+            JSON.stringify(data.characters[0]),
+          )
         }
       }
       if (data.persisted) {
@@ -114,7 +135,8 @@ function UploadPage() {
       <div>
         <h1 className="text-2xl font-semibold">Upload Save File</h1>
         <p className="text-muted-foreground mt-1">
-          Import your PC (.sl2) or PS4 (memory.dat) save to load your relic inventory.
+          Import your PC (.sl2) or PS4 (memory.dat) save to load your relic
+          inventory.
         </p>
       </div>
 
@@ -122,7 +144,10 @@ function UploadPage() {
 
       {/* Drop zone */}
       <div
-        onDragOver={(e) => { e.preventDefault(); setDragging(true) }}
+        onDragOver={(e) => {
+          e.preventDefault()
+          setDragging(true)
+        }}
         onDragLeave={() => setDragging(false)}
         onDrop={onDrop}
         onClick={() => fileInputRef.current?.click()}
@@ -135,9 +160,14 @@ function UploadPage() {
         <Upload className="h-10 w-10 text-muted-foreground mb-3" />
         <p className="text-sm font-medium">Drop your save file here</p>
         <p className="text-xs text-muted-foreground mt-1">or click to browse</p>
-        <p className="text-xs text-muted-foreground mt-3">.sl2 (PC) · memory.dat (PS4)</p>
+        <p className="text-xs text-muted-foreground mt-3">
+          .sl2 (PC) · memory.dat (PS4)
+        </p>
         <p className="text-xs text-muted-foreground mt-2">
-          PC: <code className="font-mono">%AppData%\Roaming\Nightreign\[SteamID]\NR0000.sl2</code>
+          PC:{" "}
+          <code className="font-mono">
+            %AppData%\Roaming\Nightreign\[SteamID]\NR0000.sl2
+          </code>
         </p>
         <input
           ref={fileInputRef}
@@ -167,7 +197,8 @@ function UploadPage() {
       {uploadResult && (
         <div className="space-y-3">
           <h2 className="text-lg font-medium">
-            Found {uploadResult.character_count} character{uploadResult.character_count !== 1 ? "s" : ""}
+            Found {uploadResult.character_count} character
+            {uploadResult.character_count !== 1 ? "s" : ""}
           </h2>
           <div className="grid gap-3 sm:grid-cols-2">
             {uploadResult.characters.map((char) => (
@@ -175,7 +206,10 @@ function UploadPage() {
                 key={char.slot_index}
                 className="cursor-pointer hover:border-primary/50 transition-colors"
                 onClick={() => {
-                  sessionStorage.setItem("selectedCharacter", JSON.stringify(char))
+                  sessionStorage.setItem(
+                    "selectedCharacter",
+                    JSON.stringify(char),
+                  )
                   navigate({ to: "/inventory" })
                 }}
               >
@@ -187,7 +221,8 @@ function UploadPage() {
                 </CardHeader>
                 <CardContent>
                   <CardDescription>
-                    Slot {char.slot_index} · {char.relic_count} relic{char.relic_count !== 1 ? "s" : ""}
+                    Slot {char.slot_index} · {char.relic_count} relic
+                    {char.relic_count !== 1 ? "s" : ""}
                   </CardDescription>
                 </CardContent>
               </Card>
@@ -197,8 +232,12 @@ function UploadPage() {
             <Alert>
               <AlertCircle className="h-4 w-4" />
               <AlertDescription>
-                You're not logged in — your inventory won't be saved between sessions.{" "}
-                <a href="/login" className="underline">Sign in</a> to persist your data.
+                You're not logged in — your inventory won't be saved between
+                sessions.{" "}
+                <a href="/login" className="underline">
+                  Sign in
+                </a>{" "}
+                to persist your data.
               </AlertDescription>
             </Alert>
           )}

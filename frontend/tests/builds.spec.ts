@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test"
-import { logInUser } from "./utils/user"
-import { randomEmail, randomPassword } from "./utils/random"
 import { createUser } from "./utils/privateApi"
+import { randomEmail, randomPassword } from "./utils/random"
+import { logInUser } from "./utils/user"
 
 // ---------------------------------------------------------------------------
 // Anonymous builds (localStorage-backed)
@@ -30,7 +30,9 @@ test.describe("Builds page — anonymous", () => {
 
   test("shows browser-storage notice with sign-in link", async ({ page }) => {
     // Scope to the notice paragraph to avoid matching the sidebar "Sign In" link
-    const notice = page.locator("p", { hasText: "Builds are stored in your browser." })
+    const notice = page.locator("p", {
+      hasText: "Builds are stored in your browser.",
+    })
     await expect(notice).toBeVisible()
     await expect(notice.getByRole("link", { name: "Sign in" })).toBeVisible()
   })
@@ -53,7 +55,9 @@ test.describe("Builds page — anonymous", () => {
 
     await expect(page.getByRole("dialog")).not.toBeVisible()
     // Verify the card exists via its aria-labelled delete button
-    await expect(page.getByRole("button", { name: 'Delete "Fire Wylder"' })).toBeVisible()
+    await expect(
+      page.getByRole("button", { name: 'Delete "Fire Wylder"' }),
+    ).toBeVisible()
   })
 
   test("build name is required", async ({ page }) => {
@@ -71,23 +75,34 @@ test.describe("Builds page — anonymous", () => {
     // Create a build first
     await page.getByRole("button", { name: "New Build" }).click()
     await page.getByRole("dialog").getByLabel("Name").fill("Build To Delete")
-    await page.getByRole("dialog").getByRole("button", { name: "Create" }).click()
+    await page
+      .getByRole("dialog")
+      .getByRole("button", { name: "Create" })
+      .click()
     await expect(page.getByRole("dialog")).not.toBeVisible()
     // Verify the card exists via its aria-labelled delete button
-    await expect(page.getByRole("button", { name: 'Delete "Build To Delete"' })).toBeVisible()
+    await expect(
+      page.getByRole("button", { name: 'Delete "Build To Delete"' }),
+    ).toBeVisible()
 
     // Click the delete icon button
     await page.getByRole("button", { name: 'Delete "Build To Delete"' }).click()
 
     // Confirm deletion in the dialog
     const confirmDialog = page.getByRole("dialog")
-    await expect(confirmDialog.getByText(/Delete "Build To Delete"\?/)).toBeVisible()
+    await expect(
+      confirmDialog.getByText(/Delete "Build To Delete"\?/),
+    ).toBeVisible()
     await confirmDialog.getByRole("button", { name: "Delete" }).click()
 
-    await expect(page.getByRole("button", { name: 'Delete "Build To Delete"' })).not.toBeVisible()
+    await expect(
+      page.getByRole("button", { name: 'Delete "Build To Delete"' }),
+    ).not.toBeVisible()
   })
 
-  test("all character options are available in new build dialog", async ({ page }) => {
+  test("all character options are available in new build dialog", async ({
+    page,
+  }) => {
     await page.getByRole("button", { name: "New Build" }).click()
 
     const dialog = page.getByRole("dialog")
@@ -95,8 +110,16 @@ test.describe("Builds page — anonymous", () => {
     await dialog.getByRole("combobox").click()
 
     const expectedCharacters = [
-      "Wylder", "Guardian", "Ironeye", "Duchess", "Raider",
-      "Revenant", "Recluse", "Executor", "Scholar", "Undertaker",
+      "Wylder",
+      "Guardian",
+      "Ironeye",
+      "Duchess",
+      "Raider",
+      "Revenant",
+      "Recluse",
+      "Executor",
+      "Scholar",
+      "Undertaker",
     ]
     for (const char of expectedCharacters) {
       await expect(page.getByRole("option", { name: char })).toBeVisible()
@@ -142,9 +165,14 @@ test.describe("Builds page — authenticated", () => {
     // Create
     await page.getByRole("button", { name: "New Build" }).click()
     await page.getByRole("dialog").getByLabel("Name").fill("Auth Build")
-    await page.getByRole("dialog").getByRole("button", { name: "Create" }).click()
+    await page
+      .getByRole("dialog")
+      .getByRole("button", { name: "Create" })
+      .click()
     await expect(page.getByRole("dialog")).not.toBeVisible()
-    await expect(page.getByRole("button", { name: 'Delete "Auth Build"' })).toBeVisible()
+    await expect(
+      page.getByRole("button", { name: 'Delete "Auth Build"' }),
+    ).toBeVisible()
 
     // Delete
     await page.getByRole("button", { name: 'Delete "Auth Build"' }).click()
@@ -152,6 +180,8 @@ test.describe("Builds page — authenticated", () => {
     await expect(confirmDialog.getByText(/Delete "Auth Build"\?/)).toBeVisible()
     await confirmDialog.getByRole("button", { name: "Delete" }).click()
 
-    await expect(page.getByRole("button", { name: 'Delete "Auth Build"' })).not.toBeVisible()
+    await expect(
+      page.getByRole("button", { name: 'Delete "Auth Build"' }),
+    ).not.toBeVisible()
   })
 })

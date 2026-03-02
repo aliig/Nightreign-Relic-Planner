@@ -10,9 +10,13 @@ test.use({ storageState: { cookies: [], origins: [] } })
 
 test("Upload page shows correct heading and description", async ({ page }) => {
   await page.goto("/upload")
-  await expect(page.getByRole("heading", { name: "Upload Save File" })).toBeVisible()
   await expect(
-    page.getByText("Import your PC (.sl2) or PS4 (memory.dat) save to load your relic inventory."),
+    page.getByRole("heading", { name: "Upload Save File" }),
+  ).toBeVisible()
+  await expect(
+    page.getByText(
+      "Import your PC (.sl2) or PS4 (memory.dat) save to load your relic inventory.",
+    ),
   ).toBeVisible()
 })
 
