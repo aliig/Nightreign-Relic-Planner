@@ -1,14 +1,29 @@
-import { createFileRoute, Link, Outlet, useRouterState } from "@tanstack/react-router"
-import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query"
-import { Suspense, useState } from "react"
-import { Copy, Pencil, Plus, Star, Trash2 } from "lucide-react"
-import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
+import {
+  useMutation,
+  useQueryClient,
+  useSuspenseQuery,
+} from "@tanstack/react-query"
+import {
+  createFileRoute,
+  Link,
+  Outlet,
+  useRouterState,
+} from "@tanstack/react-router"
+import { Copy, Pencil, Plus, Star, Trash2, Zap } from "lucide-react"
+import { Suspense, useState } from "react"
+import { useForm } from "react-hook-form"
 import { z } from "zod"
 
-import { type FeaturedBuildPublic, BuildsService } from "@/client"
+import { BuildsService, type FeaturedBuildPublic } from "@/client"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
 import {
   Dialog,
   DialogContent,
@@ -36,7 +51,7 @@ import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
 import useAuth, { isLoggedIn } from "@/hooks/useAuth"
 import useCustomToast from "@/hooks/useCustomToast"
-import { useLocalBuilds, type LocalBuild } from "@/hooks/useLocalBuilds"
+import { type LocalBuild, useLocalBuilds } from "@/hooks/useLocalBuilds"
 import { handleError } from "@/utils"
 
 export const Route = createFileRoute("/_layout/builds")({
@@ -47,8 +62,16 @@ export const Route = createFileRoute("/_layout/builds")({
 })
 
 const CHARACTER_NAMES = [
-  "Wylder", "Guardian", "Ironeye", "Duchess", "Raider",
-  "Revenant", "Recluse", "Executor", "Scholar", "Undertaker",
+  "Wylder",
+  "Guardian",
+  "Ironeye",
+  "Duchess",
+  "Raider",
+  "Revenant",
+  "Recluse",
+  "Executor",
+  "Scholar",
+  "Undertaker",
 ]
 
 const newBuildSchema = z.object({
@@ -90,7 +113,10 @@ function NewBuildDialogContent({ onCreate, isPending }: NewBuildDialogProps) {
           <DialogTitle>Create Build</DialogTitle>
         </DialogHeader>
         <Form {...form}>
-          <form onSubmit={form.handleSubmit(handleSubmit)} className="space-y-4">
+          <form
+            onSubmit={form.handleSubmit(handleSubmit)}
+            className="space-y-4"
+          >
             <FormField
               control={form.control}
               name="name"
@@ -118,7 +144,9 @@ function NewBuildDialogContent({ onCreate, isPending }: NewBuildDialogProps) {
                     </FormControl>
                     <SelectContent>
                       {CHARACTER_NAMES.map((c) => (
-                        <SelectItem key={c} value={c}>{c}</SelectItem>
+                        <SelectItem key={c} value={c}>
+                          {c}
+                        </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
@@ -145,13 +173,23 @@ interface DeleteDialogProps {
   isPending?: boolean
 }
 
-function DeleteBuildButton({ buildId, buildName, onDelete, isPending }: DeleteDialogProps) {
+function DeleteBuildButton({
+  buildId,
+  buildName,
+  onDelete,
+  isPending,
+}: DeleteDialogProps) {
   const [open, setOpen] = useState(false)
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:text-destructive" aria-label={`Delete "${buildName}"`}>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8 text-destructive hover:text-destructive"
+          aria-label={`Delete "${buildName}"`}
+        >
           <Trash2 className="h-4 w-4" />
         </Button>
       </DialogTrigger>
@@ -159,12 +197,19 @@ function DeleteBuildButton({ buildId, buildName, onDelete, isPending }: DeleteDi
         <DialogHeader>
           <DialogTitle>Delete "{buildName}"?</DialogTitle>
         </DialogHeader>
-        <p className="text-sm text-muted-foreground">This action cannot be undone.</p>
+        <p className="text-sm text-muted-foreground">
+          This action cannot be undone.
+        </p>
         <div className="flex justify-end gap-2 mt-4">
-          <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
+          <Button variant="outline" onClick={() => setOpen(false)}>
+            Cancel
+          </Button>
           <Button
             variant="destructive"
-            onClick={() => { onDelete(buildId); setOpen(false) }}
+            onClick={() => {
+              onDelete(buildId)
+              setOpen(false)
+            }}
             disabled={isPending}
           >
             {isPending ? "Deleting…" : "Delete"}
@@ -226,8 +271,14 @@ function BuildCard({
             value={draftName}
             onChange={(e) => setDraftName(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter") { e.preventDefault(); e.currentTarget.blur() }
-              if (e.key === "Escape") { setDraftName(build.name); e.currentTarget.blur() }
+              if (e.key === "Enter") {
+                e.preventDefault()
+                e.currentTarget.blur()
+              }
+              if (e.key === "Escape") {
+                setDraftName(build.name)
+                e.currentTarget.blur()
+              }
             }}
             onBlur={commitRename}
             className="text-base font-semibold bg-transparent border-b border-transparent hover:border-muted-foreground/30 focus:border-primary focus:outline-none focus:ring-0 py-0.5 min-w-0 flex-1 truncate transition-colors"
@@ -241,7 +292,9 @@ function BuildCard({
                 onClick={() => onToggleFeatured(build.id)}
                 title={build.is_featured ? "Unfeature build" : "Feature build"}
               >
-                <Star className={`h-4 w-4 ${build.is_featured ? "fill-current" : ""}`} />
+                <Star
+                  className={`h-4 w-4 ${build.is_featured ? "fill-current" : ""}`}
+                />
               </Button>
             )}
             {onDuplicate && (
@@ -255,7 +308,27 @@ function BuildCard({
                 <Copy className="h-4 w-4" />
               </Button>
             )}
-            <Button asChild variant="ghost" size="icon" className="h-8 w-8" title="Edit build">
+            <Button
+              asChild
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 text-primary hover:text-primary"
+              title="Optimize build"
+            >
+              <Link
+                to="/builds/$buildId/optimize"
+                params={{ buildId: build.id }}
+              >
+                <Zap className="h-4 w-4" />
+              </Link>
+            </Button>
+            <Button
+              asChild
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8"
+              title="Edit build"
+            >
               <Link to="/builds/$buildId/edit" params={{ buildId: build.id }}>
                 <Pencil className="h-4 w-4" />
               </Link>
@@ -280,11 +353,15 @@ function BuildCard({
             </SelectTrigger>
             <SelectContent>
               {CHARACTER_NAMES.map((c) => (
-                <SelectItem key={c} value={c}>{c}</SelectItem>
+                <SelectItem key={c} value={c}>
+                  {c}
+                </SelectItem>
               ))}
             </SelectContent>
           </Select>
-          <span>· {effectCount} effect{effectCount !== 1 ? "s" : ""} prioritized</span>
+          <span>
+            · {effectCount} effect{effectCount !== 1 ? "s" : ""} prioritized
+          </span>
         </CardDescription>
         {build.updated_at && (
           <p className="text-xs text-muted-foreground mt-1">
@@ -314,7 +391,10 @@ function FeaturedBuildCard({
   const b = build as any
   const effectCount =
     ((b.required_effects ?? []) as number[]).length +
-    ((b.groups ?? []) as { effects: number[] }[]).reduce((acc, g) => acc + g.effects.length, 0)
+    ((b.groups ?? []) as { effects: number[] }[]).reduce(
+      (acc, g) => acc + g.effects.length,
+      0,
+    )
 
   return (
     <Card>
@@ -346,10 +426,13 @@ function FeaturedBuildCard({
       </CardHeader>
       <CardContent>
         <CardDescription>
-          {build.character} · {effectCount} effect{effectCount !== 1 ? "s" : ""} prioritized
+          {build.character} · {effectCount} effect{effectCount !== 1 ? "s" : ""}{" "}
+          prioritized
         </CardDescription>
         {build.owner_name && (
-          <p className="text-xs text-muted-foreground mt-1">by {build.owner_name}</p>
+          <p className="text-xs text-muted-foreground mt-1">
+            by {build.owner_name}
+          </p>
         )}
       </CardContent>
     </Card>
@@ -473,8 +556,13 @@ function AuthBuildList() {
   })
 
   const changeCharacterMutation = useMutation({
-    mutationFn: ({ buildId, character }: { buildId: string; character: string }) =>
-      BuildsService.updateBuild({ buildId, requestBody: { character } }),
+    mutationFn: ({
+      buildId,
+      character,
+    }: {
+      buildId: string
+      character: string
+    }) => BuildsService.updateBuild({ buildId, requestBody: { character } }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["builds"] }),
     onError: handleError.bind(showErrorToast),
   })
@@ -524,10 +612,18 @@ function AuthBuildList() {
           }}
           onDelete={(id) => deleteMutation.mutate(id)}
           onRename={(id, name) => renameMutation.mutate({ buildId: id, name })}
-          onChangeCharacter={(id, character) => changeCharacterMutation.mutate({ buildId: id, character })}
+          onChangeCharacter={(id, character) =>
+            changeCharacterMutation.mutate({ buildId: id, character })
+          }
           onDuplicate={(id) => duplicateMutation.mutate(id)}
-          onToggleFeatured={user?.is_superuser ? (id) => toggleFeaturedMutation.mutate(id) : undefined}
-          isDeleting={deleteMutation.isPending && deleteMutation.variables === build.id}
+          onToggleFeatured={
+            user?.is_superuser
+              ? (id) => toggleFeaturedMutation.mutate(id)
+              : undefined
+          }
+          isDeleting={
+            deleteMutation.isPending && deleteMutation.variables === build.id
+          }
         />
       ))}
     </div>
@@ -539,7 +635,8 @@ function AuthBuildsSection() {
   const queryClient = useQueryClient()
 
   const createMutation = useMutation({
-    mutationFn: (data: NewBuildForm) => BuildsService.createBuild({ requestBody: data }),
+    mutationFn: (data: NewBuildForm) =>
+      BuildsService.createBuild({ requestBody: data }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["builds"] })
       showSuccessToast("Build created.")
@@ -593,7 +690,11 @@ function AnonBuildsSection() {
 
       <p className="text-xs text-muted-foreground border rounded-md px-3 py-2 bg-muted/40">
         Builds are stored in your browser.{" "}
-        <Link to="/login" search={{ redirect: "/builds" }} className="underline">
+        <Link
+          to="/login"
+          search={{ redirect: "/builds" }}
+          className="underline"
+        >
           Sign in
         </Link>{" "}
         to sync across devices.
@@ -625,7 +726,8 @@ function AnonBuildsSection() {
 
 function BuildsPage() {
   const hasBuildEditor = useRouterState({
-    select: (s) => s.matches.some((m) => m.routeId === "/_layout/builds/$buildId"),
+    select: (s) =>
+      s.matches.some((m) => m.routeId === "/_layout/builds/$buildId"),
   })
 
   if (hasBuildEditor) return <Outlet />

@@ -16,7 +16,6 @@ const baseItems: Item[] = [
   { icon: Upload, title: "Upload", path: "/upload" },
   { icon: Package, title: "Inventory", path: "/inventory" },
   { icon: Layers, title: "Builds", path: "/builds" },
-  { icon: Zap, title: "Optimize", path: "/optimize" },
 ]
 
 export function AppSidebar() {

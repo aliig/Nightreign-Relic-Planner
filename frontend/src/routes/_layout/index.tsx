@@ -1,12 +1,17 @@
 import { createFileRoute, Link } from "@tanstack/react-router"
-import { Layers, Package, Upload, Zap } from "lucide-react"
-
+import { Layers, Package, Upload } from "lucide-react"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
 import useAuth from "@/hooks/useAuth"
 import { useSaveStatus } from "@/hooks/useSaveStatus"
 import { formatRelativeTime } from "@/utils"
-import { Button } from "@/components/ui/button"
-import { Badge } from "@/components/ui/badge"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 
 export const Route = createFileRoute("/_layout/")({
   component: Dashboard,
@@ -17,15 +22,24 @@ export const Route = createFileRoute("/_layout/")({
 
 function Dashboard() {
   const { user: currentUser } = useAuth()
-  const { status: saveStatus, isLoading: saveStatusLoading, isAnon } = useSaveStatus()
+  const {
+    status: saveStatus,
+    isLoading: saveStatusLoading,
+    isAnon,
+  } = useSaveStatus()
 
   let uploadFooter: React.ReactNode = null
   if (!saveStatusLoading && saveStatus) {
     uploadFooter = (
       <div className="text-xs text-muted-foreground space-y-0.5">
         <div className="flex items-center gap-1.5 flex-wrap">
-          <Badge variant="secondary" className="text-[10px] px-1.5 py-0">{saveStatus.platform}</Badge>
-          <span>{saveStatus.character_count} character{saveStatus.character_count !== 1 ? "s" : ""}</span>
+          <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
+            {saveStatus.platform}
+          </Badge>
+          <span>
+            {saveStatus.character_count} character
+            {saveStatus.character_count !== 1 ? "s" : ""}
+          </span>
         </div>
         <p>
           {isAnon
@@ -51,7 +65,7 @@ function Dashboard() {
         </p>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         <QuickCard
           icon={<Upload className="h-5 w-5" />}
           title="Upload Save"
@@ -74,13 +88,6 @@ function Dashboard() {
           href="/builds"
           action="Manage"
         />
-        <QuickCard
-          icon={<Zap className="h-5 w-5" />}
-          title="Optimize"
-          description="Run the vessel optimizer to find the best relic assignments."
-          href="/optimize"
-          action="Optimize"
-        />
       </div>
     </div>
   )
@@ -95,7 +102,14 @@ interface QuickCardProps {
   footer?: React.ReactNode
 }
 
-function QuickCard({ icon, title, description, href, action, footer }: QuickCardProps) {
+function QuickCard({
+  icon,
+  title,
+  description,
+  href,
+  action,
+  footer,
+}: QuickCardProps) {
   return (
     <Card>
       <CardHeader className="pb-2">
