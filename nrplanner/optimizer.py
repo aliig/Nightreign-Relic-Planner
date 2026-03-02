@@ -50,10 +50,14 @@ class VesselOptimizer:
                 if not self.scorer.has_excluded_effect(r, build, desired_compat_effs)
                 and r.ga_handle not in pinned_handles
             ]
-            scored = sorted(
-                ((self.scorer.score_relic(r, build), r) for r in candidates),
-                key=lambda x: x[0], reverse=True,
-            )
+            # Pre-filter: relics with pre_score ≤ 0 have no desired effects
+            # and context score ≤ pre_score (stacking only reduces), so the
+            # solver would skip them anyway.  Removing them here shrinks the
+            # candidate pool and lets the backtracking solver run on builds
+            # that would otherwise fall back to the less-optimal greedy path.
+            scored = [(self.scorer.score_relic(r, build), r) for r in candidates]
+            scored = [(s, r) for s, r in scored if s > 0]
+            scored.sort(key=lambda x: x[0], reverse=True)
             candidates_per_free_slot.append(scored)
 
         num_free = len(free_slot_indices)
@@ -62,14 +66,30 @@ class VesselOptimizer:
             raw_free: list[list] = [[]]
         else:
             total = sum(len(c) for c in candidates_per_free_slot)
-            if total <= 200 and num_free <= 6:
-                raw_free = self._backtrack_solve(
+
+            # Always run greedy first — it's fast O(n*k) and gives a
+            # baseline score that seeds backtracking for aggressive pruning.
+            raw_free = self._greedy_solve(
+                candidates_per_free_slot, num_free, build, top_n, desired_cw,
+                desired_compat_effs)
+
+            if total <= 500 and num_free <= 6:
+                greedy_best = max(
+                    (sum(s for _, s in a) for a in raw_free), default=0)
+                bt_results = self._backtrack_solve(
                     candidates_per_free_slot, num_free, build, top_n, desired_cw,
-                    desired_compat_effs)
-            else:
-                raw_free = self._greedy_solve(
-                    candidates_per_free_slot, num_free, build, top_n, desired_cw,
-                    desired_compat_effs)
+                    desired_compat_effs, initial_threshold=greedy_best - 1)
+                if bt_results:
+                    # Merge and deduplicate by relic set
+                    seen: set[frozenset] = set()
+                    merged: list[list] = []
+                    for assignment in bt_results + raw_free:
+                        key = frozenset(
+                            r.ga_handle for r, _ in assignment if r is not None)
+                        if key not in seen:
+                            seen.add(key)
+                            merged.append(assignment)
+                    raw_free = merged
 
         # When solvers find no useful free-slot relics, still produce one
         # result so pinned relics (if any) are represented.
@@ -208,8 +228,8 @@ class VesselOptimizer:
 
         # Name-based resolution: if a required effect ID wasn't found directly or via
         # text_id, check if any assigned effect resolves to the same display name.
-        # This mirrors the name-fallback in BuildScorer._resolve_category_and_weight and
-        # prevents false-positive "missing" warnings when alias effect IDs are used.
+        # Required for alias resolution — many game effects share a display name
+        # but have completely different IDs and text_ids.
         uncovered = required_ids - assigned_effect_ids
         if uncovered:
             required_name_to_id: dict[str, int] = {}
@@ -312,10 +332,11 @@ class VesselOptimizer:
                          build: BuildDefinition, top_n: int = 3,
                          desired_cw: dict[int, int] | None = None,
                          desired_compat_effs: dict[int, set[int]] | None = None,
+                         initial_threshold: int = -1,
                          ) -> list[list]:
         top: list[tuple[int, list]] = []
         seen: set[frozenset] = set()
-        min_threshold = -1
+        min_threshold = initial_threshold
         deadline = time.time() + 2.0
 
         state = VesselState(
@@ -344,10 +365,9 @@ class VesselOptimizer:
                         min_threshold = top[-1][0] if len(top) == top_n else -1
                 return
 
-            # Try empty slot
-            current[slot_idx] = (None, 0)
-            backtrack(slot_idx + 1, current, used, score)
-
+            # Try candidates first (sorted by pre_score desc) so that
+            # high-scoring solutions are found early, establishing
+            # aggressive min_threshold for pruning.
             remaining_max = sum(
                 candidates_per_slot[s][0][0] if candidates_per_slot[s] else 0
                 for s in range(slot_idx + 1, num_slots)
@@ -372,6 +392,10 @@ class VesselOptimizer:
 
                 used.discard(relic.ga_handle)
                 state.remove(delta)
+
+            # Try empty slot last (score 0 — worst case)
+            current[slot_idx] = (None, 0)
+            backtrack(slot_idx + 1, current, used, score)
 
         backtrack(0, [(None, 0)] * num_slots, set(), 0)
         valid = [(s, a) for s, a in top if any(r is not None for r, _ in a)]

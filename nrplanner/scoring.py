@@ -22,23 +22,24 @@ class BuildScorer:
     # ------------------------------------------------------------------
 
     def _get_name_cache(self, build: BuildDefinition) -> dict[str, tuple[str, int]]:
-        """display_name -> (category, weight) cache for name-based effect matching."""
+        """display_name -> (category, weight) cache for name-based effect matching.
+
+        Required for alias resolution: many game effects share the same
+        display name but have completely different IDs and text_ids.
+        """
         cache_key = (id(build.required_effects), id(build.excluded_effects),
                      tuple(id(g) for g in build.groups))
         if self._name_cache_key == cache_key:
             return self._name_cache
         cache: dict[str, tuple[str, int]] = {}
-        # required effects
         for eid in build.required_effects:
             name = self.data_source.get_effect_name(eid)
             if name and name != "Empty" and not name.startswith("Effect "):
                 cache.setdefault(name, ("required", REQUIRED_WEIGHT))
-        # excluded effects
         for eid in build.excluded_effects:
             name = self.data_source.get_effect_name(eid)
             if name and name != "Empty" and not name.startswith("Effect "):
                 cache.setdefault(name, ("excluded", 0))
-        # group effects
         for g in build.groups:
             for eid in g.effects:
                 name = self.data_source.get_effect_name(eid)
@@ -54,6 +55,10 @@ class BuildScorer:
 
         Category is "required", "excluded", "group", or None (unassigned).
         Falls back through: direct ID -> text_id -> name -> family.
+
+        Name-based matching is required for alias resolution — many game
+        effects share a display name but have different IDs and text_ids.
+        Family matching (via ``g.families``) adds magnitude weighting.
         """
         result = build.get_weight_for_effect(eff_id)
         if not result:

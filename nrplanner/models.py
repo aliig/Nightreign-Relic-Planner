@@ -263,7 +263,13 @@ class VesselState:
         self.desired_compat_effects = desired_compat_effects
 
     def place(self, relic: OwnedRelic) -> PlacementDelta:
-        """Compute and apply state changes for placing a relic. Returns delta for undo."""
+        """Compute and apply state changes for placing a relic. Returns delta for undo.
+
+        IMPORTANT: The delta only records IDs that were NOT already in the
+        state.  This is critical for correct backtracking — remove() uses set
+        subtraction, so recording already-present IDs would cause them to be
+        incorrectly removed when undoing this placement.
+        """
         added_eff: set[int] = set()
         added_excl: set[int] = set()
         added_ns_excl: set[int] = set()
@@ -271,20 +277,23 @@ class VesselState:
 
         ds = self.data_source
         for eff in relic.all_effects:
-            added_eff.add(eff)
+            if eff not in self.effect_ids:
+                added_eff.add(eff)
             text_id = ds.get_effect_text_id(eff)
-            if text_id != -1 and text_id != eff:
+            if text_id != -1 and text_id != eff and text_id not in self.effect_ids:
                 added_eff.add(text_id)
             compat = ds.get_effect_conflict_id(eff)
             stype = ds.get_effect_stacking_type(eff)
             excl = ds.get_effect_exclusivity_id(eff)
             if excl != -1:
-                added_excl.add(excl)
-                if stype == "no_stack":
+                if excl not in self.exclusivity_ids:
+                    added_excl.add(excl)
+                if stype == "no_stack" and excl not in self.no_stack_exclusivity_ids:
                     added_ns_excl.add(excl)
             # Rule 1: no_stack base placed (self-referencing compat)
             if stype == "no_stack" and compat != -1 and compat == eff:
-                added_ns_compat.add(compat)
+                if compat not in self.no_stack_compat_ids:
+                    added_ns_compat.add(compat)
             # Rule 2: variant placed that points to a real no_stack tier-family base.
             # Guard: compat must be self-referencing (a real tier-family base ID, not a
             # mega-group sentinel like 100).  Add the base's eff_id to effect_ids so the
@@ -294,7 +303,8 @@ class VesselState:
             elif compat != -1 and compat != eff:
                 if (ds.get_effect_conflict_id(compat) == compat
                         and ds.get_effect_stacking_type(compat) == "no_stack"):
-                    added_eff.add(compat)
+                    if compat not in self.effect_ids:
+                        added_eff.add(compat)
 
         # Desired compat tracking
         added_dcp: set[int] = set()
@@ -304,6 +314,8 @@ class VesselState:
                 compat = ds.get_effect_conflict_id(eff)
                 if compat == -1 or compat not in dce:
                     continue
+                if compat in self.desired_compat_placed:
+                    continue  # already tracked
                 desired_set = dce[compat]
                 if eff in desired_set:
                     added_dcp.add(compat)
