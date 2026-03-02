@@ -201,7 +201,7 @@ function BuildCard({
 }) {
   const [draftName, setDraftName] = useState(build.name)
   const [deleteOpen, setDeleteOpen] = useState(false)
-  
+
   const effectCount =
     (build.required_effects ?? []).length +
     (build.groups ?? []).reduce((acc, g) => acc + g.effects.length, 0)
@@ -216,9 +216,10 @@ function BuildCard({
   }
 
   return (
-    <Card className="flex flex-col min-h-[160px]">
-      <CardHeader className="pb-2">
-        <div className="flex items-center justify-between gap-2">
+    <>
+      <Card className="@container flex flex-col gap-3 px-6 py-4 min-h-[140px]">
+        {/* Header: name + actions */}
+        <div className="flex items-center gap-2">
           <input
             value={draftName}
             onChange={(e) => setDraftName(e.target.value)}
@@ -240,7 +241,7 @@ function BuildCard({
               asChild
               variant="ghost"
               size="icon"
-              className="h-8 w-8 text-primary hover:text-primary"
+              className="hidden @[280px]:inline-flex h-8 w-8 text-primary hover:text-primary"
               title="Optimize build"
             >
               <Link
@@ -254,14 +255,13 @@ function BuildCard({
               asChild
               variant="ghost"
               size="icon"
-              className="h-8 w-8"
+              className="hidden @[280px]:inline-flex h-8 w-8"
               title="Edit build"
             >
               <Link to="/builds/$buildId/edit" params={{ buildId: build.id }}>
                 <Pencil className="h-4 w-4" />
               </Link>
             </Button>
-
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" size="icon" className="h-8 w-8">
@@ -269,6 +269,25 @@ function BuildCard({
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
+                <DropdownMenuItem asChild>
+                  <Link
+                    to="/builds/$buildId/optimize"
+                    params={{ buildId: build.id }}
+                  >
+                    <Zap className="mr-2 h-4 w-4 text-primary" />
+                    Optimize
+                  </Link>
+                </DropdownMenuItem>
+                <DropdownMenuItem asChild>
+                  <Link
+                    to="/builds/$buildId/edit"
+                    params={{ buildId: build.id }}
+                  >
+                    <Pencil className="mr-2 h-4 w-4" />
+                    Edit
+                  </Link>
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
                 {onToggleFeatured && (
                   <DropdownMenuItem onClick={() => onToggleFeatured(build.id)}>
                     <Star className={`mr-2 h-4 w-4 ${build.is_featured ? "fill-current text-gold" : "text-muted-foreground"}`} />
@@ -282,7 +301,7 @@ function BuildCard({
                   </DropdownMenuItem>
                 )}
                 <DropdownMenuSeparator />
-                <DropdownMenuItem 
+                <DropdownMenuItem
                   onClick={() => setDeleteOpen(true)}
                   className="text-destructive focus:bg-destructive focus:text-destructive-foreground"
                 >
@@ -291,71 +310,79 @@ function BuildCard({
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
-
-            <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
-              <DialogContent>
-                <DialogHeader>
-                  <DialogTitle>Delete "{build.name}"?</DialogTitle>
-                </DialogHeader>
-                <p className="text-sm text-muted-foreground">
-                  This action cannot be undone.
-                </p>
-                <div className="flex justify-end gap-2 mt-4">
-                  <Button variant="outline" onClick={() => setDeleteOpen(false)}>
-                    Cancel
-                  </Button>
-                  <Button
-                    variant="destructive"
-                    onClick={() => {
-                      onDelete(build.id)
-                      setDeleteOpen(false)
-                    }}
-                    disabled={isDeleting}
-                  >
-                    {isDeleting ? "Deleting…" : "Delete"}
-                  </Button>
-                </div>
-              </DialogContent>
-            </Dialog>
           </div>
         </div>
-      </CardHeader>
-      <CardContent className="flex-1 flex flex-col justify-center py-4">
-        {effectCount > 0 ? (
-          <div className="flex flex-col items-center gap-1 text-center">
-            <span className="text-3xl font-bold text-primary">{effectCount}</span>
-            <span className="text-[10px] text-muted-foreground uppercase tracking-wider font-semibold">
-              Prioritized Effect{effectCount !== 1 ? "s" : ""}
-            </span>
+
+        {/* Body: effect count */}
+        <div className="flex-1 flex flex-col items-center justify-center">
+          {effectCount > 0 ? (
+            <>
+              <span className="text-3xl font-bold text-primary">{effectCount}</span>
+              <span className="text-[10px] text-muted-foreground uppercase tracking-wider font-semibold">
+                Prioritized Effect{effectCount !== 1 ? "s" : ""}
+              </span>
+            </>
+          ) : (
+            <div className="text-center text-muted-foreground">
+              <span className="text-sm">No prioritized effects</span>
+              <br />
+              <span className="text-[10px] uppercase tracking-wider font-semibold opacity-75">
+                Edit build to add
+              </span>
+            </div>
+          )}
+        </div>
+
+        {/* Footer: character + date */}
+        <div className="mt-auto flex items-center justify-between text-xs text-muted-foreground">
+          <Select
+            value={build.character}
+            onValueChange={(value) => onChangeCharacter(build.id, value)}
+          >
+            <SelectTrigger className="h-auto border-none bg-transparent p-0 shadow-none text-muted-foreground text-xs font-medium hover:text-foreground transition-colors [&>svg]:h-3 [&>svg]:w-3 [&>svg]:opacity-50 hover:[&>svg]:opacity-100 w-auto gap-1">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {CHARACTER_NAMES.map((c) => (
+                <SelectItem key={c} value={c}>
+                  {c}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {build.updated_at && (
+            <span>Updated {new Date(build.updated_at).toLocaleDateString()}</span>
+          )}
+        </div>
+      </Card>
+
+      {/* Delete confirmation — outside Card to avoid layout interference */}
+      <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete "{build.name}"?</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            This action cannot be undone.
+          </p>
+          <div className="flex justify-end gap-2 mt-4">
+            <Button variant="outline" onClick={() => setDeleteOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                onDelete(build.id)
+                setDeleteOpen(false)
+              }}
+              disabled={isDeleting}
+            >
+              {isDeleting ? "Deleting…" : "Delete"}
+            </Button>
           </div>
-        ) : (
-          <div className="flex flex-col items-center gap-1 text-center text-muted-foreground">
-            <span className="text-sm">No prioritized effects</span>
-            <span className="text-[10px] uppercase tracking-wider font-semibold opacity-75">Edit build to add</span>
-          </div>
-        )}
-      </CardContent>
-      <div className="mt-auto px-6 pb-4 pt-0 flex items-center justify-between text-xs text-muted-foreground">
-        <Select
-          value={build.character}
-          onValueChange={(value) => onChangeCharacter(build.id, value)}
-        >
-          <SelectTrigger className="h-auto border-none bg-transparent p-0 shadow-none text-muted-foreground text-xs font-medium hover:text-foreground transition-colors [&>svg]:h-3 [&>svg]:w-3 [&>svg]:opacity-50 hover:[&>svg]:opacity-100 w-auto gap-1">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {CHARACTER_NAMES.map((c) => (
-              <SelectItem key={c} value={c}>
-                {c}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        {build.updated_at && (
-          <span>Updated {new Date(build.updated_at).toLocaleDateString()}</span>
-        )}
-      </div>
-    </Card>
+        </DialogContent>
+      </Dialog>
+    </>
   )
 }
 
