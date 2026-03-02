@@ -306,7 +306,8 @@ class VesselOptimizer:
         ]
 
         missing: list[int | str] = []
-        required_ids = set(build.required_effects)
+        eff_reqs, fam_reqs = build.get_effective_requirements()
+        required_ids = set(eff_reqs)
 
         # Name-based resolution: if a required effect ID wasn't found directly or via
         # text_id, check if any assigned effect resolves to the same display name.
@@ -326,7 +327,7 @@ class VesselOptimizer:
                         assigned_effect_ids.add(required_name_to_id[name])
 
         missing.extend(required_ids - assigned_effect_ids)
-        for family in build.required_families:
+        for family in fam_reqs:
             family_ids = self.data_source.get_family_effect_ids(family)
             if not (assigned_effect_ids & family_ids):
                 missing.append(family)

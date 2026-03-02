@@ -202,9 +202,10 @@ function BuildCard({
   const [draftName, setDraftName] = useState(build.name)
   const [deleteOpen, setDeleteOpen] = useState(false)
 
-  const effectCount =
-    (build.required_effects ?? []).length +
-    (build.groups ?? []).reduce((acc, g) => acc + g.effects.length, 0)
+  const effectCount = (build.groups ?? []).reduce(
+    (acc, g) => acc + g.effects.length,
+    0,
+  )
 
   function commitRename() {
     const trimmed = draftName.trim()
@@ -402,12 +403,10 @@ function FeaturedBuildCard({
   onToggleFeatured?: (buildId: string) => void
 }) {
   const b = build as any
-  const effectCount =
-    ((b.required_effects ?? []) as number[]).length +
-    ((b.groups ?? []) as { effects: number[] }[]).reduce(
-      (acc, g) => acc + g.effects.length,
-      0,
-    )
+  const effectCount = ((b.groups ?? []) as { effects: number[] }[]).reduce(
+    (acc, g) => acc + g.effects.length,
+    0,
+  )
 
   return (
     <Card className="flex flex-col min-h-[160px]">

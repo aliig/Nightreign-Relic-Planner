@@ -481,3 +481,69 @@ class TestTierFamilyStacking:
 
         score = scorer.score_relic_in_context(relic, build, state)
         assert score > 0, "Stack-type compat=100 must not be blocked by no_stack compat=100"
+
+
+# ---------------------------------------------------------------------------
+# BuildDefinition.get_effective_requirements
+# ---------------------------------------------------------------------------
+
+class TestGetEffectiveRequirements:
+    """Verify that requirements are derived from the highest-weight group."""
+
+    def test_derives_from_highest_weight_group(self) -> None:
+        build = BuildDefinition(
+            id="t", name="T", character="Wylder",
+            groups=[
+                WeightGroup(weight=50, effects=[1001, 1002], families=["Fam A"]),
+                WeightGroup(weight=25, effects=[2001]),
+            ],
+        )
+        eff, fam = build.get_effective_requirements()
+        assert eff == [1001, 1002]
+        assert fam == ["Fam A"]
+
+    def test_explicit_required_takes_precedence(self) -> None:
+        build = BuildDefinition(
+            id="t", name="T", character="Wylder",
+            groups=[WeightGroup(weight=50, effects=[1001])],
+            required_effects=[9999],
+        )
+        eff, fam = build.get_effective_requirements()
+        assert eff == [9999]
+        assert fam == []
+
+    def test_no_groups_returns_empty(self) -> None:
+        build = BuildDefinition(id="t", name="T", character="Wylder")
+        eff, fam = build.get_effective_requirements()
+        assert eff == []
+        assert fam == []
+
+    def test_negative_weight_group_returns_empty(self) -> None:
+        build = BuildDefinition(
+            id="t", name="T", character="Wylder",
+            groups=[WeightGroup(weight=-20, effects=[1001])],
+        )
+        eff, fam = build.get_effective_requirements()
+        assert eff == []
+        assert fam == []
+
+    def test_zero_weight_group_returns_empty(self) -> None:
+        build = BuildDefinition(
+            id="t", name="T", character="Wylder",
+            groups=[WeightGroup(weight=0, effects=[1001])],
+        )
+        eff, fam = build.get_effective_requirements()
+        assert eff == []
+        assert fam == []
+
+    def test_multiple_groups_same_highest_weight(self) -> None:
+        """When multiple groups share the highest weight, first one wins."""
+        build = BuildDefinition(
+            id="t", name="T", character="Wylder",
+            groups=[
+                WeightGroup(weight=50, effects=[1001]),
+                WeightGroup(weight=50, effects=[2001]),
+            ],
+        )
+        eff, _ = build.get_effective_requirements()
+        assert eff == [1001]  # first group

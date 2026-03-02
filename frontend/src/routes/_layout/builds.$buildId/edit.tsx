@@ -139,7 +139,6 @@ const DEFAULT_GROUPS: WeightGroup[] = [
   { weight: -20, effects: [], families: [] },
 ]
 
-const REQUIRED_COLOR = "#FF8C00"
 const EXCLUDED_COLOR = "#CC4444"
 
 /** Weight input that buffers keystrokes locally and only commits on blur/Enter,
@@ -592,8 +591,6 @@ interface EditorUIProps {
   name: string
   character: string
   groups: WeightGroup[]
-  requiredEffects: number[]
-  requiredFamilies: string[]
   excludedEffects: number[]
   excludedFamilies: string[]
   includeDeep: boolean
@@ -607,8 +604,6 @@ interface EditorUIProps {
   families: FamilyMeta[]
   isAuth: boolean
   onGroupsChange: (groups: WeightGroup[]) => void
-  onRequiredEffectsChange: (ids: number[]) => void
-  onRequiredFamiliesChange: (names: string[]) => void
   onExcludedEffectsChange: (ids: number[]) => void
   onExcludedFamiliesChange: (names: string[]) => void
   onIncludeDeepChange: (v: boolean) => void
@@ -625,8 +620,6 @@ function BuildEditorUI({
   name,
   character,
   groups,
-  requiredEffects,
-  requiredFamilies,
   excludedEffects,
   excludedFamilies,
   includeDeep,
@@ -640,8 +633,6 @@ function BuildEditorUI({
   families,
   isAuth,
   onGroupsChange,
-  onRequiredEffectsChange,
-  onRequiredFamiliesChange,
   onExcludedEffectsChange,
   onExcludedFamiliesChange,
   onIncludeDeepChange,
@@ -696,19 +687,17 @@ function BuildEditorUI({
   // All effect IDs and family names currently assigned to any zone
   const assignedEffectIds = useMemo(() => {
     const ids = new Set<number>()
-    for (const id of requiredEffects) ids.add(id)
     for (const id of excludedEffects) ids.add(id)
     for (const g of groups) for (const id of g.effects) ids.add(id)
     return ids
-  }, [requiredEffects, excludedEffects, groups])
+  }, [excludedEffects, groups])
 
   const assignedFamilyNames = useMemo(() => {
     const names = new Set<string>()
-    for (const n of requiredFamilies) names.add(n)
     for (const n of excludedFamilies) names.add(n)
     for (const g of groups) for (const n of g.families) names.add(n)
     return names
-  }, [requiredFamilies, excludedFamilies, groups])
+  }, [excludedFamilies, groups])
 
   const filteredEffects = effects.filter(
     (e) =>
@@ -739,16 +728,10 @@ function BuildEditorUI({
         ...g,
         effects: g.effects.filter((id) => id !== effectId),
       }))
-      const newRequired = requiredEffects.filter((id) => id !== effectId)
       const newExcluded = excludedEffects.filter((id) => id !== effectId)
 
-      if (targetZone === "zone:required") {
+      if (targetZone === "zone:excluded") {
         onGroupsChange(newGroups)
-        onRequiredEffectsChange([...newRequired, effectId])
-        onExcludedEffectsChange(newExcluded)
-      } else if (targetZone === "zone:excluded") {
-        onGroupsChange(newGroups)
-        onRequiredEffectsChange(newRequired)
         onExcludedEffectsChange([...newExcluded, effectId])
       } else if (targetZone.startsWith("zone:group:")) {
         const idx = parseInt(targetZone.slice("zone:group:".length), 10)
@@ -757,18 +740,10 @@ function BuildEditorUI({
             i === idx ? { ...g, effects: [...g.effects, effectId] } : g,
           ),
         )
-        onRequiredEffectsChange(newRequired)
         onExcludedEffectsChange(newExcluded)
       }
     },
-    [
-      groups,
-      requiredEffects,
-      excludedEffects,
-      onGroupsChange,
-      onRequiredEffectsChange,
-      onExcludedEffectsChange,
-    ],
+    [groups, excludedEffects, onGroupsChange, onExcludedEffectsChange],
   )
 
   // Move family to a zone (removing it from all other zones first)
@@ -778,16 +753,10 @@ function BuildEditorUI({
         ...g,
         families: g.families.filter((n) => n !== familyName),
       }))
-      const newRequired = requiredFamilies.filter((n) => n !== familyName)
       const newExcluded = excludedFamilies.filter((n) => n !== familyName)
 
-      if (targetZone === "zone:required") {
+      if (targetZone === "zone:excluded") {
         onGroupsChange(newGroups)
-        onRequiredFamiliesChange([...newRequired, familyName])
-        onExcludedFamiliesChange(newExcluded)
-      } else if (targetZone === "zone:excluded") {
-        onGroupsChange(newGroups)
-        onRequiredFamiliesChange(newRequired)
         onExcludedFamiliesChange([...newExcluded, familyName])
       } else if (targetZone.startsWith("zone:group:")) {
         const idx = parseInt(targetZone.slice("zone:group:".length), 10)
@@ -796,18 +765,10 @@ function BuildEditorUI({
             i === idx ? { ...g, families: [...g.families, familyName] } : g,
           ),
         )
-        onRequiredFamiliesChange(newRequired)
         onExcludedFamiliesChange(newExcluded)
       }
     },
-    [
-      groups,
-      requiredFamilies,
-      excludedFamilies,
-      onGroupsChange,
-      onRequiredFamiliesChange,
-      onExcludedFamiliesChange,
-    ],
+    [groups, excludedFamilies, onGroupsChange, onExcludedFamiliesChange],
   )
 
   function handleDragStart(event: DragStartEvent) {
@@ -833,11 +794,11 @@ function BuildEditorUI({
     }
   }
 
-  // Default click-to-add target: highest-weight group (first in sorted order), or required if no groups
+  // Default click-to-add target: highest-weight group (first in sorted order)
   const defaultClickTarget =
     sortedGroupIndices.length > 0
       ? `zone:group:${sortedGroupIndices[0]}`
-      : "zone:required"
+      : "zone:excluded"
 
   const maxPins = includeDeep ? 6 : 3
   const atPinLimit = pinnedRelics.length >= maxPins
@@ -1040,78 +1001,6 @@ function BuildEditorUI({
         <div className="grid lg:grid-cols-[1fr_320px] gap-6">
           {/* Priority zones */}
           <div className="space-y-5">
-            {/* Required */}
-            <div>
-              <div className="flex items-center gap-3 mb-2">
-                <span
-                  className="text-xs font-bold uppercase tracking-[0.2em]"
-                  style={{ color: REQUIRED_COLOR }}
-                >
-                  Required
-                </span>
-                <div
-                  className="flex-1 h-px opacity-25"
-                  style={{ background: REQUIRED_COLOR }}
-                />
-                <span className="text-xs text-muted-foreground">
-                  hard constraint · always included
-                </span>
-              </div>
-              <DroppableZone zoneId="zone:required" color={REQUIRED_COLOR}>
-                {requiredEffects.length === 0 &&
-                requiredFamilies.length === 0 ? (
-                  <p className="text-xs text-muted-foreground italic">
-                    Drop effects here to require them
-                  </p>
-                ) : (
-                  <div className="flex flex-wrap gap-2">
-                    {requiredFamilies.map((familyName) => (
-                      <DraggableChip
-                        key={`family:${familyName}`}
-                        dragId={`family:${familyName}`}
-                        name={`${familyName} (group)`}
-                        color={REQUIRED_COLOR}
-                        dragData={{
-                          type: "family",
-                          familyName,
-                          sourceZone: "zone:required",
-                        }}
-                        onRemove={() =>
-                          onRequiredFamiliesChange(
-                            requiredFamilies.filter((n) => n !== familyName),
-                          )
-                        }
-                      />
-                    ))}
-                    {requiredEffects.map((id) => {
-                      const e = effectMap.get(id)
-                      if (!e) return null
-                      return (
-                        <DraggableChip
-                          key={id}
-                          dragId={`effect:${id}`}
-                          name={
-                            e.source === "deep" ? `${e.name} (deep)` : e.name
-                          }
-                          color={REQUIRED_COLOR}
-                          dragData={{
-                            type: "effect",
-                            effectId: id,
-                            sourceZone: "zone:required",
-                          }}
-                          onRemove={() =>
-                            onRequiredEffectsChange(
-                              requiredEffects.filter((x) => x !== id),
-                            )
-                          }
-                        />
-                      )
-                    })}
-                  </div>
-                )}
-              </DroppableZone>
-            </div>
-
             {/* Weight groups — same-label groups share one section header */}
             {groupSections.map((section) => (
               <div key={section.label} className="space-y-2">
@@ -1465,12 +1354,6 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
   const [groups, setGroups] = useState<WeightGroup[]>(
     () => build.groups ?? DEFAULT_GROUPS.map((g) => ({ ...g })),
   )
-  const [requiredEffects, setRequiredEffects] = useState<number[]>(
-    () => build.required_effects ?? [],
-  )
-  const [requiredFamilies, setRequiredFamilies] = useState<string[]>(
-    () => build.required_families ?? [],
-  )
   const [excludedEffects, setExcludedEffects] = useState<number[]>(
     () => build.excluded_effects ?? [],
   )
@@ -1490,8 +1373,6 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
   >(() => build.excluded_stacking_categories ?? [])
 
   const groupsRef = useRef(groups)
-  const requiredEffectsRef = useRef(requiredEffects)
-  const requiredFamiliesRef = useRef(requiredFamilies)
   const excludedEffectsRef = useRef(excludedEffects)
   const excludedFamiliesRef = useRef(excludedFamilies)
   const includeDeepRef = useRef(includeDeep)
@@ -1499,8 +1380,6 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
   const pinnedRelicsRef = useRef(pinnedRelics)
   const excludedStackingCategoriesRef = useRef(excludedStackingCategories)
   groupsRef.current = groups
-  requiredEffectsRef.current = requiredEffects
-  requiredFamiliesRef.current = requiredFamilies
   excludedEffectsRef.current = excludedEffects
   excludedFamiliesRef.current = excludedFamilies
   includeDeepRef.current = includeDeep
@@ -1554,8 +1433,6 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
 
   useEffect(() => {
     setGroups(build.groups ?? DEFAULT_GROUPS.map((g) => ({ ...g })))
-    setRequiredEffects(build.required_effects ?? [])
-    setRequiredFamilies(build.required_families ?? [])
     setExcludedEffects(build.excluded_effects ?? [])
     setExcludedFamilies(build.excluded_families ?? [])
     setIncludeDeep(build.include_deep)
@@ -1570,8 +1447,8 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
         buildId,
         requestBody: {
           groups: groupsRef.current,
-          required_effects: requiredEffectsRef.current,
-          required_families: requiredFamiliesRef.current,
+          required_effects: [],
+          required_families: [],
           excluded_effects: excludedEffectsRef.current,
           excluded_families: excludedFamiliesRef.current,
           excluded_stacking_categories: excludedStackingCategoriesRef.current,
@@ -1614,8 +1491,6 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
       name={(buildRaw as any).name}
       character={(buildRaw as any).character}
       groups={groups}
-      requiredEffects={requiredEffects}
-      requiredFamilies={requiredFamilies}
       excludedEffects={excludedEffects}
       excludedFamilies={excludedFamilies}
       includeDeep={includeDeep}
@@ -1630,14 +1505,6 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
       isAuth={true}
       onGroupsChange={(g) => {
         setGroups(g)
-        scheduleAutoSave()
-      }}
-      onRequiredEffectsChange={(ids) => {
-        setRequiredEffects(ids)
-        scheduleAutoSave()
-      }}
-      onRequiredFamiliesChange={(names) => {
-        setRequiredFamilies(names)
         scheduleAutoSave()
       }}
       onExcludedEffectsChange={(ids) => {
@@ -1705,12 +1572,6 @@ function LocalBuildEditorContent({ buildId }: { buildId: string }) {
   const [groups, setGroups] = useState<WeightGroup[]>(
     () => build?.groups ?? DEFAULT_GROUPS.map((g) => ({ ...g })),
   )
-  const [requiredEffects, setRequiredEffects] = useState<number[]>(
-    () => build?.required_effects ?? [],
-  )
-  const [requiredFamilies, setRequiredFamilies] = useState<string[]>(
-    () => build?.required_families ?? [],
-  )
   const [excludedEffects, setExcludedEffects] = useState<number[]>(
     () => build?.excluded_effects ?? [],
   )
@@ -1746,8 +1607,6 @@ function LocalBuildEditorContent({ buildId }: { buildId: string }) {
   >(() => build?.excluded_stacking_categories ?? [])
 
   const groupsRef = useRef(groups)
-  const requiredEffectsRef = useRef(requiredEffects)
-  const requiredFamiliesRef = useRef(requiredFamilies)
   const excludedEffectsRef = useRef(excludedEffects)
   const excludedFamiliesRef = useRef(excludedFamilies)
   const includeDeepRef = useRef(includeDeep)
@@ -1755,8 +1614,6 @@ function LocalBuildEditorContent({ buildId }: { buildId: string }) {
   const pinnedRelicsRef = useRef(pinnedRelics)
   const excludedStackingCategoriesRef = useRef(excludedStackingCategories)
   groupsRef.current = groups
-  requiredEffectsRef.current = requiredEffects
-  requiredFamiliesRef.current = requiredFamilies
   excludedEffectsRef.current = excludedEffects
   excludedFamiliesRef.current = excludedFamilies
   includeDeepRef.current = includeDeep
@@ -1773,8 +1630,8 @@ function LocalBuildEditorContent({ buildId }: { buildId: string }) {
   const flushSaveRef = useRef(() => {
     updateRef.current(buildId, {
       groups: groupsRef.current,
-      required_effects: requiredEffectsRef.current,
-      required_families: requiredFamiliesRef.current,
+      required_effects: [],
+      required_families: [],
       excluded_effects: excludedEffectsRef.current,
       excluded_families: excludedFamiliesRef.current,
       excluded_stacking_categories: excludedStackingCategoriesRef.current,
@@ -1786,8 +1643,8 @@ function LocalBuildEditorContent({ buildId }: { buildId: string }) {
   flushSaveRef.current = () => {
     updateRef.current(buildId, {
       groups: groupsRef.current,
-      required_effects: requiredEffectsRef.current,
-      required_families: requiredFamiliesRef.current,
+      required_effects: [],
+      required_families: [],
       excluded_effects: excludedEffectsRef.current,
       excluded_families: excludedFamiliesRef.current,
       excluded_stacking_categories: excludedStackingCategoriesRef.current,
@@ -1811,8 +1668,8 @@ function LocalBuildEditorContent({ buildId }: { buildId: string }) {
     saveTimerRef.current = setTimeout(() => {
       updateRef.current(buildId, {
         groups: groupsRef.current,
-        required_effects: requiredEffectsRef.current,
-        required_families: requiredFamiliesRef.current,
+        required_effects: [],
+        required_families: [],
         excluded_effects: excludedEffectsRef.current,
         excluded_families: excludedFamiliesRef.current,
         excluded_stacking_categories: excludedStackingCategoriesRef.current,
@@ -1837,8 +1694,6 @@ function LocalBuildEditorContent({ buildId }: { buildId: string }) {
       name={build.name}
       character={build.character}
       groups={groups}
-      requiredEffects={requiredEffects}
-      requiredFamilies={requiredFamilies}
       excludedEffects={excludedEffects}
       excludedFamilies={excludedFamilies}
       includeDeep={includeDeep}
@@ -1853,14 +1708,6 @@ function LocalBuildEditorContent({ buildId }: { buildId: string }) {
       isAuth={false}
       onGroupsChange={(g) => {
         setGroups(g)
-        scheduleAutoSave()
-      }}
-      onRequiredEffectsChange={(ids) => {
-        setRequiredEffects(ids)
-        scheduleAutoSave()
-      }}
-      onRequiredFamiliesChange={(names) => {
-        setRequiredFamilies(names)
         scheduleAutoSave()
       }}
       onExcludedEffectsChange={(ids) => {
