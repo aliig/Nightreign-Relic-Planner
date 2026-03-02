@@ -2,7 +2,7 @@ from collections.abc import Generator
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlmodel import Session, delete
+from sqlmodel import Session, delete, select
 
 from app.core.config import settings
 from app.core.db import engine, init_db
@@ -16,8 +16,10 @@ from tests.utils.utils import get_superuser_token_headers
 def db() -> Generator[Session, None, None]:
     with Session(engine) as session:
         init_db(session)
+        # Snapshot existing user IDs so teardown only removes test-created users
+        pre_existing = {u.id for u in session.exec(select(User)).all()}
         yield session
-        statement = delete(User)
+        statement = delete(User).where(User.id.notin_(pre_existing))  # type: ignore[union-attr]
         session.execute(statement)
         session.commit()
 
