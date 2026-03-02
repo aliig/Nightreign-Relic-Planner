@@ -23,6 +23,9 @@ import { Route as LayoutInventoryRouteImport } from './routes/_layout/inventory'
 import { Route as LayoutBuildsRouteImport } from './routes/_layout/builds'
 import { Route as LayoutAdminRouteImport } from './routes/_layout/admin'
 import { Route as LayoutBuildsBuildIdRouteImport } from './routes/_layout/builds.$buildId'
+import { Route as LayoutBuildsBuildIdIndexRouteImport } from './routes/_layout/builds.$buildId/index'
+import { Route as LayoutBuildsBuildIdEditRouteImport } from './routes/_layout/builds.$buildId/edit'
+import { Route as LayoutBuildsBuildIdOptimizeRouteImport } from './routes/_layout/builds.$buildId/optimize'
 
 const SignupRoute = SignupRouteImport.update({
   id: '/signup',
@@ -93,6 +96,21 @@ const LayoutBuildsBuildIdRoute = LayoutBuildsBuildIdRouteImport.update({
   path: '/$buildId',
   getParentRoute: () => LayoutBuildsRoute,
 } as any)
+const LayoutBuildsBuildIdIndexRoute = LayoutBuildsBuildIdIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => LayoutBuildsBuildIdRoute,
+} as any)
+const LayoutBuildsBuildIdEditRoute = LayoutBuildsBuildIdEditRouteImport.update({
+  id: '/edit',
+  path: '/edit',
+  getParentRoute: () => LayoutBuildsBuildIdRoute,
+} as any)
+const LayoutBuildsBuildIdOptimizeRoute = LayoutBuildsBuildIdOptimizeRouteImport.update({
+  id: '/optimize',
+  path: '/optimize',
+  getParentRoute: () => LayoutBuildsBuildIdRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof LayoutIndexRoute
@@ -107,7 +125,10 @@ export interface FileRoutesByFullPath {
   '/settings': typeof LayoutSettingsRoute
   '/upload': typeof LayoutUploadRoute
   '/auth/callback': typeof AuthCallbackRoute
-  '/builds/$buildId': typeof LayoutBuildsBuildIdRoute
+  '/builds/$buildId': typeof LayoutBuildsBuildIdRouteWithChildren
+  '/builds/$buildId/': typeof LayoutBuildsBuildIdIndexRoute
+  '/builds/$buildId/edit': typeof LayoutBuildsBuildIdEditRoute
+  '/builds/$buildId/optimize': typeof LayoutBuildsBuildIdOptimizeRoute
 }
 export interface FileRoutesByTo {
   '/login': typeof LoginRoute
@@ -122,7 +143,9 @@ export interface FileRoutesByTo {
   '/upload': typeof LayoutUploadRoute
   '/auth/callback': typeof AuthCallbackRoute
   '/': typeof LayoutIndexRoute
-  '/builds/$buildId': typeof LayoutBuildsBuildIdRoute
+  '/builds/$buildId': typeof LayoutBuildsBuildIdRouteWithChildren
+  '/builds/$buildId/edit': typeof LayoutBuildsBuildIdEditRoute
+  '/builds/$buildId/optimize': typeof LayoutBuildsBuildIdOptimizeRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -139,7 +162,10 @@ export interface FileRoutesById {
   '/_layout/upload': typeof LayoutUploadRoute
   '/auth/callback': typeof AuthCallbackRoute
   '/_layout/': typeof LayoutIndexRoute
-  '/_layout/builds/$buildId': typeof LayoutBuildsBuildIdRoute
+  '/_layout/builds/$buildId': typeof LayoutBuildsBuildIdRouteWithChildren
+  '/_layout/builds/$buildId/': typeof LayoutBuildsBuildIdIndexRoute
+  '/_layout/builds/$buildId/edit': typeof LayoutBuildsBuildIdEditRoute
+  '/_layout/builds/$buildId/optimize': typeof LayoutBuildsBuildIdOptimizeRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -157,6 +183,9 @@ export interface FileRouteTypes {
     | '/upload'
     | '/auth/callback'
     | '/builds/$buildId'
+    | '/builds/$buildId/'
+    | '/builds/$buildId/edit'
+    | '/builds/$buildId/optimize'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/login'
@@ -172,6 +201,8 @@ export interface FileRouteTypes {
     | '/auth/callback'
     | '/'
     | '/builds/$buildId'
+    | '/builds/$buildId/edit'
+    | '/builds/$buildId/optimize'
   id:
     | '__root__'
     | '/_layout'
@@ -188,6 +219,9 @@ export interface FileRouteTypes {
     | '/auth/callback'
     | '/_layout/'
     | '/_layout/builds/$buildId'
+    | '/_layout/builds/$buildId/'
+    | '/_layout/builds/$buildId/edit'
+    | '/_layout/builds/$buildId/optimize'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -299,15 +333,52 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LayoutBuildsBuildIdRouteImport
       parentRoute: typeof LayoutBuildsRoute
     }
+    '/_layout/builds/$buildId/': {
+      id: '/_layout/builds/$buildId/'
+      path: '/'
+      fullPath: '/builds/$buildId/'
+      preLoaderRoute: typeof LayoutBuildsBuildIdIndexRouteImport
+      parentRoute: typeof LayoutBuildsBuildIdRoute
+    }
+    '/_layout/builds/$buildId/edit': {
+      id: '/_layout/builds/$buildId/edit'
+      path: '/edit'
+      fullPath: '/builds/$buildId/edit'
+      preLoaderRoute: typeof LayoutBuildsBuildIdEditRouteImport
+      parentRoute: typeof LayoutBuildsBuildIdRoute
+    }
+    '/_layout/builds/$buildId/optimize': {
+      id: '/_layout/builds/$buildId/optimize'
+      path: '/optimize'
+      fullPath: '/builds/$buildId/optimize'
+      preLoaderRoute: typeof LayoutBuildsBuildIdOptimizeRouteImport
+      parentRoute: typeof LayoutBuildsBuildIdRoute
+    }
   }
 }
 
+interface LayoutBuildsBuildIdRouteChildren {
+  LayoutBuildsBuildIdIndexRoute: typeof LayoutBuildsBuildIdIndexRoute
+  LayoutBuildsBuildIdEditRoute: typeof LayoutBuildsBuildIdEditRoute
+  LayoutBuildsBuildIdOptimizeRoute: typeof LayoutBuildsBuildIdOptimizeRoute
+}
+
+const LayoutBuildsBuildIdRouteChildren: LayoutBuildsBuildIdRouteChildren = {
+  LayoutBuildsBuildIdIndexRoute: LayoutBuildsBuildIdIndexRoute,
+  LayoutBuildsBuildIdEditRoute: LayoutBuildsBuildIdEditRoute,
+  LayoutBuildsBuildIdOptimizeRoute: LayoutBuildsBuildIdOptimizeRoute,
+}
+
+const LayoutBuildsBuildIdRouteWithChildren = LayoutBuildsBuildIdRoute._addFileChildren(
+  LayoutBuildsBuildIdRouteChildren,
+)
+
 interface LayoutBuildsRouteChildren {
-  LayoutBuildsBuildIdRoute: typeof LayoutBuildsBuildIdRoute
+  LayoutBuildsBuildIdRoute: typeof LayoutBuildsBuildIdRouteWithChildren
 }
 
 const LayoutBuildsRouteChildren: LayoutBuildsRouteChildren = {
-  LayoutBuildsBuildIdRoute: LayoutBuildsBuildIdRoute,
+  LayoutBuildsBuildIdRoute: LayoutBuildsBuildIdRouteWithChildren,
 }
 
 const LayoutBuildsRouteWithChildren = LayoutBuildsRoute._addFileChildren(

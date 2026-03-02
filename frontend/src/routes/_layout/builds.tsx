@@ -256,7 +256,7 @@ function BuildCard({
               </Button>
             )}
             <Button asChild variant="ghost" size="icon" className="h-8 w-8" title="Edit build">
-              <Link to="/builds/$buildId" params={{ buildId: build.id }}>
+              <Link to="/builds/$buildId/edit" params={{ buildId: build.id }}>
                 <Pencil className="h-4 w-4" />
               </Link>
             </Button>

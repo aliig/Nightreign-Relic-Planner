@@ -122,7 +122,7 @@ vi.mock("@/utils", () => ({
 // Import after mocks
 // ---------------------------------------------------------------------------
 
-import { Route } from "../builds.$buildId"
+import { Route } from "../builds.$buildId/edit"
 
 const BuildEditorPage = (Route as unknown as { component: React.FC }).component
 

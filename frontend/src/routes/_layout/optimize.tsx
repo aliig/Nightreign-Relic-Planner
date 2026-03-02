@@ -1,641 +1,96 @@
-import { createFileRoute, Link } from "@tanstack/react-router"
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router"
 import { useSuspenseQuery } from "@tanstack/react-query"
-import { Suspense, useEffect, useMemo, useState } from "react"
-import { ChevronDown, ChevronUp, CheckCircle2, XCircle, Trophy, Pin } from "lucide-react"
+import { Suspense, useEffect } from "react"
 
-import { BuildsService, GameService, SavesService } from "@/client"
-import type { VesselResult } from "@/client"
-import { buildEffectMap, COLOR_HEX, RelicNameCell } from "@/components/RelicDisplay"
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Progress } from "@/components/ui/progress"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
+import { BuildsService } from "@/client"
 import { Skeleton } from "@/components/ui/skeleton"
-import { Separator } from "@/components/ui/separator"
 import { isLoggedIn } from "@/hooks/useAuth"
 import { useLocalBuilds } from "@/hooks/useLocalBuilds"
-import useCustomToast from "@/hooks/useCustomToast"
-import { useSaveStatus, getAnonUploadMeta } from "@/hooks/useSaveStatus"
 
 export const Route = createFileRoute("/_layout/optimize")({
-  component: OptimizePage,
+  component: OptimizeRedirectPage,
   head: () => ({
     meta: [{ title: "Optimize - Nightreign Relic Planner" }],
   }),
 })
 
-function getBreakdownColor(b: Record<string, unknown>): string | undefined {
-  const category = b.category as string | null
-  if (!category || category === "excluded") return undefined
-  if (category === "required") return "#FF8C00"
-  const weight = (b.weight as number) ?? 0
-  if (weight >= 75) return "#FF4444"
-  if (weight >= 35) return "#4488FF"
-  if (weight >= 15) return "#44BB88"
-  if (weight >= 1) return "#9966CC"
-  return "#888888"
-}
-
-// --- Optimization result cache (persists across route navigations, clears on page reload) ---
-const resultCache = new Map<string, VesselResult[]>()
-
-function cacheKey(...parts: (string | number | null | undefined)[]): string {
-  return parts.map((p) => String(p ?? "")).join(":")
-}
-
-type SlotAssignment = VesselResult["assignments"][number]
-
-interface OptimizeProgress {
-  vessel: number
-  total: number
-  name: string
-}
-
-async function runOptimizeStream(
-  requestBody: Record<string, unknown>,
-  onProgress: (p: OptimizeProgress) => void,
-): Promise<VesselResult[]> {
-  const token = localStorage.getItem("access_token")
-  const headers: HeadersInit = { "Content-Type": "application/json" }
-  if (token) (headers as Record<string, string>)["Authorization"] = `Bearer ${token}`
-
-  const response = await fetch("/api/v1/optimize/stream", {
-    method: "POST",
-    headers,
-    body: JSON.stringify(requestBody),
-  })
-
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({ detail: "Optimization failed" }))
-    throw new Error(err.detail ?? "Optimization failed")
-  }
-
-  const reader = response.body!.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ""
-
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
-
-    // SSE events are separated by double newlines
-    const parts = buffer.split("\n\n")
-    buffer = parts.pop() ?? ""
-
-    for (const part of parts) {
-      const dataLine = part.split("\n").find((l) => l.startsWith("data: "))
-      if (!dataLine) continue
-      const payload = JSON.parse(dataLine.slice(6))
-
-      if (payload.type === "progress") {
-        onProgress({ vessel: payload.vessel, total: payload.total, name: payload.name })
-      } else if (payload.type === "result") {
-        return payload.data as VesselResult[]
-      } else if (payload.type === "error") {
-        throw new Error(payload.detail ?? "Optimization failed")
-      }
-    }
-  }
-
-  throw new Error("Stream ended without a result")
-}
-
-function SlotCard({ slot, isPinned = false }: { slot: SlotAssignment; isPinned?: boolean }) {
-  const relic = slot.relic
-  const effects = slot.breakdown?.filter((b: Record<string, unknown>) => !b.is_curse) ?? []
-  const curses = slot.breakdown?.filter((b: Record<string, unknown>) => b.is_curse) ?? []
-
-  return (
-    <div className={`rounded-md border p-3 space-y-1.5${isPinned ? " border-primary/40 bg-primary/5" : ""}`}>
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <span
-            className="w-2.5 h-2.5 rounded-full shrink-0"
-            style={{ background: COLOR_HEX[slot.slot_color] ?? "#888" }}
-            title={slot.slot_color}
-          />
-          <span className="text-xs text-muted-foreground">
-            Slot {slot.slot_index + 1} {slot.is_deep ? "(Deep)" : ""}
-          </span>
-        </div>
-        <div className="flex items-center gap-1.5">
-          {isPinned && (
-            <span title="Pinned relic">
-              <Pin className="h-3 w-3 text-primary shrink-0" />
-            </span>
-          )}
-          <span className="text-xs font-mono font-semibold">{slot.score} pts</span>
-        </div>
-      </div>
-      {relic ? (
-        <>
-          <RelicNameCell
-            name={relic.name}
-            color={relic.color}
-            tier={relic.tier}
-            isDeep={relic.is_deep}
-          />
-          {effects.length > 0 && (
-            <div className="space-y-0.5 mt-1">
-              {effects.map((b: Record<string, unknown>, i: number) => (
-                <div key={i} className="flex items-center justify-between text-xs">
-                  <span
-                    className="truncate"
-                    style={{ color: getBreakdownColor(b) }}
-                  >
-                    {b.name as string}
-                    {b.redundant ? " (redundant)" : ""}
-                  </span>
-                  <span className="font-mono ml-2 shrink-0">
-                    {(b.score as number) >= 0 ? "+" : ""}{b.score as number}
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
-          {curses.length > 0 && (
-            <div className="mt-1.5 pt-1.5 border-t border-destructive/20">
-              {/* <p className="text-[10px] font-medium text-destructive/70 uppercase tracking-wide mb-0.5">
-                Curses
-              </p> */}
-              <div className="space-y-0.5">
-                {curses.map((b: Record<string, unknown>, i: number) => (
-                  <div key={i} className="flex items-center justify-between text-xs">
-                    <span className="truncate text-destructive/80">
-                      {b.name as string}
-                      {b.redundant ? " (redundant)" : ""}
-                    </span>
-                    <span className="font-mono ml-2 shrink-0 text-destructive/80">
-                      {(b.score as number) >= 0 ? "+" : ""}{b.score as number}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </>
-      ) : (
-        <p className="text-xs text-muted-foreground italic">No relic assigned</p>
-      )}
-    </div>
-  )
-}
-
-function VesselCard({
-  vessel,
-  defaultExpanded = false,
-  highlighted = false,
-  pinnedHandles = new Set(),
-  effectMap = new Map(),
-}: {
-  vessel: VesselResult
-  defaultExpanded?: boolean
-  highlighted?: boolean
-  pinnedHandles?: Set<number>
-  effectMap?: Map<number, string>
-}) {
-  const [expanded, setExpanded] = useState(defaultExpanded)
-
-  return (
-    <Card
-      className={highlighted ? "ring-2 ring-primary/40 shadow-lg border-primary/30" : undefined}
-    >
-      <CardHeader
-        className="cursor-pointer pb-3"
-        onClick={() => setExpanded((v) => !v)}
-      >
-        <div className="flex items-center justify-between flex-wrap gap-2">
-          <div className="flex items-center gap-2">
-            {highlighted && <Trophy className="h-4 w-4 text-gold shrink-0" />}
-            <CardTitle className="text-base">{vessel.vessel_name}</CardTitle>
-          </div>
-          <div className="flex items-center gap-2">
-            {vessel.meets_requirements ? (
-              <CheckCircle2 className="h-4 w-4 text-green-500" />
-            ) : (
-              <XCircle className="h-4 w-4 text-destructive" />
-            )}
-            <Badge variant="secondary">{vessel.total_score} pts</Badge>
-            {expanded ? (
-              <ChevronUp className="h-4 w-4 text-muted-foreground" />
-            ) : (
-              <ChevronDown className="h-4 w-4 text-muted-foreground" />
-            )}
-          </div>
-        </div>
-        <p className="text-xs text-muted-foreground">{vessel.vessel_character}</p>
-      </CardHeader>
-      {expanded && (
-        <CardContent className="pt-0">
-          <Separator className="mb-3" />
-          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-            {vessel.assignments.map((slot) => (
-              <SlotCard
-                key={slot.slot_index}
-                slot={slot}
-                isPinned={slot.relic != null && pinnedHandles.has((slot.relic as any).ga_handle)}
-              />
-            ))}
-          </div>
-          {!vessel.meets_requirements && vessel.missing_requirements?.length > 0 && (
-            <p className="text-xs text-destructive mt-3">
-              Missing required effects:{" "}
-              {vessel.missing_requirements
-                .map((m) =>
-                  typeof m === "number"
-                    ? (effectMap.get(m) ?? `Effect ${m}`)
-                    : m,
-                )
-                .join(", ")}
-            </p>
-          )}
-        </CardContent>
-      )}
-    </Card>
-  )
-}
-
-// --- Authenticated optimizer (DB-backed) ---
-
-function AuthOptimizeForm() {
-  const { showErrorToast } = useCustomToast()
-  const { data: buildsData } = useSuspenseQuery({
+function AuthRedirect() {
+  const navigate = useNavigate()
+  const { data } = useSuspenseQuery({
     queryKey: ["builds"],
     queryFn: () => BuildsService.listBuilds(),
   })
-  const { data: charsData } = useSuspenseQuery({
-    queryKey: ["characters"],
-    queryFn: () => SavesService.listCharacters(),
-  })
-  const { data: effectsData } = useSuspenseQuery({
-    queryKey: ["game", "effects"],
-    queryFn: () => GameService.getEffects(),
-    staleTime: Infinity,
-  })
-  const { status: saveStatus } = useSaveStatus()
-  const effectMap = useMemo(() => buildEffectMap((effectsData ?? []) as unknown[]), [effectsData])
 
-  const builds = buildsData?.data ?? []
-  const chars = charsData?.data ?? []
-
-  const [buildId, setBuildId] = useState(builds[0]?.id ?? "")
-  const [characterId, setCharacterId] = useState(chars[0]?.id ?? "")
-
-  const selectedBuild = builds.find((b) => b.id === buildId)
-  const pinnedHandles = new Set<number>(selectedBuild?.pinned_relics ?? [])
-  const key = cacheKey("auth", buildId, selectedBuild?.updated_at, characterId, saveStatus?.uploaded_at)
-
-  const [results, setResults] = useState<VesselResult[]>(() => resultCache.get(key) ?? [])
-  const [isPending, setIsPending] = useState(false)
-  const [progress, setProgress] = useState<OptimizeProgress | null>(null)
-  const [hasRun, setHasRun] = useState(() => resultCache.has(key))
+  const builds = data?.data ?? []
 
   useEffect(() => {
-    const cached = resultCache.get(key)
-    setResults(cached ?? [])
-    setHasRun(cached !== undefined)
-  }, [key])
-
-  const handleOptimize = async () => {
-    setIsPending(true)
-    setProgress(null)
-    setResults([])
-    try {
-      const data = await runOptimizeStream(
-        { build_id: buildId, character_id: characterId },
-        setProgress,
+    if (builds.length > 0) {
+      // Pick the most recently updated build
+      const sorted = [...builds].sort((a, b) =>
+        new Date(b.updated_at ?? 0).getTime() - new Date(a.updated_at ?? 0).getTime(),
       )
-      setResults(data)
-      resultCache.set(key, data)
-    } catch (err) {
-      showErrorToast(err instanceof Error ? err.message : "Optimization failed")
-    } finally {
-      setIsPending(false)
-      setProgress(null)
-      setHasRun(true)
+      navigate({
+        to: "/builds/$buildId/optimize",
+        params: { buildId: sorted[0].id },
+        replace: true,
+      })
     }
-  }
-
-  return (
-    <div className="space-y-6">
-      <div className="flex flex-wrap gap-3 items-end">
-        <div className="space-y-1.5">
-          <label className="text-sm font-medium">Build</label>
-          <Select value={buildId} onValueChange={setBuildId}>
-            <SelectTrigger className="w-56">
-              <SelectValue placeholder="Select build" />
-            </SelectTrigger>
-            <SelectContent>
-              {builds.map((b) => (
-                <SelectItem key={b.id} value={b.id}>{b.name} ({b.character})</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="space-y-1.5">
-          <label className="text-sm font-medium">Character</label>
-          <Select value={characterId} onValueChange={setCharacterId}>
-            <SelectTrigger className="w-56">
-              <SelectValue placeholder="Select character" />
-            </SelectTrigger>
-            <SelectContent>
-              {chars.map((c) => (
-                <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-        <Button
-          onClick={handleOptimize}
-          disabled={!buildId || !characterId || isPending}
-        >
-          {isPending ? "Optimizing…" : "Optimize"}
-        </Button>
-      </div>
-
-      {isPending && (
-        <div className="space-y-2">
-          <p className="text-sm text-muted-foreground">
-            {progress
-              ? `Checking vessel ${progress.vessel} of ${progress.total}: ${progress.name}…`
-              : "Starting…"}
-          </p>
-          <Progress value={progress ? (progress.vessel / progress.total) * 100 : 0} />
-        </div>
-      )}
-
-      {builds.length === 0 && (
-        <p className="text-sm text-muted-foreground">
-          No builds found. <a href="/builds" className="underline">Create a build</a> first.
-        </p>
-      )}
-      {chars.length === 0 && (
-        <p className="text-sm text-muted-foreground">
-          No inventory found. <a href="/upload" className="underline">Upload a save file</a> first.
-        </p>
-      )}
-
-      {!isPending && hasRun && results.length === 0 && (
-        <p className="text-sm text-muted-foreground">
-          No matching relics found for this build. Check that your inventory has relics with the effects your build is looking for.
-        </p>
-      )}
-
-      {results.length > 0 && (
-        <div className="space-y-3">
-          <h2 className="text-lg font-medium">
-            Top {results.length} vessel{results.length !== 1 ? "s" : ""}
-          </h2>
-          {results.map((vessel, index) => (
-            <VesselCard
-              key={`${vessel.vessel_id}-${vessel.total_score}`}
-              vessel={vessel}
-              defaultExpanded={index === 0}
-              highlighted={index === 0}
-              pinnedHandles={pinnedHandles}
-              effectMap={effectMap}
-            />
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
-// --- Anonymous optimizer (inline mode) ---
-
-interface SessionCharacter {
-  slot_index: number
-  name: string
-  relics: Array<Record<string, unknown>>
-}
-
-function AnonOptimizeForm() {
-  const { showErrorToast } = useCustomToast()
-  const { builds } = useLocalBuilds()
-  const { data: effectsData } = useSuspenseQuery({
-    queryKey: ["game", "effects"],
-    queryFn: () => GameService.getEffects(),
-    staleTime: Infinity,
-  })
-  const effectMap = useMemo(() => buildEffectMap((effectsData ?? []) as unknown[]), [effectsData])
-  const anonMeta = getAnonUploadMeta()
-
-  const allChars: SessionCharacter[] = JSON.parse(
-    sessionStorage.getItem("parsedCharacters") ?? "[]"
-  )
-
-  const defaultSlot = (() => {
-    try {
-      const c = JSON.parse(sessionStorage.getItem("selectedCharacter") ?? "null")
-      return c?.slot_index ?? allChars[0]?.slot_index ?? null
-    } catch { return allChars[0]?.slot_index ?? null }
-  })()
-
-  const [selectedSlot, setSelectedSlot] = useState<number | null>(defaultSlot)
-  const char = allChars.find((c) => c.slot_index === selectedSlot) ?? allChars[0] ?? null
-
-  const handleCharChange = (slotStr: string) => {
-    const slot = Number(slotStr)
-    setSelectedSlot(slot)
-    const picked = allChars.find((c) => c.slot_index === slot)
-    if (picked) sessionStorage.setItem("selectedCharacter", JSON.stringify(picked))
-  }
-
-  const [buildId, setBuildId] = useState(builds[0]?.id ?? "")
-
-  const selectedBuild = builds.find((b) => b.id === buildId)
-  const pinnedHandles = new Set<number>(selectedBuild?.pinned_relics ?? [])
-  const key = cacheKey("anon", buildId, selectedBuild?.updated_at, selectedSlot, anonMeta?.uploaded_at)
-
-  const [results, setResults] = useState<VesselResult[]>(() => resultCache.get(key) ?? [])
-  const [isPending, setIsPending] = useState(false)
-  const [progress, setProgress] = useState<OptimizeProgress | null>(null)
-  const [hasRun, setHasRun] = useState(() => resultCache.has(key))
-
-  useEffect(() => {
-    const cached = resultCache.get(key)
-    setResults(cached ?? [])
-    setHasRun(cached !== undefined)
-  }, [key])
-
-  const handleOptimize = async () => {
-    const build = builds.find((b) => b.id === buildId)
-    if (!build || !char) return
-
-    // ParsedRelicData uses flat effect_1/2/3 fields; OwnedRelic expects arrays
-    const relics = char.relics.map((r: any) => ({
-      ga_handle: r.ga_handle,
-      item_id: r.item_id,
-      real_id: r.real_id,
-      color: r.color,
-      effects: [r.effect_1, r.effect_2, r.effect_3],
-      curses: [r.curse_1, r.curse_2, r.curse_3],
-      is_deep: r.is_deep,
-      name: r.name,
-      tier: r.tier,
-    }))
-
-    setIsPending(true)
-    setProgress(null)
-    setResults([])
-    try {
-      const data = await runOptimizeStream(
-        {
-          build: {
-            id: build.id,
-            name: build.name,
-            character: build.character,
-            groups: build.groups,
-            required_effects: build.required_effects,
-            required_families: build.required_families,
-            excluded_effects: build.excluded_effects,
-            excluded_families: build.excluded_families,
-            include_deep: build.include_deep,
-            curse_max: build.curse_max,
-            pinned_relics: build.pinned_relics ?? [],
-          },
-          relics,
-        },
-        setProgress,
-      )
-      setResults(data)
-      resultCache.set(key, data)
-    } catch (err) {
-      showErrorToast(err instanceof Error ? err.message : "Optimization failed")
-    } finally {
-      setIsPending(false)
-      setProgress(null)
-      setHasRun(true)
-    }
-  }
-
-  if (allChars.length === 0) {
-    return (
-      <p className="text-sm text-muted-foreground py-8">
-        No inventory loaded.{" "}
-        <Link to="/upload" className="underline">Upload a save file</Link> first.
-      </p>
-    )
-  }
+  }, [builds, navigate])
 
   if (builds.length === 0) {
     return (
       <p className="text-sm text-muted-foreground py-8">
         No builds found.{" "}
-        <Link to="/builds" className="underline">Create a build</Link> first.
+        <Link to="/builds" className="underline">Create a build</Link> first,
+        then use the Optimize tab on the build page.
       </p>
     )
   }
 
-  return (
-    <div className="space-y-6">
-      <div className="flex flex-wrap gap-3 items-end">
-        <div className="space-y-1.5">
-          <label className="text-sm font-medium">Build</label>
-          <Select value={buildId} onValueChange={setBuildId}>
-            <SelectTrigger className="w-56">
-              <SelectValue placeholder="Select build" />
-            </SelectTrigger>
-            <SelectContent>
-              {builds.map((b) => (
-                <SelectItem key={b.id} value={b.id}>{b.name} ({b.character})</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-        {allChars.length > 1 && (
-          <div className="space-y-1.5">
-            <label className="text-sm font-medium">Character</label>
-            <Select value={String(char?.slot_index ?? "")} onValueChange={handleCharChange}>
-              <SelectTrigger className="w-56">
-                <SelectValue placeholder="Select character" />
-              </SelectTrigger>
-              <SelectContent>
-                {allChars.map((c) => (
-                  <SelectItem key={c.slot_index} value={String(c.slot_index)}>
-                    {c.name} (Slot {c.slot_index})
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        )}
-        <Button
-          onClick={handleOptimize}
-          disabled={!buildId || isPending}
-        >
-          {isPending ? "Optimizing…" : "Optimize"}
-        </Button>
-      </div>
-
-      {isPending && (
-        <div className="space-y-2">
-          <p className="text-sm text-muted-foreground">
-            {progress
-              ? `Checking vessel ${progress.vessel} of ${progress.total}: ${progress.name}…`
-              : "Starting…"}
-          </p>
-          <Progress value={progress ? (progress.vessel / progress.total) * 100 : 0} />
-        </div>
-      )}
-
-      <p className="text-xs text-muted-foreground border rounded-md px-3 py-2 bg-muted/40">
-        Running in session mode with data from your uploaded save.{" "}
-        <Link to="/login" search={{ redirect: "/optimize" }} className="underline">
-          Sign in
-        </Link>{" "}
-        to persist builds and inventory across devices.
-      </p>
-
-      {!isPending && hasRun && results.length === 0 && (
-        <p className="text-sm text-muted-foreground">
-          No matching relics found for this build. Check that your inventory has relics with the effects your build is looking for.
-        </p>
-      )}
-
-      {results.length > 0 && (
-        <div className="space-y-3">
-          <h2 className="text-lg font-medium">
-            Top {results.length} vessel{results.length !== 1 ? "s" : ""}
-          </h2>
-          {results.map((vessel, index) => (
-            <VesselCard
-              key={`${vessel.vessel_id}-${vessel.total_score}`}
-              vessel={vessel}
-              defaultExpanded={index === 0}
-              highlighted={index === 0}
-              pinnedHandles={pinnedHandles}
-              effectMap={effectMap}
-            />
-          ))}
-        </div>
-      )}
-    </div>
-  )
+  return <Skeleton className="h-32 w-full" />
 }
 
-// --- Page ---
+function AnonRedirect() {
+  const navigate = useNavigate()
+  const { builds } = useLocalBuilds()
 
-function OptimizePage() {
+  useEffect(() => {
+    if (builds.length > 0) {
+      const sorted = [...builds].sort((a, b) =>
+        new Date(b.updated_at ?? 0).getTime() - new Date(a.updated_at ?? 0).getTime(),
+      )
+      navigate({
+        to: "/builds/$buildId/optimize",
+        params: { buildId: sorted[0].id },
+        replace: true,
+      })
+    }
+  }, [builds, navigate])
+
+  if (builds.length === 0) {
+    return (
+      <p className="text-sm text-muted-foreground py-8">
+        No builds found.{" "}
+        <Link to="/builds" className="underline">Create a build</Link> first,
+        then use the Optimize tab on the build page.
+      </p>
+    )
+  }
+
+  return <Skeleton className="h-32 w-full" />
+}
+
+function OptimizeRedirectPage() {
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-semibold">Optimize</h1>
         <p className="text-muted-foreground mt-1">
-          Find the best vessel–relic assignments for your build.
+          Redirecting to your most recent build…
         </p>
       </div>
       <Suspense fallback={<Skeleton className="h-32 w-full" />}>
-        {isLoggedIn() ? <AuthOptimizeForm /> : <AnonOptimizeForm />}
+        {isLoggedIn() ? <AuthRedirect /> : <AnonRedirect />}
       </Suspense>
     </div>
   )
