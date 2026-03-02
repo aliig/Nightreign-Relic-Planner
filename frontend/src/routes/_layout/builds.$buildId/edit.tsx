@@ -164,8 +164,8 @@ function DraggableChip({
       ref={setNodeRef}
       {...listeners}
       {...attributes}
-      className="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium border cursor-grab active:cursor-grabbing"
-      style={{ borderColor: color, color, opacity: isDragging ? 0.3 : 1 }}
+      className="inline-flex items-center gap-1 rounded-none px-2.5 py-0.5 text-xs font-medium border cursor-grab active:cursor-grabbing tracking-wide"
+      style={{ borderColor: color, color, opacity: isDragging ? 0.3 : 1, backgroundColor: `${color}10`, boxShadow: `inset 0 0 10px ${color}05` }}
     >
       {name}
       <button
@@ -190,7 +190,7 @@ function DroppableZone({
   return (
     <div
       ref={setNodeRef}
-      className={cn("rounded-md border border-border/60 p-3 transition-colors", isOver && "bg-muted/20", className)}
+      className={cn("rounded-none border border-border/60 p-3 transition-all duration-300 shadow-[inset_0_4px_12px_rgba(0,0,0,0.3)] bg-black/20", isOver && "bg-muted/40 shadow-[inset_0_4px_20px_rgba(0,0,0,0.5)]", className)}
       style={isOver ? { borderColor: color } : undefined}
     >
       {children}
@@ -814,7 +814,7 @@ function BuildEditorUI({
             {/* Required */}
             <div>
               <div className="flex items-center gap-3 mb-2">
-                <span className="text-xs font-bold uppercase tracking-wider" style={{ color: REQUIRED_COLOR }}>Required</span>
+                <span className="text-xs font-bold uppercase tracking-[0.2em]" style={{ color: REQUIRED_COLOR }}>Required</span>
                 <div className="flex-1 h-px opacity-25" style={{ background: REQUIRED_COLOR }} />
                 <span className="text-xs text-muted-foreground">hard constraint · always included</span>
               </div>
@@ -858,7 +858,7 @@ function BuildEditorUI({
             {groupSections.map((section) => (
               <div key={section.label} className="space-y-2">
                 <div className="flex items-center gap-3">
-                  <span className="text-xs font-bold uppercase tracking-wider" style={{ color: section.color }}>
+                  <span className="text-xs font-bold uppercase tracking-[0.2em]" style={{ color: section.color }}>
                     {section.label}
                   </span>
                   <div className="flex-1 h-px opacity-20" style={{ background: section.color }} />
@@ -950,7 +950,7 @@ function BuildEditorUI({
             {/* Excluded */}
             <div>
               <div className="flex items-center gap-3 mb-2">
-                <span className="text-xs font-bold uppercase tracking-wider" style={{ color: EXCLUDED_COLOR }}>Excluded</span>
+                <span className="text-xs font-bold uppercase tracking-[0.2em]" style={{ color: EXCLUDED_COLOR }}>Excluded</span>
                 <div className="flex-1 h-px opacity-25" style={{ background: EXCLUDED_COLOR }} />
                 <span className="text-xs text-muted-foreground">blocks relic assignment</span>
               </div>
