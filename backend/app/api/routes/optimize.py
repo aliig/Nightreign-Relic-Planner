@@ -15,7 +15,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlmodel import select
 
-from app.api.deps import GameDataDep, OptionalUser, SessionDep
+from app.api.deps import GameDataDep, OptionalUser, OptimizerPoolDep, SessionDep
 from app.core.config import settings
 from app.models import Build, CharacterSlot, Relic
 from nrplanner.constants import CHARACTER_NAMES
@@ -50,6 +50,7 @@ def _run_optimizer(
     top_n: int,
     max_per_vessel: int,
     ds: Any,
+    executor: Any = None,
 ) -> list[VesselResult]:
     hero_type = _resolve_hero_type(character_name)
     inventory = RelicInventory.from_owned_relics(owned_relics)
@@ -58,6 +59,7 @@ def _run_optimizer(
     return optimizer.optimize_all_vessels(
         build_def, inventory, hero_type,
         top_n=top_n, max_per_vessel=max_per_vessel,
+        executor=executor,
     )
 
 
@@ -81,6 +83,7 @@ def run_optimize(
     ds: GameDataDep,
     current_user: OptionalUser,
     session: SessionDep,
+    executor: OptimizerPoolDep = None,
 ) -> list[VesselResult]:
     """Run vessel optimization and return ranked VesselResults.
 
@@ -173,7 +176,7 @@ def run_optimize(
 
     return _run_optimizer(
         build_def, owned_relics, build_def.character,
-        req.top_n, req.max_per_vessel, ds,
+        req.top_n, req.max_per_vessel, ds, executor=executor,
     )
 
 
@@ -183,6 +186,7 @@ def run_optimize_stream(
     ds: GameDataDep,
     current_user: OptionalUser,
     session: SessionDep,
+    executor: OptimizerPoolDep = None,
 ) -> StreamingResponse:
     """Same as POST /optimize/ but streams SSE progress events while running.
 
@@ -277,6 +281,7 @@ def run_optimize_stream(
             optimizer = VesselOptimizer(ds, scorer)
             for event in optimizer.optimize_vessels_streaming(
                 build_def, inventory, hero_type, req.top_n, req.max_per_vessel,
+                executor=executor,
             ):
                 if event["type"] == "result":
                     payload = {

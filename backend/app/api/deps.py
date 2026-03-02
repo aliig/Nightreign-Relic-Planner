@@ -1,4 +1,5 @@
 from collections.abc import Generator
+from concurrent.futures import ProcessPoolExecutor
 from typing import Annotated
 
 import jwt
@@ -12,6 +13,7 @@ from app.core import security
 from app.core.config import settings
 from app.core.db import engine
 from app.core.game_data import GameDataDep as GameDataDep  # re-export for routes
+from app.core.optimizer_pool import get_optimizer_pool
 from app.models import TokenPayload, User
 
 reusable_oauth2 = OAuth2PasswordBearer(
@@ -90,3 +92,10 @@ def get_optional_user(
 
 
 OptionalUser = Annotated[User | None, Depends(get_optional_user)]
+
+
+def get_optimizer_executor() -> ProcessPoolExecutor | None:
+    return get_optimizer_pool()
+
+
+OptimizerPoolDep = Annotated[ProcessPoolExecutor | None, Depends(get_optimizer_executor)]

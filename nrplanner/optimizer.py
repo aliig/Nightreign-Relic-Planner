@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import time
+from concurrent.futures import Future, ProcessPoolExecutor, as_completed
 
 from nrplanner.data import SourceDataHandler
 from nrplanner.models import (
@@ -9,6 +10,40 @@ from nrplanner.models import (
     SlotAssignment, VesselResult, VesselState,
 )
 from nrplanner.scoring import BuildScorer
+
+# ---------------------------------------------------------------------------
+# Worker-process globals (set once per worker by init_optimizer_worker)
+# ---------------------------------------------------------------------------
+_worker_ds: SourceDataHandler | None = None
+_worker_scorer: BuildScorer | None = None
+
+
+def init_optimizer_worker() -> None:
+    """ProcessPoolExecutor initializer — one SourceDataHandler per worker."""
+    global _worker_ds, _worker_scorer
+    _worker_ds = SourceDataHandler(language="en_US")
+    _worker_scorer = BuildScorer(_worker_ds)
+    # Warm up lazy caches so the first task doesn't pay init cost
+    _ = _worker_ds._reachable_effect_ids  # noqa: F841  # cached_property
+    _worker_ds.get_effect_stacking_type(0)  # loads _stacking_cache
+    _worker_ds.get_effect_family(0)  # loads _effect_families
+
+
+def _optimize_vessel_task(
+    build: BuildDefinition,
+    relics: list[OwnedRelic],
+    vessel_data: dict,
+    max_per_vessel: int,
+) -> tuple[int, str, list[VesselResult]]:
+    """Top-level picklable worker function for ProcessPoolExecutor."""
+    assert _worker_ds is not None and _worker_scorer is not None
+    inventory = RelicInventory.from_owned_relics(relics)
+    optimizer = VesselOptimizer(_worker_ds, _worker_scorer)
+    results = optimizer.optimize(build, inventory, vessel_data, max_per_vessel)
+    vessel_id = vessel_data.get("_id", 0)
+    for r in results:
+        r.vessel_id = vessel_id
+    return (vessel_id, vessel_data["Name"], results)
 
 
 class VesselOptimizer:
@@ -124,45 +159,92 @@ class VesselOptimizer:
         hero_type: int,
         top_n: int = 10,
         max_per_vessel: int = 3,
+        executor: ProcessPoolExecutor | None = None,
     ):
         """Like optimize_all_vessels but yields events for SSE streaming.
 
         Yields dicts:
             {"type": "progress", "vessel": i, "total": n, "name": vessel_name}
             {"type": "result", "data": list[VesselResult]}   (final event)
+
+        When *executor* is provided, vessels are optimized in parallel across
+        worker processes.  Progress events arrive as each vessel completes
+        (non-deterministic order).
         """
         vessels = list(self.data_source.get_all_vessels_for_hero(hero_type))
         total = len(vessels)
         all_results: list[VesselResult] = []
 
-        for i, v in enumerate(vessels):
-            vessel_data = dict(v)
-            vessel_data["_id"] = v["vessel_id"]
-            results = self.optimize(build, inventory, vessel_data, max_per_vessel)
-            for r in results:
-                r.vessel_id = v["vessel_id"]
-            all_results.extend(results)
-            yield {"type": "progress", "vessel": i + 1, "total": total, "name": v["Name"]}
+        if executor is None:
+            # Sequential path (unchanged)
+            for i, v in enumerate(vessels):
+                vessel_data = dict(v)
+                vessel_data["_id"] = v["vessel_id"]
+                results = self.optimize(build, inventory, vessel_data, max_per_vessel)
+                for r in results:
+                    r.vessel_id = v["vessel_id"]
+                all_results.extend(results)
+                yield {"type": "progress", "vessel": i + 1, "total": total, "name": v["Name"]}
+        else:
+            # Parallel: submit all vessels, yield progress as each completes
+            relics = inventory.relics
+            futures: dict[Future, dict] = {}
+            for v in vessels:
+                vd = dict(v)
+                vd["_id"] = v["vessel_id"]
+                fut = executor.submit(
+                    _optimize_vessel_task, build, relics, vd, max_per_vessel,
+                )
+                futures[fut] = v
+            completed = 0
+            for future in as_completed(futures):
+                _vid, name, results = future.result()
+                all_results.extend(results)
+                completed += 1
+                yield {"type": "progress", "vessel": completed, "total": total, "name": name}
 
         all_results.sort(key=lambda r: (not r.meets_requirements, -r.total_score))
         yield {"type": "result", "data": all_results[:top_n]}
 
     def optimize_all_vessels(self, build: BuildDefinition, inventory: RelicInventory,
                              hero_type: int, top_n: int = 10,
-                             max_per_vessel: int = 3) -> list[VesselResult]:
+                             max_per_vessel: int = 3,
+                             executor: ProcessPoolExecutor | None = None,
+                             ) -> list[VesselResult]:
         """Optimize all vessels for a hero. Returns top_n globally ranked results.
 
         Results that meet requirements come before those that don't, then sorted
         by score descending.
+
+        When *executor* is provided, vessels are optimized in parallel across
+        worker processes.
         """
+        vessels = list(self.data_source.get_all_vessels_for_hero(hero_type))
         all_results: list[VesselResult] = []
-        for v in self.data_source.get_all_vessels_for_hero(hero_type):
-            vessel_data = dict(v)
-            vessel_data["_id"] = v["vessel_id"]
-            results = self.optimize(build, inventory, vessel_data, max_per_vessel)
-            for r in results:
-                r.vessel_id = v["vessel_id"]
-            all_results.extend(results)
+
+        if executor is None:
+            # Sequential path (unchanged)
+            for v in vessels:
+                vessel_data = dict(v)
+                vessel_data["_id"] = v["vessel_id"]
+                results = self.optimize(build, inventory, vessel_data, max_per_vessel)
+                for r in results:
+                    r.vessel_id = v["vessel_id"]
+                all_results.extend(results)
+        else:
+            # Parallel: submit all vessels, collect via as_completed
+            relics = inventory.relics
+            futures: dict[Future, dict] = {}
+            for v in vessels:
+                vd = dict(v)
+                vd["_id"] = v["vessel_id"]
+                fut = executor.submit(
+                    _optimize_vessel_task, build, relics, vd, max_per_vessel,
+                )
+                futures[fut] = v
+            for future in as_completed(futures):
+                _vid, _name, results = future.result()
+                all_results.extend(results)
 
         all_results.sort(key=lambda r: (not r.meets_requirements, -r.total_score))
         return all_results[:top_n]

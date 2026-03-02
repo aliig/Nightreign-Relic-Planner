@@ -121,7 +121,7 @@ function AuthOptimizeForm({ buildId }: { buildId: string }) {
         <div className="space-y-2">
           <p className="text-sm text-muted-foreground">
             {progress
-              ? `Checking vessel ${progress.vessel} of ${progress.total}: ${progress.name}…`
+              ? `Optimized ${progress.vessel} of ${progress.total} vessels (${progress.name})…`
               : "Starting…"}
           </p>
           <Progress value={progress ? (progress.vessel / progress.total) * 100 : 0} />
@@ -315,7 +315,7 @@ function AnonOptimizeForm({ buildId }: { buildId: string }) {
         <div className="space-y-2">
           <p className="text-sm text-muted-foreground">
             {progress
-              ? `Checking vessel ${progress.vessel} of ${progress.total}: ${progress.name}…`
+              ? `Optimized ${progress.vessel} of ${progress.total} vessels (${progress.name})…`
               : "Starting…"}
           </p>
           <Progress value={progress ? (progress.vessel / progress.total) * 100 : 0} />
