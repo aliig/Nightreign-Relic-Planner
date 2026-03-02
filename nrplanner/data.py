@@ -264,10 +264,15 @@ class SourceDataHandler:
 
     @functools.cached_property
     def _reachable_effect_ids(self) -> set[int]:
-        """Effect IDs reachable from safe relics via the pool tables."""
+        """Effect IDs reachable from any obtainable relic via the pool tables.
+
+        Includes safe (store/reward/deep) AND unique relics.
+        Excludes only placeholders (ID < 100) and illegal relics (20000-30035).
+        """
+        illegal_lo, illegal_hi = RELIC_GROUPS["illegal"]
         ids: set[int] = set()
-        for relic_id in self.get_safe_relic_ids():
-            if relic_id not in self.relic_table.index:
+        for relic_id in self.relic_table.index:
+            if relic_id < 100 or illegal_lo <= relic_id <= illegal_hi:
                 continue
             for pool_id in self.get_relic_pools_seq(relic_id):
                 ids.update(self.get_pool_rollable_effects(pool_id))
