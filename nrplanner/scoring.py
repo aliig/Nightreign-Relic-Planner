@@ -425,7 +425,7 @@ class BuildScorer:
                 if has_state and cat is not None and cat != "excluded":
                     ctx_score = self._effect_stacking_score(
                         eff, cat, weight, state)
-                    if ctx_score < 0:
+                    if ctx_score < 0 and ctx_score != weight:
                         override_status = "conflict_penalty"
                     elif ctx_score == 0 and base_score != 0:
                         override_status = self._classify_override(eff, state)
