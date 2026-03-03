@@ -147,6 +147,7 @@ export interface FeaturedBuildsPublic {
 export interface BuildCreate {
   name: string
   character: string
+  groups?: Array<{ weight: number; effects: number[]; families: string[] }>
 }
 
 export interface BuildUpdate {

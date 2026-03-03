@@ -5,24 +5,24 @@ import { BuildsService } from "@/client"
 const STORAGE_KEY = "anon_builds"
 export const MIGRATION_FLAG = "migrate_builds_on_login"
 
-const DEFAULT_GROUPS = [
-  { weight: 100, effects: [] as number[], families: [] as string[] },
-  { weight: 50, effects: [] as number[], families: [] as string[] },
-  { weight: 25, effects: [] as number[], families: [] as string[] },
-  { weight: 10, effects: [] as number[], families: [] as string[] },
-  { weight: -20, effects: [] as number[], families: [] as string[] },
+export interface WeightGroup {
+  weight: number
+  effects: number[]
+  families: string[]
+}
+
+export const DEFAULT_GROUPS: WeightGroup[] = [
+  { weight: 100, effects: [], families: [] },
+  { weight: 50, effects: [], families: [] },
+  { weight: 25, effects: [], families: [] },
+  { weight: 10, effects: [], families: [] },
+  { weight: -20, effects: [], families: [] },
 ]
 
 // Stacking categories excluded by default for new builds.
 // 300 = "Changes compatible armament's skill to ..."
 // 6630000 = "Dormant Power Helps Discover ..."
 const DEFAULT_EXCLUDED_STACKING_CATEGORIES = [300, 6630000]
-
-export interface WeightGroup {
-  weight: number
-  effects: number[]
-  families: string[]
-}
 
 export interface LocalBuild {
   id: string

@@ -65,7 +65,11 @@ import {
 } from "@/components/ui/tooltip"
 import { isLoggedIn } from "@/hooks/useAuth"
 import useCustomToast from "@/hooks/useCustomToast"
-import { useLocalBuilds, type WeightGroup } from "@/hooks/useLocalBuilds"
+import {
+  DEFAULT_GROUPS,
+  useLocalBuilds,
+  type WeightGroup,
+} from "@/hooks/useLocalBuilds"
 import { cn } from "@/lib/utils"
 import { handleError } from "@/utils"
 
@@ -134,13 +138,6 @@ const COLOR_HEX: Record<string, string> = {
   White: "#AAAAAA",
 }
 
-const DEFAULT_GROUPS: WeightGroup[] = [
-  { weight: 100, effects: [], families: [] },
-  { weight: 50, effects: [], families: [] },
-  { weight: 25, effects: [], families: [] },
-  { weight: 10, effects: [], families: [] },
-  { weight: -20, effects: [], families: [] },
-]
 
 const EXCLUDED_COLOR = "#CC4444"
 

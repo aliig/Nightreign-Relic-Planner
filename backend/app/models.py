@@ -195,15 +195,6 @@ class RelicsPublic(SQLModel):
 # Build models
 # ---------------------------------------------------------------------------
 
-# Default weight groups for new builds (matches legacy tier defaults)
-_DEFAULT_GROUPS = [
-    {"weight": 50,  "effects": [], "families": []},
-    {"weight": 25,  "effects": [], "families": []},
-    {"weight": 10,  "effects": [], "families": []},
-    {"weight": -20, "effects": [], "families": []},
-]
-
-
 class Build(SQLModel, table=True):
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     owner_id: uuid.UUID = Field(
@@ -212,7 +203,7 @@ class Build(SQLModel, table=True):
     name: str = Field(max_length=255)
     character: str = Field(max_length=50)
     groups: list = Field(
-        default_factory=lambda: list(_DEFAULT_GROUPS),
+        default_factory=list,
         sa_column=Column(JSON, nullable=False, server_default="[]"),
     )
     required_effects: list = Field(
@@ -265,6 +256,7 @@ class Build(SQLModel, table=True):
 class BuildCreate(SQLModel):
     name: str = Field(min_length=1, max_length=255)
     character: str = Field(max_length=50)
+    groups: list[dict] | None = None
 
 
 class BuildUpdate(SQLModel):

@@ -57,7 +57,11 @@ import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
 import useAuth, { isLoggedIn } from "@/hooks/useAuth"
 import useCustomToast from "@/hooks/useCustomToast"
-import { type LocalBuild, useLocalBuilds } from "@/hooks/useLocalBuilds"
+import {
+  DEFAULT_GROUPS,
+  type LocalBuild,
+  useLocalBuilds,
+} from "@/hooks/useLocalBuilds"
 import { handleError } from "@/utils"
 
 export const Route = createFileRoute("/_layout/builds")({
@@ -657,7 +661,12 @@ function AuthBuildsSection() {
 
   const createMutation = useMutation({
     mutationFn: (data: NewBuildForm) =>
-      BuildsService.createBuild({ requestBody: data }),
+      BuildsService.createBuild({
+        requestBody: {
+          ...data,
+          groups: DEFAULT_GROUPS.map((g) => ({ ...g })),
+        },
+      }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["builds"] })
       showSuccessToast("Build created.")

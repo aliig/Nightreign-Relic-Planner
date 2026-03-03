@@ -51,11 +51,14 @@ def create_build(
     build_in: BuildCreate,
 ) -> Any:
     """Create a new build."""
-    build = Build(
+    kwargs: dict = dict(
         owner_id=current_user.id,
         name=build_in.name,
         character=build_in.character,
     )
+    if build_in.groups is not None:
+        kwargs["groups"] = build_in.groups
+    build = Build(**kwargs)
     session.add(build)
     session.commit()
     session.refresh(build)
