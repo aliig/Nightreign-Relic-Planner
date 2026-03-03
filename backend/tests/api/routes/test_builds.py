@@ -55,9 +55,9 @@ class TestCreateBuild:
         assert build["name"] == "Test Build"
         assert build["character"] == "Wylder"
         assert "id" in build
-        # New schema: groups list with 4 default weight groups, empty required/excluded
+        # Backend no longer injects default groups (frontend is source of truth)
         assert isinstance(build["groups"], list)
-        assert len(build["groups"]) == 4
+        assert len(build["groups"]) == 0
         assert build["required_effects"] == []
         assert build["required_families"] == []
         assert build["excluded_effects"] == []
@@ -192,7 +192,7 @@ class TestGroupsAndPinnedRelics:
     ) -> None:
         b = _create_build(client, superuser_token_headers, name="GroupsCheck")
         assert isinstance(b["groups"], list)
-        assert len(b["groups"]) == 4
+        assert len(b["groups"]) == 0
         assert b["pinned_relics"] == []
 
     def test_update_groups(
