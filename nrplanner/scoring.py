@@ -342,6 +342,20 @@ class BuildScorer:
             return -desired_conflict_weights[compat]
         return 0
 
+    def _is_at_limit(self, eff_id: int, state: VesselState) -> bool:
+        """True if this effect's name or family has reached its user-defined limit."""
+        if not state.limited_names:
+            return False
+        eff_name = self.data_source.get_effect_name(eff_id)
+        if eff_name and eff_name in state.effect_limit_by_name:
+            if state.limited_counts.get(eff_name, 0) >= state.effect_limit_by_name[eff_name]:
+                return True
+        family = self.data_source.get_effect_family(eff_id)
+        if family and family in state.family_limit_map:
+            if state.limited_counts.get(family, 0) >= state.family_limit_map[family]:
+                return True
+        return False
+
     def score_relic_in_context(self, relic: OwnedRelic, build: BuildDefinition,
                                 state: VesselState) -> int:
         """Score considering stacking state of already-assigned relics."""
@@ -351,6 +365,8 @@ class BuildScorer:
                 continue
             cat, weight = self._resolve_category_and_weight(eff, build)
             if cat is not None and cat != "excluded":
+                if self._is_at_limit(eff, state):
+                    continue  # at user-defined limit, score 0 (neutral)
                 # Positional stacking category handling
                 if self._is_excl_category_effect(eff, build, state):
                     adj, _ = self._excluded_category_score(eff, weight, build, state)
@@ -362,6 +378,8 @@ class BuildScorer:
                 continue
             cat, weight = self._resolve_category_and_weight(curse, build)
             if cat is not None and cat != "excluded":
+                if self._is_at_limit(curse, state):
+                    continue  # at user-defined limit, score 0 (neutral)
                 if self._is_excl_category_effect(curse, build, state):
                     adj, _ = self._excluded_category_score(curse, weight, build, state)
                     score += adj
@@ -423,12 +441,16 @@ class BuildScorer:
                     continue
 
                 if has_state and cat is not None and cat != "excluded":
-                    ctx_score = self._effect_stacking_score(
-                        eff, cat, weight, state)
-                    if ctx_score < 0 and ctx_score != weight:
-                        override_status = "conflict_penalty"
-                    elif ctx_score == 0 and base_score != 0:
-                        override_status = self._classify_override(eff, state)
+                    # User-defined limit check (before stacking)
+                    if self._is_at_limit(eff, state):
+                        override_status = "limit_reached"
+                    else:
+                        ctx_score = self._effect_stacking_score(
+                            eff, cat, weight, state)
+                        if ctx_score < 0 and ctx_score != weight:
+                            override_status = "conflict_penalty"
+                        elif ctx_score == 0 and base_score != 0:
+                            override_status = self._classify_override(eff, state)
                 final_score = base_score
                 if override_status == "conflict_penalty":
                     final_score = ctx_score  # negative

@@ -67,6 +67,19 @@ class VesselOptimizer:
         desired_cw = self.scorer.get_desired_conflict_weights(build)
         desired_compat_effs = self.scorer.get_desired_compat_effects(build)
 
+        # Pre-resolve user-defined effect limits (effect_id -> name)
+        effect_limit_by_name: dict[str, int] | None = None
+        family_limit_map: dict[str, int] | None = None
+        if build.effect_limits:
+            effect_limit_by_name = {}
+            for eff_id, max_count in build.effect_limits.items():
+                name = self.data_source.get_effect_name(eff_id)
+                if name and name not in ("", "Empty"):
+                    effect_limit_by_name[name] = min(
+                        effect_limit_by_name.get(name, max_count), max_count)
+        if build.family_limits:
+            family_limit_map = dict(build.family_limits)
+
         # Pre-assign pinned relics; returns (None, ...) if any can't fit this vessel.
         pinned_map, slot_owner = self._pre_assign_pinned(
             build, inventory, slot_colors, num_slots)
@@ -106,14 +119,16 @@ class VesselOptimizer:
             # baseline score that seeds backtracking for aggressive pruning.
             raw_free = self._greedy_solve(
                 candidates_per_free_slot, num_free, build, top_n, desired_cw,
-                desired_compat_effs)
+                desired_compat_effs, effect_limit_by_name, family_limit_map)
 
             if total <= 500 and num_free <= 6:
                 greedy_best = max(
                     (sum(s for _, s in a) for a in raw_free), default=0)
                 bt_results = self._backtrack_solve(
                     candidates_per_free_slot, num_free, build, top_n, desired_cw,
-                    desired_compat_effs, initial_threshold=greedy_best - 1)
+                    desired_compat_effs, initial_threshold=greedy_best - 1,
+                    effect_limit_by_name=effect_limit_by_name,
+                    family_limit_map=family_limit_map)
                 if bt_results:
                     # Merge and deduplicate by relic set
                     seen: set[frozenset] = set()
@@ -148,7 +163,7 @@ class VesselOptimizer:
         return [
             self._build_vessel_result(
                 assignment, num_slots, slot_colors, vessel_data, build, desired_cw,
-                desired_compat_effs)
+                desired_compat_effs, effect_limit_by_name, family_limit_map)
             for assignment in raw
         ]
 
@@ -258,6 +273,8 @@ class VesselOptimizer:
                              build: BuildDefinition,
                              desired_conflict_weights: dict[int, int] | None = None,
                              desired_compat_effects: dict[int, set[int]] | None = None,
+                             effect_limit_by_name: dict[str, int] | None = None,
+                             family_limit_map: dict[str, int] | None = None,
                              ) -> VesselResult:
         """Construct VesselResult from raw slot assignments (left-to-right priority)."""
         slot_results: list[tuple] = [(None, 0, [])] * num_slots
@@ -266,6 +283,8 @@ class VesselOptimizer:
             self.data_source,
             desired_conflict_weights=desired_conflict_weights,
             desired_compat_effects=desired_compat_effects,
+            effect_limit_by_name=effect_limit_by_name,
+            family_limit_map=family_limit_map,
         )
         total_score = 0
 
@@ -352,6 +371,8 @@ class VesselOptimizer:
                       build: BuildDefinition, top_n: int = 3,
                       desired_cw: dict[int, int] | None = None,
                       desired_compat_effs: dict[int, set[int]] | None = None,
+                      effect_limit_by_name: dict[str, int] | None = None,
+                      family_limit_map: dict[str, int] | None = None,
                       ) -> list[list]:
         results: list[list] = []
         excluded: set[int] = set()
@@ -360,7 +381,7 @@ class VesselOptimizer:
         for _ in range(top_n):
             assignment = self._greedy_solve_once(
                 candidates_per_slot, num_slots, build, excluded, desired_cw,
-                desired_compat_effs)
+                desired_compat_effs, effect_limit_by_name, family_limit_map)
             handles = frozenset(r.ga_handle for r, _ in assignment if r is not None)
             if not handles or handles in seen:
                 break
@@ -382,6 +403,8 @@ class VesselOptimizer:
                            excluded_handles: set[int] | None = None,
                            desired_cw: dict[int, int] | None = None,
                            desired_compat_effs: dict[int, set[int]] | None = None,
+                           effect_limit_by_name: dict[str, int] | None = None,
+                           family_limit_map: dict[str, int] | None = None,
                            ) -> list:
         assigned: list = [None] * num_slots
         used: set[int] = set(excluded_handles or ())
@@ -389,6 +412,8 @@ class VesselOptimizer:
             self.data_source,
             desired_conflict_weights=desired_cw,
             desired_compat_effects=desired_compat_effs,
+            effect_limit_by_name=effect_limit_by_name,
+            family_limit_map=family_limit_map,
         )
 
         for slot_idx in range(num_slots):
@@ -416,6 +441,8 @@ class VesselOptimizer:
                          desired_cw: dict[int, int] | None = None,
                          desired_compat_effs: dict[int, set[int]] | None = None,
                          initial_threshold: int = -1,
+                         effect_limit_by_name: dict[str, int] | None = None,
+                         family_limit_map: dict[str, int] | None = None,
                          ) -> list[list]:
         top: list[tuple[int, list]] = []
         seen: set[frozenset] = set()
@@ -426,6 +453,8 @@ class VesselOptimizer:
             self.data_source,
             desired_conflict_weights=desired_cw,
             desired_compat_effects=desired_compat_effs,
+            effect_limit_by_name=effect_limit_by_name,
+            family_limit_map=family_limit_map,
         )
 
         def backtrack(slot_idx: int, current: list, used: set[int],

@@ -241,6 +241,14 @@ class Build(SQLModel, table=True):
         default_factory=lambda: [300, 6630000],
         sa_column=Column(JSON, nullable=False, server_default="[300, 6630000]"),
     )
+    effect_limits: dict = Field(
+        default_factory=dict,
+        sa_column=Column(JSON, nullable=False, server_default="{}"),
+    )
+    family_limits: dict = Field(
+        default_factory=dict,
+        sa_column=Column(JSON, nullable=False, server_default="{}"),
+    )
     is_featured: bool = Field(default=False, index=True)
     created_at: datetime | None = Field(
         default_factory=get_datetime_utc,
@@ -271,6 +279,8 @@ class BuildUpdate(SQLModel):
     curse_max: int | None = Field(default=None, ge=1)
     pinned_relics: list[int] | None = None
     excluded_stacking_categories: list[int] | None = None
+    effect_limits: dict[int, int] | None = None
+    family_limits: dict[str, int] | None = None
 
 
 class BuildPublic(SQLModel):
@@ -287,6 +297,8 @@ class BuildPublic(SQLModel):
     curse_max: int
     pinned_relics: list[int] = Field(default_factory=list)
     excluded_stacking_categories: list[int] = Field(default_factory=list)
+    effect_limits: dict[int, int] = Field(default_factory=dict)
+    family_limits: dict[str, int] = Field(default_factory=dict)
     is_featured: bool
     created_at: datetime | None = None
     updated_at: datetime | None = None
@@ -310,6 +322,8 @@ class FeaturedBuildPublic(SQLModel):
     curse_max: int
     pinned_relics: list[int] = Field(default_factory=list)
     excluded_stacking_categories: list[int] = Field(default_factory=list)
+    effect_limits: dict[int, int] = Field(default_factory=dict)
+    family_limits: dict[str, int] = Field(default_factory=dict)
     owner_name: str | None = None
     created_at: datetime | None = None
 

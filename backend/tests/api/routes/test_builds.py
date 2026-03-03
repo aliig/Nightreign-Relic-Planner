@@ -1,4 +1,12 @@
-"""Tests for build CRUD endpoints (authentication required for all)."""
+"""Tests for build CRUD endpoints (authentication required for all).
+
+NOTE: The function-scoped ``db`` fixture in conftest.py wraps every test in a
+SAVEPOINT transaction that is rolled back after the test.  This means we do
+**not** need any manual cleanup (client.delete calls, cleanup fixtures, etc.).
+Adding manual deletes is actively dangerous — they go through the TestClient
+and hit the *real* database connection, permanently deleting data that belongs
+to the superuser account used for testing.
+"""
 import uuid
 from typing import Any
 
@@ -67,31 +75,12 @@ class TestCreateBuild:
         )
         assert response.status_code == 422
 
-    # Clean up after module to avoid polluting other test counts
-    @pytest.fixture(autouse=True, scope="module")
-    def cleanup_builds(
-        self, client: TestClient, superuser_token_headers: dict[str, str]
-    ) -> Any:
-        yield
-        # Delete all builds for the superuser after the module runs
-        resp = client.get("/api/v1/builds/", headers=superuser_token_headers)
-        if resp.status_code == 200:
-            for b in resp.json().get("data", []):
-                client.delete(f"/api/v1/builds/{b['id']}", headers=superuser_token_headers)
-
 
 class TestGetBuild:
-    @pytest.fixture(scope="class")
-    def build(
-        self, client: TestClient, superuser_token_headers: dict[str, str]
-    ) -> Any:
-        b = _create_build(client, superuser_token_headers, name="GetTest")
-        yield b
-        client.delete(f"/api/v1/builds/{b['id']}", headers=superuser_token_headers)
-
     def test_get_ok(
-        self, client: TestClient, superuser_token_headers: dict[str, str], build: dict
+        self, client: TestClient, superuser_token_headers: dict[str, str]
     ) -> None:
+        build = _create_build(client, superuser_token_headers, name="GetTest")
         response = client.get(
             f"/api/v1/builds/{build['id']}", headers=superuser_token_headers
         )
@@ -111,8 +100,8 @@ class TestGetBuild:
         client: TestClient,
         superuser_token_headers: dict[str, str],
         normal_user_token_headers: dict[str, str],
-        build: dict,
     ) -> None:
+        build = _create_build(client, superuser_token_headers, name="GetTest")
         response = client.get(
             f"/api/v1/builds/{build['id']}", headers=normal_user_token_headers
         )
@@ -120,17 +109,10 @@ class TestGetBuild:
 
 
 class TestUpdateBuild:
-    @pytest.fixture(scope="class")
-    def build(
-        self, client: TestClient, superuser_token_headers: dict[str, str]
-    ) -> Any:
-        b = _create_build(client, superuser_token_headers, name="UpdateTest")
-        yield b
-        client.delete(f"/api/v1/builds/{b['id']}", headers=superuser_token_headers)
-
     def test_update_name(
-        self, client: TestClient, superuser_token_headers: dict[str, str], build: dict
+        self, client: TestClient, superuser_token_headers: dict[str, str]
     ) -> None:
+        build = _create_build(client, superuser_token_headers, name="UpdateTest")
         response = client.put(
             f"/api/v1/builds/{build['id']}",
             json={"name": "Renamed"},
@@ -140,8 +122,9 @@ class TestUpdateBuild:
         assert response.json()["name"] == "Renamed"
 
     def test_update_required_effects(
-        self, client: TestClient, superuser_token_headers: dict[str, str], build: dict
+        self, client: TestClient, superuser_token_headers: dict[str, str]
     ) -> None:
+        build = _create_build(client, superuser_token_headers, name="UpdateTest")
         response = client.put(
             f"/api/v1/builds/{build['id']}",
             json={"required_effects": [1001]},
@@ -165,8 +148,8 @@ class TestUpdateBuild:
         client: TestClient,
         superuser_token_headers: dict[str, str],
         normal_user_token_headers: dict[str, str],
-        build: dict,
     ) -> None:
+        build = _create_build(client, superuser_token_headers, name="UpdateTest")
         response = client.put(
             f"/api/v1/builds/{build['id']}",
             json={"name": "X"},
@@ -201,8 +184,6 @@ class TestDeleteBuild:
             f"/api/v1/builds/{b['id']}", headers=normal_user_token_headers
         )
         assert response.status_code == 403
-        # Clean up
-        client.delete(f"/api/v1/builds/{b['id']}", headers=superuser_token_headers)
 
 
 class TestGroupsAndPinnedRelics:
@@ -213,7 +194,6 @@ class TestGroupsAndPinnedRelics:
         assert isinstance(b["groups"], list)
         assert len(b["groups"]) == 4
         assert b["pinned_relics"] == []
-        client.delete(f"/api/v1/builds/{b['id']}", headers=superuser_token_headers)
 
     def test_update_groups(
         self, client: TestClient, superuser_token_headers: dict[str, str]
@@ -227,7 +207,6 @@ class TestGroupsAndPinnedRelics:
         )
         assert resp.status_code == 200
         assert resp.json()["groups"][0]["weight"] == 75
-        client.delete(f"/api/v1/builds/{b['id']}", headers=superuser_token_headers)
 
     def test_update_pinned_relics(
         self, client: TestClient, superuser_token_headers: dict[str, str]
@@ -241,7 +220,6 @@ class TestGroupsAndPinnedRelics:
         )
         assert resp.status_code == 200
         assert resp.json()["pinned_relics"] == pinned
-        client.delete(f"/api/v1/builds/{b['id']}", headers=superuser_token_headers)
 
 
 class TestListBuilds:
@@ -254,21 +232,17 @@ class TestListBuilds:
             b = _create_build(client, superuser_token_headers, name=f"PaginationBuild{i}")
             ids.append(b["id"])
 
-        try:
-            # Total count must include at least our 3
-            resp_all = client.get("/api/v1/builds/", headers=superuser_token_headers)
-            assert resp_all.status_code == 200
-            total = resp_all.json()["count"]
-            assert total >= 3
+        # Total count must include at least our 3
+        resp_all = client.get("/api/v1/builds/", headers=superuser_token_headers)
+        assert resp_all.status_code == 200
+        total = resp_all.json()["count"]
+        assert total >= 3
 
-            # skip=1, limit=1 should return exactly 1 item
-            resp_page = client.get(
-                "/api/v1/builds/?skip=1&limit=1", headers=superuser_token_headers
-            )
-            assert resp_page.status_code == 200
-            body = resp_page.json()
-            assert body["count"] == total
-            assert len(body["data"]) == 1
-        finally:
-            for bid in ids:
-                client.delete(f"/api/v1/builds/{bid}", headers=superuser_token_headers)
+        # skip=1, limit=1 should return exactly 1 item
+        resp_page = client.get(
+            "/api/v1/builds/?skip=1&limit=1", headers=superuser_token_headers
+        )
+        assert resp_page.status_code == 200
+        body = resp_page.json()
+        assert body["count"] == total
+        assert len(body["data"]) == 1

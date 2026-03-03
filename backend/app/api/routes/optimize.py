@@ -140,6 +140,8 @@ def run_optimize(
             curse_max=db_build.curse_max,
             pinned_relics=db_build.pinned_relics or [],
             excluded_stacking_categories=db_build.excluded_stacking_categories or [],
+            effect_limits={int(k): v for k, v in (db_build.effect_limits or {}).items()},
+            family_limits=db_build.family_limits or {},
         )
 
         db_relics = session.exec(
@@ -239,6 +241,8 @@ def run_optimize_stream(
             curse_max=db_build.curse_max,
             pinned_relics=db_build.pinned_relics or [],
             excluded_stacking_categories=db_build.excluded_stacking_categories or [],
+            effect_limits={int(k): v for k, v in (db_build.effect_limits or {}).items()},
+            family_limits=db_build.family_limits or {},
         )
 
         db_relics = session.exec(

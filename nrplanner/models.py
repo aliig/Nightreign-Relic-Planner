@@ -150,6 +150,8 @@ class BuildDefinition(BaseModel):
     curse_max: int = 1  # max times the same curse is tolerated (0=avoid all)
     pinned_relics: list[int] = Field(default_factory=list)  # ga_handle IDs to force-assign
     excluded_stacking_categories: list[int] = Field(default_factory=list)  # compatibilityId values
+    effect_limits: dict[int, int] = Field(default_factory=dict)   # effect_id → max_count
+    family_limits: dict[str, int] = Field(default_factory=dict)   # family_name → max_count
 
     def get_weight_for_effect(self, effect_id: int) -> tuple[str, int] | None:
         """Return (category, weight) for a direct effect ID lookup.
@@ -245,6 +247,7 @@ class PlacementDelta:
     no_stack_compat_ids: frozenset[int]
     desired_compat_placed: frozenset[int]
     curse_ids: tuple[int, ...]
+    limited_name_increments: tuple[str, ...] = ()
 
 
 class VesselState:
@@ -258,6 +261,9 @@ class VesselState:
         'effect_ids', 'exclusivity_ids', 'no_stack_exclusivity_ids',
         'no_stack_compat_ids', 'curse_counts', 'desired_compat_placed',
         'desired_conflict_weights', 'desired_compat_effects',
+        # User-defined effect/family limits
+        'limited_counts', 'effect_limit_by_name', 'family_limit_map',
+        'limited_names',
     )
 
     def __init__(
@@ -265,6 +271,8 @@ class VesselState:
         data_source: SourceDataHandler,
         desired_conflict_weights: dict[int, int] | None = None,
         desired_compat_effects: dict[int, set[int]] | None = None,
+        effect_limit_by_name: dict[str, int] | None = None,
+        family_limit_map: dict[str, int] | None = None,
     ):
         self.data_source = data_source
         self.effect_ids: set[int] = set()
@@ -276,6 +284,13 @@ class VesselState:
         # Build-level precomputed (immutable after init)
         self.desired_conflict_weights = desired_conflict_weights
         self.desired_compat_effects = desired_compat_effects
+        # User-defined limits (immutable after init)
+        self.effect_limit_by_name: dict[str, int] = effect_limit_by_name or {}
+        self.family_limit_map: dict[str, int] = family_limit_map or {}
+        self.limited_names: frozenset[str] = frozenset(
+            list(self.effect_limit_by_name) + list(self.family_limit_map)
+        )
+        self.limited_counts: dict[str, int] = {}
 
     def place(self, relic: OwnedRelic) -> PlacementDelta:
         """Compute and apply state changes for placing a relic. Returns delta for undo.
@@ -344,6 +359,22 @@ class VesselState:
             c for c in relic.curses if c not in (EMPTY_EFFECT, 0)
         )
 
+        # Limit tracking — count each limited name/family once per relic
+        limited_increments: list[str] = []
+        if self.limited_names:
+            seen_for_limits: set[str] = set()
+            for eff in relic.all_effects:
+                eff_name = ds.get_effect_name(eff)
+                if (eff_name and eff_name in self.effect_limit_by_name
+                        and eff_name not in seen_for_limits):
+                    seen_for_limits.add(eff_name)
+                    limited_increments.append(eff_name)
+                family = ds.get_effect_family(eff)
+                if (family and family in self.family_limit_map
+                        and family not in seen_for_limits):
+                    seen_for_limits.add(family)
+                    limited_increments.append(family)
+
         # Apply mutations
         self.effect_ids.update(added_eff)
         self.exclusivity_ids.update(added_excl)
@@ -352,6 +383,8 @@ class VesselState:
         self.desired_compat_placed.update(added_dcp)
         for cid in curse_ids:
             self.curse_counts[cid] = self.curse_counts.get(cid, 0) + 1
+        for name in limited_increments:
+            self.limited_counts[name] = self.limited_counts.get(name, 0) + 1
 
         return PlacementDelta(
             effect_ids=frozenset(added_eff),
@@ -360,6 +393,7 @@ class VesselState:
             no_stack_compat_ids=frozenset(added_ns_compat),
             desired_compat_placed=frozenset(added_dcp),
             curse_ids=curse_ids,
+            limited_name_increments=tuple(limited_increments),
         )
 
     def remove(self, delta: PlacementDelta) -> None:
@@ -373,6 +407,10 @@ class VesselState:
             self.curse_counts[cid] -= 1
             if self.curse_counts[cid] == 0:
                 del self.curse_counts[cid]
+        for name in delta.limited_name_increments:
+            self.limited_counts[name] -= 1
+            if self.limited_counts[name] == 0:
+                del self.limited_counts[name]
 
     def copy(self) -> VesselState:
         """Shallow copy for branching (e.g. result builder needs a fresh copy)."""
@@ -386,4 +424,9 @@ class VesselState:
         clone.desired_compat_placed = set(self.desired_compat_placed)
         clone.desired_conflict_weights = self.desired_conflict_weights
         clone.desired_compat_effects = self.desired_compat_effects
+        # Limits: copy mutable counter, share immutable config
+        clone.effect_limit_by_name = self.effect_limit_by_name
+        clone.family_limit_map = self.family_limit_map
+        clone.limited_names = self.limited_names
+        clone.limited_counts = dict(self.limited_counts)
         return clone

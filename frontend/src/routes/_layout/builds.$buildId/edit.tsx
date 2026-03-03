@@ -118,6 +118,8 @@ type BuildApiData = {
   curse_max: number
   pinned_relics: number[]
   excluded_stacking_categories: number[]
+  effect_limits: Record<number, number>
+  family_limits: Record<string, number>
 }
 
 // ---------------------------------------------------------------------------
@@ -133,6 +135,7 @@ const COLOR_HEX: Record<string, string> = {
 }
 
 const DEFAULT_GROUPS: WeightGroup[] = [
+  { weight: 100, effects: [], families: [] },
   { weight: 50, effects: [], families: [] },
   { weight: 25, effects: [], families: [] },
   { weight: 10, effects: [], families: [] },
@@ -212,12 +215,16 @@ function DraggableChip({
   color,
   dragData,
   onRemove,
+  limit,
+  onLimitChange,
 }: {
   dragId: string
   name: string
   color: string
   dragData: DragData
   onRemove: () => void
+  limit?: number
+  onLimitChange?: (limit: number | undefined) => void
 }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: dragId,
@@ -228,7 +235,7 @@ function DraggableChip({
       ref={setNodeRef}
       {...listeners}
       {...attributes}
-      className="inline-flex items-center gap-1 rounded-none px-2.5 py-0.5 text-xs font-medium border cursor-grab active:cursor-grabbing tracking-wide"
+      className="group/chip inline-flex items-center gap-1 rounded-none px-2.5 py-0.5 text-xs font-medium border cursor-grab active:cursor-grabbing tracking-wide"
       style={{
         borderColor: color,
         color,
@@ -238,6 +245,30 @@ function DraggableChip({
       }}
     >
       {name}
+      {onLimitChange && (
+        <button
+          type="button"
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={() => {
+            if (limit === undefined) onLimitChange(1)
+            else if (limit >= 3) onLimitChange(undefined)
+            else onLimitChange(limit + 1)
+          }}
+          className={`text-[10px] leading-none px-1 rounded hover:opacity-70 ${
+            limit !== undefined
+              ? "border opacity-100"
+              : "border border-transparent opacity-0 group-hover/chip:opacity-40"
+          }`}
+          style={limit !== undefined ? { borderColor: color } : undefined}
+          title={
+            limit !== undefined
+              ? `Max ${limit} across all slots (click to change, cycles 1→2→3→unlimited)`
+              : "Click to limit how many slots can have this effect"
+          }
+        >
+          {limit !== undefined ? `≤${limit}` : "#"}
+        </button>
+      )}
       <button
         type="button"
         onPointerDown={(e) => e.stopPropagation()}
@@ -599,6 +630,8 @@ interface EditorUIProps {
   pinnedRelicMeta: Map<number, RelicForPicker>
   excludedStackingCategories: number[]
   stackingCategories: StackingCategory[]
+  effectLimits: Record<number, number>
+  familyLimits: Record<string, number>
   saving: boolean
   effects: EffectMeta[]
   families: FamilyMeta[]
@@ -613,6 +646,8 @@ interface EditorUIProps {
     meta: Map<number, RelicForPicker>,
   ) => void
   onExcludedStackingCategoriesChange: (ids: number[]) => void
+  onEffectLimitsChange: (limits: Record<number, number>) => void
+  onFamilyLimitsChange: (limits: Record<string, number>) => void
   onRename: (newName: string) => void
 }
 
@@ -639,6 +674,10 @@ function BuildEditorUI({
   onCurseMaxChange,
   onPinnedRelicsChange,
   onExcludedStackingCategoriesChange,
+  effectLimits,
+  familyLimits,
+  onEffectLimitsChange,
+  onFamilyLimitsChange,
   onRename,
 }: EditorUIProps) {
   const [effectSearch, setEffectSearch] = useState("")
@@ -733,6 +772,12 @@ function BuildEditorUI({
       if (targetZone === "zone:excluded") {
         onGroupsChange(newGroups)
         onExcludedEffectsChange([...newExcluded, effectId])
+        // Clean up limit when moving to excluded
+        if (effectId in effectLimits) {
+          const next = { ...effectLimits }
+          delete next[effectId]
+          onEffectLimitsChange(next)
+        }
       } else if (targetZone.startsWith("zone:group:")) {
         const idx = parseInt(targetZone.slice("zone:group:".length), 10)
         onGroupsChange(
@@ -758,6 +803,12 @@ function BuildEditorUI({
       if (targetZone === "zone:excluded") {
         onGroupsChange(newGroups)
         onExcludedFamiliesChange([...newExcluded, familyName])
+        // Clean up limit when moving to excluded
+        if (familyName in familyLimits) {
+          const next = { ...familyLimits }
+          delete next[familyName]
+          onFamilyLimitsChange(next)
+        }
       } else if (targetZone.startsWith("zone:group:")) {
         const idx = parseInt(targetZone.slice("zone:group:".length), 10)
         onGroupsChange(
@@ -1070,6 +1121,13 @@ function BuildEditorUI({
                                     ),
                                   )
                                 }
+                                limit={familyLimits[familyName]}
+                                onLimitChange={(newLimit) => {
+                                  const next = { ...familyLimits }
+                                  if (newLimit === undefined) delete next[familyName]
+                                  else next[familyName] = newLimit
+                                  onFamilyLimitsChange(next)
+                                }}
                               />
                             ))}
                             {group.effects.map((id) => {
@@ -1104,6 +1162,13 @@ function BuildEditorUI({
                                       ),
                                     )
                                   }
+                                  limit={effectLimits[id]}
+                                  onLimitChange={(newLimit) => {
+                                    const next = { ...effectLimits }
+                                    if (newLimit === undefined) delete next[id]
+                                    else next[id] = newLimit
+                                    onEffectLimitsChange(next)
+                                  }}
                                 />
                               )
                             })}
@@ -1371,6 +1436,12 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
   const [excludedStackingCategories, setExcludedStackingCategories] = useState<
     number[]
   >(() => build.excluded_stacking_categories ?? [])
+  const [effectLimits, setEffectLimits] = useState<Record<number, number>>(
+    () => build.effect_limits ?? {},
+  )
+  const [familyLimits, setFamilyLimits] = useState<Record<string, number>>(
+    () => build.family_limits ?? {},
+  )
 
   const groupsRef = useRef(groups)
   const excludedEffectsRef = useRef(excludedEffects)
@@ -1379,6 +1450,8 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
   const curseMaxRef = useRef(curseMax)
   const pinnedRelicsRef = useRef(pinnedRelics)
   const excludedStackingCategoriesRef = useRef(excludedStackingCategories)
+  const effectLimitsRef = useRef(effectLimits)
+  const familyLimitsRef = useRef(familyLimits)
   groupsRef.current = groups
   excludedEffectsRef.current = excludedEffects
   excludedFamiliesRef.current = excludedFamilies
@@ -1386,6 +1459,8 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
   curseMaxRef.current = curseMax
   pinnedRelicsRef.current = pinnedRelics
   excludedStackingCategoriesRef.current = excludedStackingCategories
+  effectLimitsRef.current = effectLimits
+  familyLimitsRef.current = familyLimits
 
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -1439,6 +1514,8 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
     setCurseMax(build.curse_max)
     setPinnedRelics(build.pinned_relics ?? [])
     setExcludedStackingCategories(build.excluded_stacking_categories ?? [])
+    setEffectLimits(build.effect_limits ?? {})
+    setFamilyLimits(build.family_limits ?? {})
   }, [build])
 
   const saveMutation = useMutation({
@@ -1455,6 +1532,8 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
           include_deep: includeDeepRef.current,
           curse_max: curseMaxRef.current,
           pinned_relics: pinnedRelicsRef.current,
+          effect_limits: effectLimitsRef.current,
+          family_limits: familyLimitsRef.current,
         } as any, // SDK will be regenerated with new schema
       }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["builds"] }),
@@ -1532,6 +1611,16 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
         setExcludedStackingCategories(ids)
         scheduleAutoSave()
       }}
+      effectLimits={effectLimits}
+      familyLimits={familyLimits}
+      onEffectLimitsChange={(limits) => {
+        setEffectLimits(limits)
+        scheduleAutoSave()
+      }}
+      onFamilyLimitsChange={(limits) => {
+        setFamilyLimits(limits)
+        scheduleAutoSave()
+      }}
       onRename={(name) => renameMutation.mutate(name)}
     />
   )
@@ -1605,6 +1694,12 @@ function LocalBuildEditorContent({ buildId }: { buildId: string }) {
   const [excludedStackingCategories, setExcludedStackingCategories] = useState<
     number[]
   >(() => build?.excluded_stacking_categories ?? [])
+  const [effectLimits, setEffectLimits] = useState<Record<number, number>>(
+    () => build?.effect_limits ?? {},
+  )
+  const [familyLimits, setFamilyLimits] = useState<Record<string, number>>(
+    () => build?.family_limits ?? {},
+  )
 
   const groupsRef = useRef(groups)
   const excludedEffectsRef = useRef(excludedEffects)
@@ -1613,6 +1708,8 @@ function LocalBuildEditorContent({ buildId }: { buildId: string }) {
   const curseMaxRef = useRef(curseMax)
   const pinnedRelicsRef = useRef(pinnedRelics)
   const excludedStackingCategoriesRef = useRef(excludedStackingCategories)
+  const effectLimitsRef = useRef(effectLimits)
+  const familyLimitsRef = useRef(familyLimits)
   groupsRef.current = groups
   excludedEffectsRef.current = excludedEffects
   excludedFamiliesRef.current = excludedFamilies
@@ -1620,6 +1717,8 @@ function LocalBuildEditorContent({ buildId }: { buildId: string }) {
   curseMaxRef.current = curseMax
   pinnedRelicsRef.current = pinnedRelics
   excludedStackingCategoriesRef.current = excludedStackingCategories
+  effectLimitsRef.current = effectLimits
+  familyLimitsRef.current = familyLimits
 
   const updateRef = useRef(update)
   updateRef.current = update
@@ -1638,6 +1737,8 @@ function LocalBuildEditorContent({ buildId }: { buildId: string }) {
       include_deep: includeDeepRef.current,
       curse_max: curseMaxRef.current,
       pinned_relics: pinnedRelicsRef.current,
+      effect_limits: effectLimitsRef.current,
+      family_limits: familyLimitsRef.current,
     })
   })
   flushSaveRef.current = () => {
@@ -1651,6 +1752,8 @@ function LocalBuildEditorContent({ buildId }: { buildId: string }) {
       include_deep: includeDeepRef.current,
       curse_max: curseMaxRef.current,
       pinned_relics: pinnedRelicsRef.current,
+      effect_limits: effectLimitsRef.current,
+      family_limits: familyLimitsRef.current,
     })
   }
 
@@ -1676,6 +1779,8 @@ function LocalBuildEditorContent({ buildId }: { buildId: string }) {
         include_deep: includeDeepRef.current,
         curse_max: curseMaxRef.current,
         pinned_relics: pinnedRelicsRef.current,
+        effect_limits: effectLimitsRef.current,
+        family_limits: familyLimitsRef.current,
       })
     }, 400)
   }, [buildId])
@@ -1733,6 +1838,16 @@ function LocalBuildEditorContent({ buildId }: { buildId: string }) {
       }}
       onExcludedStackingCategoriesChange={(ids) => {
         setExcludedStackingCategories(ids)
+        scheduleAutoSave()
+      }}
+      effectLimits={effectLimits}
+      familyLimits={familyLimits}
+      onEffectLimitsChange={(limits) => {
+        setEffectLimits(limits)
+        scheduleAutoSave()
+      }}
+      onFamilyLimitsChange={(limits) => {
+        setFamilyLimits(limits)
         scheduleAutoSave()
       }}
       onRename={(name) => updateRef.current(buildId, { name })}

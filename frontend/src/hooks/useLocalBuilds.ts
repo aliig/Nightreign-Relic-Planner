@@ -36,6 +36,8 @@ export interface LocalBuild {
   curse_max: number
   pinned_relics?: number[]
   excluded_stacking_categories?: number[]
+  effect_limits?: Record<number, number>
+  family_limits?: Record<string, number>
   created_at: string
   updated_at: string
 }
@@ -216,6 +218,8 @@ export async function migrateLocalBuildsToDb(): Promise<number> {
         (build.required_effects ?? []).length > 0 ||
         (build.excluded_effects ?? []).length > 0 ||
         (build.excluded_stacking_categories ?? []).length > 0 ||
+        Object.keys(build.effect_limits ?? {}).length > 0 ||
+        Object.keys(build.family_limits ?? {}).length > 0 ||
         build.include_deep !== false ||
         build.curse_max !== 1
       if (hasCustomSettings) {
@@ -228,6 +232,8 @@ export async function migrateLocalBuildsToDb(): Promise<number> {
             excluded_effects: build.excluded_effects,
             excluded_families: build.excluded_families,
             excluded_stacking_categories: build.excluded_stacking_categories,
+            effect_limits: build.effect_limits ?? {},
+            family_limits: build.family_limits ?? {},
             include_deep: build.include_deep,
             curse_max: build.curse_max,
           },
