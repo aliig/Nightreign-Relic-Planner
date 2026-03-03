@@ -6,6 +6,7 @@ const STORAGE_KEY = "anon_builds"
 export const MIGRATION_FLAG = "migrate_builds_on_login"
 
 const DEFAULT_GROUPS = [
+  { weight: 100, effects: [] as number[], families: [] as string[] },
   { weight: 50, effects: [] as number[], families: [] as string[] },
   { weight: 25, effects: [] as number[], families: [] as string[] },
   { weight: 10, effects: [] as number[], families: [] as string[] },
