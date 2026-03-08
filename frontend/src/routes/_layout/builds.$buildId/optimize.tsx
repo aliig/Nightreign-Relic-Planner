@@ -1,6 +1,6 @@
 import { useSuspenseQuery } from "@tanstack/react-query"
 import { createFileRoute, Link, useParams } from "@tanstack/react-router"
-import { Suspense, useEffect, useMemo, useState } from "react"
+import { Suspense, useEffect, useMemo, useRef, useState } from "react"
 import type { VesselResult } from "@/client"
 import { BuildsService, GameService, SavesService } from "@/client"
 import {
@@ -76,6 +76,7 @@ function AuthOptimizeForm({ buildId }: { buildId: string }) {
   const [isPending, setIsPending] = useState(false)
   const [progress, setProgress] = useState<OptimizeProgress | null>(null)
   const [hasRun, setHasRun] = useState(() => resultCache.has(key))
+  const autoOptimizeRef = useRef(false)
 
   useEffect(() => {
     const cached = resultCache.get(key)
@@ -103,24 +104,34 @@ function AuthOptimizeForm({ buildId }: { buildId: string }) {
     }
   }
 
+  // Auto-optimize when there's only one character and no cached results
+  useEffect(() => {
+    if (chars.length === 1 && characterId && !resultCache.has(key) && !autoOptimizeRef.current) {
+      autoOptimizeRef.current = true
+      handleOptimize()
+    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap gap-3 items-end">
-        <div className="space-y-1.5">
-          <label className="text-sm font-medium">Character</label>
-          <Select value={characterId} onValueChange={setCharacterId}>
-            <SelectTrigger className="w-56">
-              <SelectValue placeholder="Select character" />
-            </SelectTrigger>
-            <SelectContent>
-              {chars.map((c) => (
-                <SelectItem key={c.id} value={c.id}>
-                  {c.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
+        {chars.length > 1 && (
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium">Character</label>
+            <Select value={characterId} onValueChange={setCharacterId}>
+              <SelectTrigger className="w-56">
+                <SelectValue placeholder="Select character" />
+              </SelectTrigger>
+              <SelectContent>
+                {chars.map((c) => (
+                  <SelectItem key={c.id} value={c.id}>
+                    {c.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
         <Button onClick={handleOptimize} disabled={!characterId || isPending}>
           {isPending ? "Optimizing…" : "Optimize"}
         </Button>
@@ -242,6 +253,7 @@ function AnonOptimizeForm({ buildId }: { buildId: string }) {
   const [isPending, setIsPending] = useState(false)
   const [progress, setProgress] = useState<OptimizeProgress | null>(null)
   const [hasRun, setHasRun] = useState(() => resultCache.has(key))
+  const autoOptimizeRef = useRef(false)
 
   useEffect(() => {
     const cached = resultCache.get(key)
@@ -298,6 +310,14 @@ function AnonOptimizeForm({ buildId }: { buildId: string }) {
       setHasRun(true)
     }
   }
+
+  // Auto-optimize when there's only one character and no cached results
+  useEffect(() => {
+    if (allChars.length === 1 && build && char && !resultCache.has(key) && !autoOptimizeRef.current) {
+      autoOptimizeRef.current = true
+      handleOptimize()
+    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   if (allChars.length === 0) {
     return (

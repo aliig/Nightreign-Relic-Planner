@@ -404,20 +404,26 @@ function AuthInventory() {
 
   return (
     <div className="space-y-4">
-      {/* Character selector */}
-      <div className="flex flex-wrap gap-3">
-        <Select value={selectedId ?? ""} onValueChange={setSelectedId}>
-          <SelectTrigger className="w-48">
-            <SelectValue placeholder="Select character" />
-          </SelectTrigger>
-          <SelectContent>
-            {chars.data.map((c) => (
-              <SelectItem key={c.id} value={c.id}>
-                {c.name} (Slot {c.slot_index})
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+      {/* Character selector — hidden when only one character */}
+      <div className="flex flex-wrap gap-3 items-center">
+        {chars.data.length > 1 ? (
+          <Select value={selectedId ?? ""} onValueChange={setSelectedId}>
+            <SelectTrigger className="w-48">
+              <SelectValue placeholder="Select character" />
+            </SelectTrigger>
+            <SelectContent>
+              {chars.data.map((c) => (
+                <SelectItem key={c.id} value={c.id}>
+                  {c.name} (Slot {c.slot_index})
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            <strong>{chars.data[0]?.name}</strong>
+          </p>
+        )}
       </div>
 
       {selectedId && (
