@@ -547,3 +547,184 @@ class TestGetEffectiveRequirements:
         )
         eff, _ = build.get_effective_requirements()
         assert eff == [1001]  # first group
+
+
+# ---------------------------------------------------------------------------
+# Excluded stacking category tests
+#
+# When a stacking category is excluded, relics with undesired effects from
+# that category are handled in two layers:
+#
+# 1. Pre-filter (has_excluded_effect): hard-excludes relics when NO desired
+#    effect exists in the same category.  When a desired effect exists, relics
+#    are let through for positional scoring (the desired might override them).
+#
+# 2. Post-hoc validation (has_orphaned_excl_category_effects): after all
+#    slots are assigned, drop any result where an undesired effect from the
+#    category was placed but the desired effect was NOT.
+#
+# Together these enforce: "exclude the whole category, except this one effect."
+# ---------------------------------------------------------------------------
+
+# "Dormant Power Helps Discover ..." effects — all share compatibilityId=6630000
+_DORMANT_DAGGERS      = 6630000  # Dormant Power Helps Discover Daggers
+_DORMANT_GREATAXES    = 6631100  # Dormant Power Helps Discover Greataxes
+_DORMANT_GREATSHIELDS = 6632900  # Dormant Power Helps Discover Greatshields
+
+_COMPAT_DORMANT = 6630000  # shared compatibilityId
+
+
+def _dormant_build() -> BuildDefinition:
+    """Build that excludes Dormant Power category but desires Greatshields."""
+    return BuildDefinition(
+        id="test", name="Test", character="Scholar",
+        groups=[WeightGroup(weight=10, effects=[_DORMANT_GREATSHIELDS])],
+        excluded_stacking_categories=[_COMPAT_DORMANT],
+    )
+
+
+class TestExcludedStackingCategories:
+    """Verify the pre-filter layer for excluded stacking categories."""
+
+    # -- Pre-filter: no desired effect in category → hard exclude ------------
+
+    def test_hard_excludes_when_no_desired_effect_in_category(
+        self, scorer: BuildScorer, ds: SourceDataHandler,
+    ) -> None:
+        """When category is excluded and NO desired effect exists in it,
+        relics with effects from that category are hard-excluded."""
+        build = BuildDefinition(
+            id="test", name="Test", character="Scholar",
+            excluded_stacking_categories=[_COMPAT_DORMANT],
+        )
+        relic = _make_relic([_DORMANT_DAGGERS, EMPTY, EMPTY])
+        assert scorer.has_excluded_effect(relic, build) is True
+
+    # -- Pre-filter: desired effect present → let through for scoring --------
+
+    def test_undesired_passes_prefilter_when_desired_exists_in_category(
+        self, scorer: BuildScorer, ds: SourceDataHandler,
+    ) -> None:
+        """When a desired effect exists in the excluded category, a relic with
+        an undesired variant should pass the pre-filter (positional scoring +
+        post-hoc validation handle the rest)."""
+        build = _dormant_build()
+        relic = _make_relic([_DORMANT_DAGGERS, EMPTY, EMPTY])
+        desired = scorer.get_desired_compat_effects(build)
+        # NOT excluded by pre-filter — let through for positional scoring
+        assert scorer.has_excluded_effect(relic, build, desired) is False
+
+    # -- Pre-filter: desired effect itself is protected ----------------------
+
+    def test_desired_effect_not_excluded_from_category(
+        self, scorer: BuildScorer, ds: SourceDataHandler,
+    ) -> None:
+        """The desired effect (Greatshields) must NOT be excluded — it is
+        protected by being in a weight group."""
+        build = _dormant_build()
+        relic = _make_relic([_DORMANT_GREATSHIELDS, EMPTY, EMPTY])
+        assert scorer.has_excluded_effect(relic, build) is False
+
+    # -- Pre-filter: unrelated effects are unaffected ------------------------
+
+    def test_relic_without_excluded_category_not_affected(
+        self, scorer: BuildScorer, ds: SourceDataHandler,
+    ) -> None:
+        """Relics with effects outside the excluded category pass through."""
+        build = _dormant_build()
+        relic = _make_relic([_TAKING_ATTACKS_UP, EMPTY, EMPTY])
+        assert scorer.has_excluded_effect(relic, build) is False
+
+
+class TestOrphanedExclCategoryEffects:
+    """Verify the post-hoc validation layer for excluded stacking categories.
+
+    After all vessel slots are assigned, ``has_orphaned_excl_category_effects``
+    checks that no undesired effect from an excluded category was placed
+    without the desired counterpart also being present.
+    """
+
+    # -- Case 1: desired placed + undesired placed → OK ----------------------
+
+    def test_desired_and_undesired_together_is_ok(
+        self, scorer: BuildScorer, ds: SourceDataHandler,
+    ) -> None:
+        """If the desired effect (Greatshields) IS placed alongside an
+        undesired variant (Greataxes), the result is valid.  The game's
+        stacking rules mean the desired effect overrides the undesired one."""
+        build = _dormant_build()
+        desired = scorer.get_desired_compat_effects(build)
+        placed = {_DORMANT_GREATSHIELDS, _DORMANT_GREATAXES}
+        assert scorer.has_orphaned_excl_category_effects(
+            placed, build, desired) is False
+
+    # -- Case 2: only desired placed → OK ------------------------------------
+
+    def test_only_desired_placed_is_ok(
+        self, scorer: BuildScorer, ds: SourceDataHandler,
+    ) -> None:
+        """If only the desired effect is placed (no undesired), the result
+        is valid."""
+        build = _dormant_build()
+        desired = scorer.get_desired_compat_effects(build)
+        placed = {_DORMANT_GREATSHIELDS}
+        assert scorer.has_orphaned_excl_category_effects(
+            placed, build, desired) is False
+
+    # -- Case 3: undesired placed WITHOUT desired → REJECTED -----------------
+
+    def test_undesired_without_desired_is_orphaned(
+        self, scorer: BuildScorer, ds: SourceDataHandler,
+    ) -> None:
+        """If an undesired variant (Greataxes) is placed but the desired
+        effect (Greatshields) is NOT, the result is orphaned and must be
+        rejected.  This is the core bug scenario: a relic with Greataxes +
+        other good effects scored well, but the user never wanted Greataxes."""
+        build = _dormant_build()
+        desired = scorer.get_desired_compat_effects(build)
+        placed = {_DORMANT_GREATAXES}
+        assert scorer.has_orphaned_excl_category_effects(
+            placed, build, desired) is True
+
+    # -- Case 4: no effects from excluded category → OK ----------------------
+
+    def test_no_excluded_category_effects_is_ok(
+        self, scorer: BuildScorer, ds: SourceDataHandler,
+    ) -> None:
+        """If no effects from the excluded category were placed at all,
+        the result is valid."""
+        build = _dormant_build()
+        desired = scorer.get_desired_compat_effects(build)
+        placed = {_TAKING_ATTACKS_UP}
+        assert scorer.has_orphaned_excl_category_effects(
+            placed, build, desired) is False
+
+    # -- Case 5: no desired_compat_effects at all → always OK ----------------
+
+    def test_no_desired_compat_effects_is_always_ok(
+        self, scorer: BuildScorer, ds: SourceDataHandler,
+    ) -> None:
+        """When there are no desired compat effects (no category has a
+        desired member), the post-hoc check always passes.  The pre-filter
+        handles all exclusions in this case."""
+        build = BuildDefinition(
+            id="test", name="Test", character="Scholar",
+            excluded_stacking_categories=[_COMPAT_DORMANT],
+        )
+        desired = scorer.get_desired_compat_effects(build)
+        assert desired == {}
+        placed = {_DORMANT_DAGGERS}
+        assert scorer.has_orphaned_excl_category_effects(
+            placed, build, desired) is False
+
+    # -- Case 6: multiple undesired without desired → REJECTED ---------------
+
+    def test_multiple_undesired_without_desired_is_orphaned(
+        self, scorer: BuildScorer, ds: SourceDataHandler,
+    ) -> None:
+        """Multiple undesired variants placed without the desired effect."""
+        build = _dormant_build()
+        desired = scorer.get_desired_compat_effects(build)
+        placed = {_DORMANT_DAGGERS, _DORMANT_GREATAXES}
+        assert scorer.has_orphaned_excl_category_effects(
+            placed, build, desired) is True

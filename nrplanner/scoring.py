@@ -121,6 +121,10 @@ class BuildScorer:
         ``desired_compat_effects``), the relic is NOT pre-filtered — positional
         scoring in ``score_relic_in_context`` handles it instead.  Categories
         with no desired effect still trigger hard exclusion.
+
+        Even when let through here, results are post-validated by
+        ``has_orphaned_excl_category_effects`` to ensure no undesired
+        excluded-category effect appears without its desired counterpart.
         """
         excl_ids = set(build.excluded_effects)
         excl_families = build.excluded_families
@@ -153,7 +157,8 @@ class BuildScorer:
                     if not self._is_effect_protected(eff, build):
                         if compat not in _desired:
                             return True
-                        # Desired effect exists → let positional scoring handle it
+                        # Desired effect exists → let positional scoring handle it;
+                        # post-hoc validation catches orphaned results.
         return False
 
     # Keep old name as alias for backwards compatibility during transition
@@ -195,6 +200,46 @@ class BuildScorer:
                 if self._is_effect_protected(eff_id, build):
                     result.setdefault(compat, set()).add(eff_id)
         return result
+
+    def has_orphaned_excl_category_effects(
+        self,
+        placed_effects: set[int],
+        build: BuildDefinition,
+        desired_compat_effects: dict[int, set[int]] | None = None,
+    ) -> bool:
+        """True if placed effects contain an undesired excluded-category effect
+        without the corresponding desired effect also being present.
+
+        Called after all vessel slots are assigned to validate that the result
+        doesn't include "orphaned" excluded-category effects (e.g. Dormant
+        Power Helps Discover Greataxes when only Greatshields was desired).
+        """
+        dce = desired_compat_effects or {}
+        if not dce:
+            return False
+        excl_cats = set(build.excluded_stacking_categories)
+        # For each excluded category with desired effects, check whether
+        # an undesired member is placed without the desired member.
+        for compat, desired_ids in dce.items():
+            if compat not in excl_cats:
+                continue
+            # Expand desired IDs to include text_id aliases
+            desired_expanded: set[int] = set(desired_ids)
+            for d in desired_ids:
+                text_id = self.data_source.get_effect_text_id(d)
+                if text_id != -1:
+                    desired_expanded.add(text_id)
+            # Check if desired effect is among placed effects
+            if placed_effects & desired_expanded:
+                continue  # desired is present — OK
+            # Desired not present — check if any undesired from this compat was placed
+            for eff in placed_effects:
+                if eff in desired_expanded:
+                    continue
+                eff_compat = self.data_source.get_effect_conflict_id(eff)
+                if eff_compat == compat:
+                    return True  # orphaned undesired effect found
+        return False
 
     def _excluded_category_score(
         self, eff_id: int, base_weight: int,

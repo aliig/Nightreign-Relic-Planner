@@ -53,6 +53,15 @@ class VesselOptimizer:
         self.data_source = data_source
         self.scorer = scorer
 
+    @staticmethod
+    def _placed_effect_ids(result: VesselResult) -> set[int]:
+        """Collect all effect IDs from placed relics in a VesselResult."""
+        ids: set[int] = set()
+        for slot in result.assignments:
+            if slot.relic:
+                ids.update(slot.relic.all_effects)
+        return ids
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -160,12 +169,25 @@ class VesselOptimizer:
         # Drop results where no relic was assigned at all
         raw = [r for r in raw if any(relic is not None for relic, _ in r)]
 
-        return [
+        results = [
             self._build_vessel_result(
                 assignment, num_slots, slot_colors, vessel_data, build, desired_cw,
                 desired_compat_effs, effect_limit_by_name, family_limit_map)
             for assignment in raw
         ]
+
+        # Post-hoc filter: drop results where an undesired effect from an
+        # excluded stacking category was placed but the desired effect from
+        # that category was NOT.  This enforces the user intent: "exclude
+        # this category, except for this one specific effect."
+        if desired_compat_effs:
+            results = [
+                r for r in results
+                if not self.scorer.has_orphaned_excl_category_effects(
+                    self._placed_effect_ids(r), build, desired_compat_effs)
+            ]
+
+        return results
 
     def optimize_vessels_streaming(
         self,
