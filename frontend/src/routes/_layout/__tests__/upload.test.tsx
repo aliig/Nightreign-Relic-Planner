@@ -187,13 +187,13 @@ describe("UploadPage — success state with uploadResult", () => {
    * triggering onSuccess directly through the mutate spy.
    */
 
-  it("shows character cards after successful upload", async () => {
+  it("shows profile cards after successful upload", async () => {
     // Override mutate to immediately call onSuccess with fake data
     const fakeResult = {
       platform: "PC",
-      character_count: 2,
+      profile_count: 2,
       persisted: false,
-      characters: [
+      profiles: [
         { slot_index: 0, name: "Wylder", relic_count: 5, relics: [] },
         { slot_index: 1, name: "Duchess", relic_count: 3, relics: [] },
       ],

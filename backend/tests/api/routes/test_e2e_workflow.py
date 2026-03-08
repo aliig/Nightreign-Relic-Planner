@@ -92,18 +92,18 @@ class TestE2EWorkflow:
         assert data["platform"] == "PC"
         assert data["persisted"] is True
         assert data["save_upload_id"] is not None
-        assert data["character_count"] >= 1
-        assert len(data["characters"]) >= 1
+        assert data["profile_count"] >= 1
+        assert len(data["profiles"]) >= 1
 
-        # Pick the first character with relics
-        char = data["characters"][0]
-        assert char["id"] is not None, "Authenticated upload must assign character IDs"
-        assert isinstance(char["relics"], list)
-        assert char["relic_count"] == len(char["relics"])
+        # Pick the first profile with relics
+        prof = data["profiles"][0]
+        assert prof["id"] is not None, "Authenticated upload must assign profile IDs"
+        assert isinstance(prof["relics"], list)
+        assert prof["relic_count"] == len(prof["relics"])
 
         # Validate relic structure
         valid_colors = {"Red", "Blue", "Yellow", "Green", "White"}
-        for relic in char["relics"]:
+        for relic in prof["relics"]:
             assert relic["color"] in valid_colors
             assert isinstance(relic["effect_1"], int)
             assert isinstance(relic["effect_2"], int)
@@ -117,9 +117,9 @@ class TestE2EWorkflow:
 
         # Stash for downstream tests
         state = self.__class__._state
-        state["character_id"] = char["id"]
-        state["character_name"] = char["name"]
-        state["upload_relics"] = char["relics"]
+        state["profile_id"] = prof["id"]
+        state["profile_name"] = prof["name"]
+        state["upload_relics"] = prof["relics"]
         state["upload_data"] = data
 
     # ---------------------------------------------------------------
@@ -246,14 +246,14 @@ class TestE2EWorkflow:
     def test_05a_optimize_db_mode(
         self, client: TestClient, superuser_token_headers: dict[str, str]
     ) -> None:
-        """POST /optimize/ with build_id + character_id (DB mode)."""
+        """POST /optimize/ with build_id + profile_id (DB mode)."""
         state = self.__class__._state
 
         response = client.post(
             "/api/v1/optimize/",
             json={
                 "build_id": state["build_id"],
-                "character_id": state["character_id"],
+                "profile_id": state["profile_id"],
                 "top_n": 5,
                 "max_per_vessel": 2,
             },
@@ -384,13 +384,13 @@ class TestE2EWorkflow:
     def test_07_get_relics_matches_upload(
         self, client: TestClient, superuser_token_headers: dict[str, str]
     ) -> None:
-        """GET /saves/characters/{id}/relics returns the same relics as upload."""
+        """GET /saves/profiles/{id}/relics returns the same relics as upload."""
         state = self.__class__._state
-        character_id = state["character_id"]
+        profile_id = state["profile_id"]
         upload_relics = state["upload_relics"]
 
         response = client.get(
-            f"/api/v1/saves/characters/{character_id}/relics",
+            f"/api/v1/saves/profiles/{profile_id}/relics",
             headers=superuser_token_headers,
         )
 

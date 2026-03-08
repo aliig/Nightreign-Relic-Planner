@@ -163,7 +163,7 @@ class TestDbMode:
             "/api/v1/optimize/",
             json={
                 "build_id": str(uuid.uuid4()),
-                "character_id": str(uuid.uuid4()),
+                "profile_id": str(uuid.uuid4()),
             },
         )
         assert response.status_code == 401

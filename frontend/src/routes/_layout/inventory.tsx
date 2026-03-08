@@ -269,7 +269,7 @@ function InventoryFilters({
 // --- Authenticated inventory table ---
 
 function InventoryTable({
-  characterId,
+  profileId,
   search,
   colorFilter,
   tierFilter,
@@ -277,7 +277,7 @@ function InventoryTable({
   effectFilter,
   effectMap,
 }: {
-  characterId: string
+  profileId: string
   search: string
   colorFilter: string
   tierFilter: string
@@ -286,8 +286,8 @@ function InventoryTable({
   effectMap: Map<number, string>
 }) {
   const { data } = useSuspenseQuery({
-    queryKey: ["relics", characterId],
-    queryFn: () => SavesService.getCharacterRelics({ characterId }),
+    queryKey: ["relics", profileId],
+    queryFn: () => SavesService.getProfileRelics({ profileId }),
     staleTime: 5 * 60 * 1000,
   })
 
@@ -365,9 +365,9 @@ function InventoryTable({
 }
 
 function AuthInventory() {
-  const { data: chars } = useSuspenseQuery({
-    queryKey: ["characters"],
-    queryFn: () => SavesService.listCharacters(),
+  const { data: profiles } = useSuspenseQuery({
+    queryKey: ["profiles"],
+    queryFn: () => SavesService.listProfiles(),
     staleTime: 5 * 60 * 1000,
   })
   const { data: effectsData } = useSuspenseQuery({
@@ -382,7 +382,7 @@ function AuthInventory() {
   )
 
   const [selectedId, setSelectedId] = useState<string | null>(
-    chars.data?.[0]?.id ?? null,
+    profiles.data?.[0]?.id ?? null,
   )
   const [search, setSearch] = useState("")
   const [colorFilter, setColorFilter] = useState("all")
@@ -390,10 +390,10 @@ function AuthInventory() {
   const [deepFilter, setDeepFilter] = useState("all")
   const [effectFilter, setEffectFilter] = useState<number[]>([])
 
-  if (!chars.data?.length) {
+  if (!profiles.data?.length) {
     return (
       <p className="text-muted-foreground py-8 text-center">
-        No characters found.{" "}
+        No profiles found.{" "}
         <a href="/upload" className="underline">
           Upload a save file
         </a>{" "}
@@ -404,15 +404,15 @@ function AuthInventory() {
 
   return (
     <div className="space-y-4">
-      {/* Character selector — hidden when only one character */}
+      {/* Profile selector — hidden when only one profile */}
       <div className="flex flex-wrap gap-3 items-center">
-        {chars.data.length > 1 ? (
+        {profiles.data.length > 1 ? (
           <Select value={selectedId ?? ""} onValueChange={setSelectedId}>
             <SelectTrigger className="w-48">
-              <SelectValue placeholder="Select character" />
+              <SelectValue placeholder="Select profile" />
             </SelectTrigger>
             <SelectContent>
-              {chars.data.map((c) => (
+              {profiles.data.map((c) => (
                 <SelectItem key={c.id} value={c.id}>
                   {c.name} (Slot {c.slot_index})
                 </SelectItem>
@@ -421,7 +421,7 @@ function AuthInventory() {
           </Select>
         ) : (
           <p className="text-sm text-muted-foreground">
-            <strong>{chars.data[0]?.name}</strong>
+            <strong>{profiles.data[0]?.name}</strong>
           </p>
         )}
       </div>
@@ -444,7 +444,7 @@ function AuthInventory() {
 
           <Suspense fallback={<Skeleton className="h-48 w-full" />}>
             <InventoryTable
-              characterId={selectedId}
+              profileId={selectedId}
               search={search}
               colorFilter={colorFilter}
               tierFilter={tierFilter}
@@ -473,19 +473,19 @@ function AnonInventory() {
     [effectsData],
   )
 
-  const allChars: Array<Record<string, unknown>> = JSON.parse(
-    sessionStorage.getItem("parsedCharacters") ?? "[]",
+  const allProfiles: Array<Record<string, unknown>> = JSON.parse(
+    sessionStorage.getItem("parsedProfiles") ?? "[]",
   )
 
-  const defaultChar = (() => {
+  const defaultProfile = (() => {
     try {
-      return JSON.parse(sessionStorage.getItem("selectedCharacter") ?? "null")
+      return JSON.parse(sessionStorage.getItem("selectedProfile") ?? "null")
     } catch {
       return null
     }
   })()
 
-  const defaultSlot = defaultChar?.slot_index ?? allChars[0]?.slot_index ?? null
+  const defaultSlot = defaultProfile?.slot_index ?? allProfiles[0]?.slot_index ?? null
   const [selectedSlot, setSelectedSlot] = useState<number | null>(defaultSlot)
 
   const [search, setSearch] = useState("")
@@ -494,10 +494,10 @@ function AnonInventory() {
   const [deepFilter, setDeepFilter] = useState("all")
   const [effectFilter, setEffectFilter] = useState<number[]>([])
 
-  const char =
-    allChars.find((c) => c.slot_index === selectedSlot) ?? allChars[0]
+  const profile =
+    allProfiles.find((c) => c.slot_index === selectedSlot) ?? allProfiles[0]
   const allRelics: Array<Record<string, unknown>> =
-    (char?.relics as Array<Record<string, unknown>>) ?? []
+    (profile?.relics as Array<Record<string, unknown>>) ?? []
 
   const relics = useMemo(() => {
     return applyFilters(
@@ -519,7 +519,7 @@ function AnonInventory() {
     effectMap,
   ])
 
-  if (allChars.length === 0) {
+  if (allProfiles.length === 0) {
     return (
       <p className="text-muted-foreground py-8 text-center">
         No inventory loaded.{" "}
@@ -531,41 +531,41 @@ function AnonInventory() {
     )
   }
 
-  const handleCharChange = (slotStr: string) => {
+  const handleProfileChange = (slotStr: string) => {
     const slot = Number(slotStr)
     setSelectedSlot(slot)
-    const picked = allChars.find((c) => c.slot_index === slot)
+    const picked = allProfiles.find((c) => c.slot_index === slot)
     if (picked)
-      sessionStorage.setItem("selectedCharacter", JSON.stringify(picked))
+      sessionStorage.setItem("selectedProfile", JSON.stringify(picked))
   }
 
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap gap-3 items-center mb-4">
-        {allChars.length > 1 && (
+        {allProfiles.length > 1 && (
           <Select
-            value={String(char?.slot_index ?? "")}
-            onValueChange={handleCharChange}
+            value={String(profile?.slot_index ?? "")}
+            onValueChange={handleProfileChange}
           >
             <SelectTrigger className="w-48">
-              <SelectValue placeholder="Select character" />
+              <SelectValue placeholder="Select profile" />
             </SelectTrigger>
             <SelectContent>
-              {allChars.map((c) => (
+              {allProfiles.map((p) => (
                 <SelectItem
-                  key={c.slot_index as number}
-                  value={String(c.slot_index)}
+                  key={p.slot_index as number}
+                  value={String(p.slot_index)}
                 >
-                  {c.name as string} (Slot {c.slot_index as number})
+                  {p.name as string} (Slot {p.slot_index as number})
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
         )}
         <p className="text-sm text-muted-foreground">
-          {allChars.length === 1 && (
+          {allProfiles.length === 1 && (
             <>
-              <strong>{char?.name as string}</strong> ·{" "}
+              <strong>{profile?.name as string}</strong> ·{" "}
             </>
           )}
           Session only —{" "}

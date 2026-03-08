@@ -39,10 +39,10 @@ function SaveStatusBanner() {
         <div className="flex flex-wrap items-center gap-2 mt-1">
           <Badge variant="secondary">{status.platform}</Badge>
           <span>
-            {status.character_count} character
-            {status.character_count !== 1 ? "s" : ""}
-            {status.character_names.length > 0 &&
-              `: ${status.character_names.join(", ")}`}
+            {status.profile_count} profile
+            {status.profile_count !== 1 ? "s" : ""}
+            {status.profile_names.length > 0 &&
+              `: ${status.profile_names.join(", ")}`}
           </span>
         </div>
         {!isAnon && status.uploaded_at && (
@@ -79,30 +79,30 @@ function UploadPage() {
     mutationFn: (file: File) => SavesService.uploadSave({ formData: { file } }),
     onSuccess: (data) => {
       setUploadResult(data)
-      queryClient.invalidateQueries({ queryKey: ["characters"] })
+      queryClient.invalidateQueries({ queryKey: ["profiles"] })
       queryClient.invalidateQueries({ queryKey: ["save-status"] })
       if (!data.persisted) {
         storeAnonUploadMeta({
-          character_count: data.character_count,
-          character_names: data.characters.map((c) => c.name),
+          profile_count: data.profile_count,
+          profile_names: data.profiles.map((p) => p.name),
           platform: data.platform,
           uploaded_at: new Date().toISOString(),
         })
         sessionStorage.setItem(
-          "parsedCharacters",
-          JSON.stringify(data.characters),
+          "parsedProfiles",
+          JSON.stringify(data.profiles),
         )
-        // Default to first character so inventory/optimize have a selection immediately
-        if (data.characters.length > 0) {
+        // Default to first profile so inventory/optimize have a selection immediately
+        if (data.profiles.length > 0) {
           sessionStorage.setItem(
-            "selectedCharacter",
-            JSON.stringify(data.characters[0]),
+            "selectedProfile",
+            JSON.stringify(data.profiles[0]),
           )
         }
       }
       if (data.persisted) {
         showSuccessToast(
-          `Save imported — ${data.character_count} character${data.character_count !== 1 ? "s" : ""} found.`,
+          `Save imported — ${data.profile_count} profile${data.profile_count !== 1 ? "s" : ""} found.`,
         )
       }
     },
@@ -193,22 +193,22 @@ function UploadPage() {
         </Alert>
       )}
 
-      {/* Character list */}
+      {/* Profile list */}
       {uploadResult && (
         <div className="space-y-3">
           <h2 className="text-lg font-medium">
-            Found {uploadResult.character_count} character
-            {uploadResult.character_count !== 1 ? "s" : ""}
+            Found {uploadResult.profile_count} profile
+            {uploadResult.profile_count !== 1 ? "s" : ""}
           </h2>
           <div className="grid gap-3 sm:grid-cols-2">
-            {uploadResult.characters.map((char) => (
+            {uploadResult.profiles.map((prof) => (
               <Card
-                key={char.slot_index}
+                key={prof.slot_index}
                 className="cursor-pointer hover:border-primary/50 transition-colors"
                 onClick={() => {
                   sessionStorage.setItem(
-                    "selectedCharacter",
-                    JSON.stringify(char),
+                    "selectedProfile",
+                    JSON.stringify(prof),
                   )
                   navigate({ to: "/inventory" })
                 }}
@@ -216,13 +216,13 @@ function UploadPage() {
                 <CardHeader className="pb-2">
                   <div className="flex items-center gap-2">
                     <User2 className="h-4 w-4 text-muted-foreground" />
-                    <CardTitle className="text-base">{char.name}</CardTitle>
+                    <CardTitle className="text-base">{prof.name}</CardTitle>
                   </div>
                 </CardHeader>
                 <CardContent>
                   <CardDescription>
-                    Slot {char.slot_index} · {char.relic_count} relic
-                    {char.relic_count !== 1 ? "s" : ""}
+                    Slot {prof.slot_index} · {prof.relic_count} relic
+                    {prof.relic_count !== 1 ? "s" : ""}
                   </CardDescription>
                 </CardContent>
               </Card>

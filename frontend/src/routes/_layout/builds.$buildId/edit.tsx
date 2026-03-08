@@ -342,17 +342,17 @@ function DraggableBrowserRow({
 // ---------------------------------------------------------------------------
 
 function PinnedRelicPickerContent({
-  characterId,
+  profileId,
   onSelect,
   effects,
 }: {
-  characterId: string
+  profileId: string
   onSelect: (relic: RelicForPicker) => void
   effects: EffectMeta[]
 }) {
   const { data } = useSuspenseQuery({
-    queryKey: ["relics", characterId],
-    queryFn: () => SavesService.getCharacterRelics({ characterId }),
+    queryKey: ["relics", profileId],
+    queryFn: () => SavesService.getProfileRelics({ profileId }),
     staleTime: 5 * 60 * 1000,
   })
   const [search, setSearch] = useState("")
@@ -449,15 +449,15 @@ function AuthPinnedRelicDialog({
   effects: EffectMeta[]
 }) {
   const [open, setOpen] = useState(false)
-  const [charId, setCharId] = useState<string | null>(null)
+  const [selectedId, setSelectedId] = useState<string | null>(null)
 
-  const { data: charsData } = useQuery({
-    queryKey: ["characters"],
-    queryFn: () => SavesService.listCharacters(),
+  const { data: profilesData } = useQuery({
+    queryKey: ["profiles"],
+    queryFn: () => SavesService.listProfiles(),
     staleTime: 5 * 60 * 1000,
   })
-  const chars = charsData?.data ?? []
-  const selectedCharId = charId ?? chars[0]?.id ?? null
+  const profiles = profilesData?.data ?? []
+  const selectedProfileId = selectedId ?? profiles[0]?.id ?? null
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -470,24 +470,24 @@ function AuthPinnedRelicDialog({
         <DialogHeader>
           <DialogTitle>Pin a Relic</DialogTitle>
         </DialogHeader>
-        {chars.length > 1 && (
-          <Select value={selectedCharId ?? ""} onValueChange={setCharId}>
+        {profiles.length > 1 && (
+          <Select value={selectedProfileId ?? ""} onValueChange={setSelectedId}>
             <SelectTrigger className="w-full">
-              <SelectValue placeholder="Select character" />
+              <SelectValue placeholder="Select profile" />
             </SelectTrigger>
             <SelectContent>
-              {chars.map((c) => (
-                <SelectItem key={c.id} value={c.id}>
-                  {c.name} (Slot {c.slot_index})
+              {profiles.map((p) => (
+                <SelectItem key={p.id} value={p.id}>
+                  {p.name} (Slot {p.slot_index})
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
         )}
-        {selectedCharId ? (
+        {selectedProfileId ? (
           <Suspense fallback={<Skeleton className="h-40 w-full" />}>
             <PinnedRelicPickerContent
-              characterId={selectedCharId}
+              profileId={selectedProfileId}
               effects={effects}
               onSelect={(relic) => {
                 if (!pinnedHandles.includes(relic.ga_handle)) {
@@ -499,7 +499,7 @@ function AuthPinnedRelicDialog({
           </Suspense>
         ) : (
           <p className="text-sm text-muted-foreground py-4 text-center">
-            No characters found. Upload a save file first.
+            No profiles found. Upload a save file first.
           </p>
         )}
       </DialogContent>
@@ -521,9 +521,9 @@ function AnonPinnedRelicDialog({
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState("")
 
-  const raw = sessionStorage.getItem("selectedCharacter")
-  const char = raw ? JSON.parse(raw) : null
-  const relics: ParsedRelicData[] = (char?.relics ?? []).filter(
+  const raw = sessionStorage.getItem("selectedProfile")
+  const profile = raw ? JSON.parse(raw) : null
+  const relics: ParsedRelicData[] = (profile?.relics ?? []).filter(
     (r: ParsedRelicData) =>
       !search || r.name.toLowerCase().includes(search.toLowerCase()),
   )
@@ -1468,20 +1468,20 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
     const pinnedSet = new Set(pinned)
 
     async function populateMeta() {
-      const charsResponse = await queryClient.fetchQuery({
-        queryKey: ["characters"],
-        queryFn: () => SavesService.listCharacters(),
+      const profilesResponse = await queryClient.fetchQuery({
+        queryKey: ["profiles"],
+        queryFn: () => SavesService.listProfiles(),
         staleTime: 5 * 60 * 1000,
       })
-      const chars = charsResponse?.data ?? []
+      const profiles = profilesResponse?.data ?? []
       const meta = new Map<number, RelicForPicker>()
 
-      for (const char of chars) {
+      for (const prof of profiles) {
         if (pinnedSet.size === 0) break
         const relicsResponse = await queryClient.fetchQuery({
-          queryKey: ["relics", char.id],
+          queryKey: ["relics", prof.id],
           queryFn: () =>
-            SavesService.getCharacterRelics({ characterId: char.id }),
+            SavesService.getProfileRelics({ profileId: prof.id }),
           staleTime: 5 * 60 * 1000,
         })
         for (const r of relicsResponse?.data ?? []) {
@@ -1672,11 +1672,11 @@ function LocalBuildEditorContent({ buildId }: { buildId: string }) {
   const [pinnedRelicMeta, setPinnedRelicMeta] = useState<
     Map<number, RelicForPicker>
   >(() => {
-    const raw = sessionStorage.getItem("selectedCharacter")
-    const char = raw ? JSON.parse(raw) : null
+    const raw = sessionStorage.getItem("selectedProfile")
+    const prof = raw ? JSON.parse(raw) : null
     const handles = new Set(build?.pinned_relics ?? [])
     const map = new Map<number, RelicForPicker>()
-    for (const r of (char?.relics ?? []) as RelicForPicker[]) {
+    for (const r of (prof?.relics ?? []) as RelicForPicker[]) {
       if (handles.has(r.ga_handle)) {
         map.set(r.ga_handle, {
           ga_handle: r.ga_handle,

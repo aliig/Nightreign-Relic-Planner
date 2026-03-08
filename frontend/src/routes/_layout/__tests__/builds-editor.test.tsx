@@ -99,8 +99,8 @@ vi.mock("@/client", () => ({
     updateBuild: vi.fn(),
   },
   SavesService: {
-    listCharacters: vi.fn(),
-    getCharacterRelics: vi.fn(),
+    listProfiles: vi.fn(),
+    getProfileRelics: vi.fn(),
   },
 }))
 

@@ -45,7 +45,7 @@ export interface ParsedRelicData {
   tier: string
 }
 
-export interface ParsedCharacterData {
+export interface ParsedProfileData {
   slot_index: number
   name: string
   relic_count: number
@@ -55,8 +55,8 @@ export interface ParsedCharacterData {
 
 export interface UploadResponse {
   platform: string
-  character_count: number
-  characters: ParsedCharacterData[]
+  profile_count: number
+  profiles: ParsedProfileData[]
   save_upload_id?: string | null
   persisted: boolean
 }
@@ -65,25 +65,25 @@ export interface SaveStatusPublic {
   id: string
   platform: string
   uploaded_at: string | null
-  character_count: number
-  character_names: string[]
+  profile_count: number
+  profile_names: string[]
 }
 
-export interface CharacterPublic {
+export interface ProfilePublic {
   id: string
   save_upload_id: string
   slot_index: number
   name: string
 }
 
-export interface CharactersPublic {
-  data: CharacterPublic[]
+export interface ProfilesPublic {
+  data: ProfilePublic[]
   count: number
 }
 
 export interface RelicPublic {
   id: string
-  character_id: string
+  profile_id: string
   ga_handle: number
   item_id: number
   real_id: number
@@ -185,7 +185,7 @@ export interface VesselResult {
 export interface OptimizeRequest {
   // DB mode
   build_id?: string | null
-  character_id?: string | null
+  profile_id?: string | null
   // Inline mode
   build?: Record<string, unknown> | null
   relics?: RelicPublic[] | null
@@ -272,18 +272,18 @@ export class SavesService {
     });
   }
 
-  public static listCharacters(): CancelablePromise<CharactersPublic> {
+  public static listProfiles(): CancelablePromise<ProfilesPublic> {
     return __request(OpenAPI, {
       method: 'GET',
-      url: '/api/v1/saves/characters',
+      url: '/api/v1/saves/profiles',
     });
   }
 
-  public static getCharacterRelics(data: { characterId: string }): CancelablePromise<RelicsPublic> {
+  public static getProfileRelics(data: { profileId: string }): CancelablePromise<RelicsPublic> {
     return __request(OpenAPI, {
       method: 'GET',
-      url: '/api/v1/saves/characters/{character_id}/relics',
-      path: { character_id: data.characterId },
+      url: '/api/v1/saves/profiles/{profile_id}/relics',
+      path: { profile_id: data.profileId },
       errors: { 403: 'Forbidden', 404: 'Not Found' },
     });
   }

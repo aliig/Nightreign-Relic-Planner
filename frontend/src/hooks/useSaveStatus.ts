@@ -5,8 +5,8 @@ import { isLoggedIn } from "@/hooks/useAuth"
 const ANON_UPLOAD_KEY = "anon_upload_meta"
 
 export interface AnonSaveStatus {
-  character_count: number
-  character_names: string[]
+  profile_count: number
+  profile_names: string[]
   platform: string
   uploaded_at: string
 }

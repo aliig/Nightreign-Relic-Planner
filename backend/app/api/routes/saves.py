@@ -1,4 +1,4 @@
-"""Save file upload, character discovery, and relic inventory endpoints."""
+"""Save file upload, profile discovery, and relic inventory endpoints."""
 import tempfile
 import uuid
 from collections import defaultdict
@@ -13,10 +13,10 @@ from app.core.config import settings
 from app.core.game_data import get_items_json
 from app.models import (
     Build,
-    CharacterPublic,
-    CharactersPublic,
-    CharacterSlot,
-    ParsedCharacterData,
+    ProfilePublic,
+    ProfilesPublic,
+    Profile,
+    ParsedProfileData,
     ParsedRelicData,
     Relic,
     RelicPublic,
@@ -38,7 +38,7 @@ router = APIRouter(prefix="/saves", tags=["saves"])
 
 def _compute_handle_remap(
     old_relics: list[Relic],
-    new_characters: list[ParsedCharacterData],
+    new_profiles: list[ParsedProfileData],
 ) -> dict[int, int]:
     """Return a mapping {old_ga_handle: new_ga_handle} based on relic content.
 
@@ -59,8 +59,8 @@ def _compute_handle_remap(
                    r.curse_1, r.curse_2, r.curse_3)].append(r.ga_handle)
 
     new_fp: dict[_Fp, list[int]] = defaultdict(list)
-    for char in new_characters:
-        for r in char.relics:
+    for prof in new_profiles:
+        for r in prof.relics:
             new_fp[_fp(r.real_id, r.effect_1, r.effect_2, r.effect_3,
                        r.curse_1, r.curse_2, r.curse_3)].append(r.ga_handle)
 
@@ -87,13 +87,13 @@ def _detect_platform(filename: str) -> str:
     )
 
 
-def _parse_save_to_characters(
+def _parse_save_to_profiles(
     file_bytes: bytes,
     filename: str,
     ds: Any,
     items_json: dict,
-) -> tuple[str, list[ParsedCharacterData]]:
-    """Decrypt/split save, parse all character slots, return (platform, characters)."""
+) -> tuple[str, list[ParsedProfileData]]:
+    """Decrypt/split save, parse all character slots, return (platform, profiles)."""
     platform = _detect_platform(filename)
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -129,7 +129,7 @@ def _parse_save_to_characters(
                 detail="No characters found in save file.",
             )
 
-        characters: list[ParsedCharacterData] = []
+        profiles: list[ParsedProfileData] = []
         for char_name, userdata_path in char_paths:
             if not char_name:
                 continue
@@ -159,8 +159,8 @@ def _parse_save_to_characters(
             # Extract slot index from filename (USERDATA_00 → 0)
             slot_index = int(userdata_path.stem.rsplit("_", 1)[-1])
 
-            characters.append(
-                ParsedCharacterData(
+            profiles.append(
+                ParsedProfileData(
                     slot_index=slot_index,
                     name=char_name,
                     relic_count=len(relics_data),
@@ -168,7 +168,7 @@ def _parse_save_to_characters(
                 )
             )
 
-    return platform, characters
+    return platform, profiles
 
 
 @router.post("/upload", response_model=UploadResponse)
@@ -180,7 +180,7 @@ async def upload_save(
 ) -> UploadResponse:
     """Upload a .sl2 (PC) or memory.dat (PS4) save file.
 
-    - **Anonymous users**: returns parsed characters + relics (nothing persisted).
+    - **Anonymous users**: returns parsed profiles + relics (nothing persisted).
     - **Authenticated users**: persists to DB, replacing any previous upload.
     """
     if file.filename is None or Path(file.filename).suffix.lower() not in _ALLOWED_EXTENSIONS:
@@ -197,7 +197,7 @@ async def upload_save(
             detail=f"File too large (max {settings.MAX_UPLOAD_SIZE_MB} MB).",
         )
     items_json = get_items_json()
-    platform, characters = _parse_save_to_characters(
+    platform, profiles = _parse_save_to_profiles(
         file_bytes, file.filename, ds, items_json
     )
 
@@ -205,8 +205,8 @@ async def upload_save(
         # Anonymous — return data only, nothing persisted
         return UploadResponse(
             platform=platform,
-            character_count=len(characters),
-            characters=characters,
+            profile_count=len(profiles),
+            profiles=profiles,
             persisted=False,
         )
 
@@ -218,7 +218,7 @@ async def upload_save(
     old_relics = session.exec(
         select(Relic).where(Relic.owner_id == current_user.id)
     ).all()
-    handle_remap = _compute_handle_remap(list(old_relics), characters)
+    handle_remap = _compute_handle_remap(list(old_relics), profiles)
     if old_relics:
         db_builds = session.exec(
             select(Build).where(Build.owner_id == current_user.id)
@@ -243,25 +243,25 @@ async def upload_save(
     save_upload = SaveUpload(
         owner_id=current_user.id,
         platform=platform,
-        character_count=len(characters),
+        profile_count=len(profiles),
     )
     session.add(save_upload)
     session.flush()  # get the ID before creating children
 
-    for char_data in characters:
-        char_slot = CharacterSlot(
+    for prof_data in profiles:
+        profile = Profile(
             owner_id=current_user.id,
             save_upload_id=save_upload.id,
-            slot_index=char_data.slot_index,
-            name=char_data.name,
+            slot_index=prof_data.slot_index,
+            name=prof_data.name,
         )
-        session.add(char_slot)
+        session.add(profile)
         session.flush()
 
-        for r in char_data.relics:
+        for r in prof_data.relics:
             session.add(Relic(
                 owner_id=current_user.id,
-                character_id=char_slot.id,
+                profile_id=profile.id,
                 ga_handle=r.ga_handle,
                 item_id=r.item_id,
                 real_id=r.real_id,
@@ -278,14 +278,14 @@ async def upload_save(
             ))
 
         # Attach DB id to response data
-        char_data.id = char_slot.id
+        prof_data.id = profile.id
 
     session.commit()
 
     return UploadResponse(
         platform=platform,
-        character_count=len(characters),
-        characters=characters,
+        profile_count=len(profiles),
+        profiles=profiles,
         save_upload_id=save_upload.id,
         persisted=True,
     )
@@ -304,52 +304,52 @@ def get_save_status(
     if not upload:
         return None
 
-    characters = session.exec(
-        select(CharacterSlot)
-        .where(CharacterSlot.save_upload_id == upload.id)
-        .order_by(col(CharacterSlot.slot_index))
+    profiles = session.exec(
+        select(Profile)
+        .where(Profile.save_upload_id == upload.id)
+        .order_by(col(Profile.slot_index))
     ).all()
 
     return SaveStatusPublic(
         id=upload.id,
         platform=upload.platform,
         uploaded_at=upload.uploaded_at,
-        character_count=upload.character_count,
-        character_names=[c.name for c in characters],
+        profile_count=upload.profile_count,
+        profile_names=[p.name for p in profiles],
     )
 
 
-@router.get("/characters", response_model=CharactersPublic)
-def list_characters(session: SessionDep, current_user: CurrentUser) -> CharactersPublic:
-    """List all saved character slots for the current user."""
+@router.get("/profiles", response_model=ProfilesPublic)
+def list_profiles(session: SessionDep, current_user: CurrentUser) -> ProfilesPublic:
+    """List all saved profiles for the current user."""
     statement = (
-        select(CharacterSlot)
-        .where(CharacterSlot.owner_id == current_user.id)
-        .order_by(col(CharacterSlot.slot_index))
+        select(Profile)
+        .where(Profile.owner_id == current_user.id)
+        .order_by(col(Profile.slot_index))
     )
-    chars = session.exec(statement).all()
-    return CharactersPublic(
-        data=[CharacterPublic.model_validate(c) for c in chars],
-        count=len(chars),
+    profiles = session.exec(statement).all()
+    return ProfilesPublic(
+        data=[ProfilePublic.model_validate(p) for p in profiles],
+        count=len(profiles),
     )
 
 
-@router.get("/characters/{character_id}/relics", response_model=RelicsPublic)
-def get_character_relics(
-    character_id: uuid.UUID,
+@router.get("/profiles/{profile_id}/relics", response_model=RelicsPublic)
+def get_profile_relics(
+    profile_id: uuid.UUID,
     session: SessionDep,
     current_user: CurrentUser,
 ) -> RelicsPublic:
-    """Get all relics for a saved character slot."""
-    char_slot = session.get(CharacterSlot, character_id)
-    if not char_slot:
-        raise HTTPException(status_code=404, detail="Character not found")
-    if char_slot.owner_id != current_user.id:
+    """Get all relics for a saved profile."""
+    profile = session.get(Profile, profile_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if profile.owner_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not enough permissions")
 
     statement = (
         select(Relic)
-        .where(Relic.character_id == character_id)
+        .where(Relic.profile_id == profile_id)
         .order_by(col(Relic.name))
     )
     relics = session.exec(statement).all()

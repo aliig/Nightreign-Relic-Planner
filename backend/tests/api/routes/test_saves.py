@@ -91,12 +91,12 @@ class TestUploadEndpoint:
         assert response.status_code == 200
         data = response.json()
         assert data["platform"] == "PC"
-        assert data["character_count"] >= 1
+        assert data["profile_count"] >= 1
         assert data["persisted"] is False
         assert data["save_upload_id"] is None
-        # Characters list must have the mocked character
-        assert len(data["characters"]) >= 1
-        assert data["characters"][0]["name"] == "Wylder"
+        # Profiles list must have the mocked profile
+        assert len(data["profiles"]) >= 1
+        assert data["profiles"][0]["name"] == "Wylder"
 
     def test_authenticated_upload_persists(
         self, client: TestClient, superuser_token_headers: dict[str, str]
@@ -145,9 +145,9 @@ class TestUploadEndpoint:
 
 
 @pytest.mark.usefixtures("override_game_data")
-class TestListCharacters:
+class TestListProfiles:
     def test_requires_auth(self, client: TestClient) -> None:
-        response = client.get("/api/v1/saves/characters")
+        response = client.get("/api/v1/saves/profiles")
         assert response.status_code in (401, 403)
 
     def test_authenticated_returns_list(
@@ -156,7 +156,7 @@ class TestListCharacters:
         # Upload first so there is something to list
         _upload_sl2(client, headers=superuser_token_headers)
         response = client.get(
-            "/api/v1/saves/characters", headers=superuser_token_headers
+            "/api/v1/saves/profiles", headers=superuser_token_headers
         )
         assert response.status_code == 200
         body = response.json()
@@ -165,13 +165,13 @@ class TestListCharacters:
 
 
 @pytest.mark.usefixtures("override_game_data")
-class TestGetCharacterRelics:
+class TestGetProfileRelics:
     def test_not_found_returns_404(
         self, client: TestClient, superuser_token_headers: dict[str, str]
     ) -> None:
         random_id = uuid.uuid4()
         response = client.get(
-            f"/api/v1/saves/characters/{random_id}/relics",
+            f"/api/v1/saves/profiles/{random_id}/relics",
             headers=superuser_token_headers,
         )
         assert response.status_code == 404
@@ -182,16 +182,16 @@ class TestGetCharacterRelics:
         superuser_token_headers: dict[str, str],
         normal_user_token_headers: dict[str, str],
     ) -> None:
-        # Upload as superuser to create a character slot
+        # Upload as superuser to create a profile
         upload_resp = _upload_sl2(client, headers=superuser_token_headers)
         assert upload_resp.status_code == 200
-        char_id = upload_resp.json()["characters"][0].get("id")
-        if char_id is None:
-            pytest.skip("Character was not persisted (anonymous mode)")
+        profile_id = upload_resp.json()["profiles"][0].get("id")
+        if profile_id is None:
+            pytest.skip("Profile was not persisted (anonymous mode)")
 
-        # Normal user tries to access superuser's character
+        # Normal user tries to access superuser's profile
         response = client.get(
-            f"/api/v1/saves/characters/{char_id}/relics",
+            f"/api/v1/saves/profiles/{profile_id}/relics",
             headers=normal_user_token_headers,
         )
         assert response.status_code == 403

@@ -88,10 +88,10 @@ class SaveUpload(SQLModel, table=True):
         default_factory=get_datetime_utc,
         sa_type=DateTime(timezone=True),  # type: ignore
     )
-    character_count: int = 0
+    profile_count: int = 0
 
     owner: Optional["User"] = Relationship(back_populates="save_uploads")
-    characters: list["CharacterSlot"] = Relationship(
+    profiles: list["Profile"] = Relationship(
         back_populates="save_upload", cascade_delete=True
     )
 
@@ -100,15 +100,15 @@ class SaveUploadPublic(SQLModel):
     id: uuid.UUID
     platform: str
     uploaded_at: datetime | None = None
-    character_count: int
+    profile_count: int
 
 
 # ---------------------------------------------------------------------------
-# Character models
+# Profile models (save-file character slots)
 # ---------------------------------------------------------------------------
 
-class CharacterSlot(SQLModel, table=True):
-    __tablename__ = "character_slot"
+class Profile(SQLModel, table=True):
+    __tablename__ = "profile"
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     owner_id: uuid.UUID = Field(
@@ -120,21 +120,21 @@ class CharacterSlot(SQLModel, table=True):
     slot_index: int
     name: str = Field(max_length=100)
 
-    save_upload: Optional["SaveUpload"] = Relationship(back_populates="characters")
+    save_upload: Optional["SaveUpload"] = Relationship(back_populates="profiles")
     relics: list["Relic"] = Relationship(
-        back_populates="character_slot", cascade_delete=True
+        back_populates="profile", cascade_delete=True
     )
 
 
-class CharacterPublic(SQLModel):
+class ProfilePublic(SQLModel):
     id: uuid.UUID
     save_upload_id: uuid.UUID
     slot_index: int
     name: str
 
 
-class CharactersPublic(SQLModel):
-    data: list[CharacterPublic]
+class ProfilesPublic(SQLModel):
+    data: list[ProfilePublic]
     count: int
 
 
@@ -147,8 +147,8 @@ class Relic(SQLModel, table=True):
     owner_id: uuid.UUID = Field(
         foreign_key="user.id", nullable=False, ondelete="CASCADE"
     )
-    character_id: uuid.UUID = Field(
-        foreign_key="character_slot.id", nullable=False, ondelete="CASCADE"
+    profile_id: uuid.UUID = Field(
+        foreign_key="profile.id", nullable=False, ondelete="CASCADE"
     )
     # BigInteger for values that may exceed int32 (e.g., 0xC000xxxx handles, 0xFFFFFFFF EMPTY)
     ga_handle: int = Field(sa_column=Column(BigInteger(), nullable=False))
@@ -165,12 +165,12 @@ class Relic(SQLModel, table=True):
     name: str = Field(max_length=255)
     tier: str = Field(max_length=20)  # "Grand" | "Polished" | "Delicate"
 
-    character_slot: Optional["CharacterSlot"] = Relationship(back_populates="relics")
+    profile: Optional["Profile"] = Relationship(back_populates="relics")
 
 
 class RelicPublic(SQLModel):
     id: uuid.UUID
-    character_id: uuid.UUID
+    profile_id: uuid.UUID
     ga_handle: int
     item_id: int
     real_id: int
@@ -334,8 +334,8 @@ class SaveStatusPublic(SQLModel):
     id: uuid.UUID
     platform: str
     uploaded_at: datetime | None = None
-    character_count: int
-    character_names: list[str]
+    profile_count: int
+    profile_names: list[str]
 
 
 # ---------------------------------------------------------------------------
@@ -359,7 +359,7 @@ class ParsedRelicData(SQLModel):
     tier: str
 
 
-class ParsedCharacterData(SQLModel):
+class ParsedProfileData(SQLModel):
     slot_index: int
     name: str
     relic_count: int
@@ -370,8 +370,8 @@ class ParsedCharacterData(SQLModel):
 
 class UploadResponse(SQLModel):
     platform: str
-    character_count: int
-    characters: list[ParsedCharacterData]
+    profile_count: int
+    profiles: list[ParsedProfileData]
     save_upload_id: uuid.UUID | None = None
     persisted: bool = False
 

@@ -41,9 +41,9 @@ function AuthOptimizeForm({ buildId }: { buildId: string }) {
     queryKey: ["builds", buildId],
     queryFn: () => BuildsService.getBuild({ buildId }),
   })
-  const { data: charsData } = useSuspenseQuery({
-    queryKey: ["characters"],
-    queryFn: () => SavesService.listCharacters(),
+  const { data: profilesData } = useSuspenseQuery({
+    queryKey: ["profiles"],
+    queryFn: () => SavesService.listProfiles(),
   })
   const { data: effectsData } = useSuspenseQuery({
     queryKey: ["game", "effects"],
@@ -57,16 +57,16 @@ function AuthOptimizeForm({ buildId }: { buildId: string }) {
   )
 
   const selectedBuild = buildRaw as any
-  const chars = charsData?.data ?? []
+  const profiles = profilesData?.data ?? []
 
-  const [characterId, setCharacterId] = useState(chars[0]?.id ?? "")
+  const [profileId, setProfileId] = useState(profiles[0]?.id ?? "")
 
   const pinnedHandles = new Set<number>(selectedBuild?.pinned_relics ?? [])
   const key = cacheKey(
     "auth",
     buildId,
     selectedBuild?.updated_at,
-    characterId,
+    profileId,
     saveStatus?.uploaded_at,
   )
 
@@ -90,7 +90,7 @@ function AuthOptimizeForm({ buildId }: { buildId: string }) {
     setResults([])
     try {
       const data = await runOptimizeStream(
-        { build_id: buildId, character_id: characterId },
+        { build_id: buildId, profile_id: profileId },
         setProgress,
       )
       setResults(data)
@@ -104,9 +104,9 @@ function AuthOptimizeForm({ buildId }: { buildId: string }) {
     }
   }
 
-  // Auto-optimize when there's only one character and no cached results
+  // Auto-optimize when there's only one profile and no cached results
   useEffect(() => {
-    if (chars.length === 1 && characterId && !resultCache.has(key) && !autoOptimizeRef.current) {
+    if (profiles.length === 1 && profileId && !resultCache.has(key) && !autoOptimizeRef.current) {
       autoOptimizeRef.current = true
       handleOptimize()
     }
@@ -115,24 +115,24 @@ function AuthOptimizeForm({ buildId }: { buildId: string }) {
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap gap-3 items-end">
-        {chars.length > 1 && (
+        {profiles.length > 1 && (
           <div className="space-y-1.5">
-            <label className="text-sm font-medium">Character</label>
-            <Select value={characterId} onValueChange={setCharacterId}>
+            <label className="text-sm font-medium">Profile</label>
+            <Select value={profileId} onValueChange={setProfileId}>
               <SelectTrigger className="w-56">
-                <SelectValue placeholder="Select character" />
+                <SelectValue placeholder="Select profile" />
               </SelectTrigger>
               <SelectContent>
-                {chars.map((c) => (
-                  <SelectItem key={c.id} value={c.id}>
-                    {c.name}
+                {profiles.map((p) => (
+                  <SelectItem key={p.id} value={p.id}>
+                    {p.name}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
           </div>
         )}
-        <Button onClick={handleOptimize} disabled={!characterId || isPending}>
+        <Button onClick={handleOptimize} disabled={!profileId || isPending}>
           {isPending ? "Optimizing…" : "Optimize"}
         </Button>
       </div>
@@ -150,7 +150,7 @@ function AuthOptimizeForm({ buildId }: { buildId: string }) {
         </div>
       )}
 
-      {chars.length === 0 && (
+      {profiles.length === 0 && (
         <p className="text-sm text-muted-foreground">
           No inventory found.{" "}
           <Link to="/upload" className="underline">
@@ -190,7 +190,7 @@ function AuthOptimizeForm({ buildId }: { buildId: string }) {
 
 // --- Anonymous optimizer (inline mode, build from route) ---
 
-interface SessionCharacter {
+interface SessionProfile {
   slot_index: number
   name: string
   relics: Array<Record<string, unknown>>
@@ -210,31 +210,31 @@ function AnonOptimizeForm({ buildId }: { buildId: string }) {
   )
   const anonMeta = getAnonUploadMeta()
 
-  const allChars: SessionCharacter[] = JSON.parse(
-    sessionStorage.getItem("parsedCharacters") ?? "[]",
+  const allProfiles: SessionProfile[] = JSON.parse(
+    sessionStorage.getItem("parsedProfiles") ?? "[]",
   )
 
   const defaultSlot = (() => {
     try {
-      const c = JSON.parse(
-        sessionStorage.getItem("selectedCharacter") ?? "null",
+      const p = JSON.parse(
+        sessionStorage.getItem("selectedProfile") ?? "null",
       )
-      return c?.slot_index ?? allChars[0]?.slot_index ?? null
+      return p?.slot_index ?? allProfiles[0]?.slot_index ?? null
     } catch {
-      return allChars[0]?.slot_index ?? null
+      return allProfiles[0]?.slot_index ?? null
     }
   })()
 
   const [selectedSlot, setSelectedSlot] = useState<number | null>(defaultSlot)
-  const char =
-    allChars.find((c) => c.slot_index === selectedSlot) ?? allChars[0] ?? null
+  const profile =
+    allProfiles.find((p) => p.slot_index === selectedSlot) ?? allProfiles[0] ?? null
 
-  const handleCharChange = (slotStr: string) => {
+  const handleProfileChange = (slotStr: string) => {
     const slot = Number(slotStr)
     setSelectedSlot(slot)
-    const picked = allChars.find((c) => c.slot_index === slot)
+    const picked = allProfiles.find((p) => p.slot_index === slot)
     if (picked)
-      sessionStorage.setItem("selectedCharacter", JSON.stringify(picked))
+      sessionStorage.setItem("selectedProfile", JSON.stringify(picked))
   }
 
   const build = getById(buildId)
@@ -262,10 +262,10 @@ function AnonOptimizeForm({ buildId }: { buildId: string }) {
   }, [key])
 
   const handleOptimize = async () => {
-    if (!build || !char) return
+    if (!build || !profile) return
 
     // ParsedRelicData uses flat effect_1/2/3 fields; OwnedRelic expects arrays
-    const relics = char.relics.map((r: any) => ({
+    const relics = profile.relics.map((r: any) => ({
       ga_handle: r.ga_handle,
       item_id: r.item_id,
       real_id: r.real_id,
@@ -311,15 +311,15 @@ function AnonOptimizeForm({ buildId }: { buildId: string }) {
     }
   }
 
-  // Auto-optimize when there's only one character and no cached results
+  // Auto-optimize when there's only one profile and no cached results
   useEffect(() => {
-    if (allChars.length === 1 && build && char && !resultCache.has(key) && !autoOptimizeRef.current) {
+    if (allProfiles.length === 1 && build && profile && !resultCache.has(key) && !autoOptimizeRef.current) {
       autoOptimizeRef.current = true
       handleOptimize()
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  if (allChars.length === 0) {
+  if (allProfiles.length === 0) {
     return (
       <p className="text-sm text-muted-foreground py-8">
         No inventory loaded.{" "}
@@ -343,20 +343,20 @@ function AnonOptimizeForm({ buildId }: { buildId: string }) {
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap gap-3 items-end">
-        {allChars.length > 1 && (
+        {allProfiles.length > 1 && (
           <div className="space-y-1.5">
-            <label className="text-sm font-medium">Character</label>
+            <label className="text-sm font-medium">Profile</label>
             <Select
-              value={String(char?.slot_index ?? "")}
-              onValueChange={handleCharChange}
+              value={String(profile?.slot_index ?? "")}
+              onValueChange={handleProfileChange}
             >
               <SelectTrigger className="w-56">
-                <SelectValue placeholder="Select character" />
+                <SelectValue placeholder="Select profile" />
               </SelectTrigger>
               <SelectContent>
-                {allChars.map((c) => (
-                  <SelectItem key={c.slot_index} value={String(c.slot_index)}>
-                    {c.name} (Slot {c.slot_index})
+                {allProfiles.map((p) => (
+                  <SelectItem key={p.slot_index} value={String(p.slot_index)}>
+                    {p.name} (Slot {p.slot_index})
                   </SelectItem>
                 ))}
               </SelectContent>

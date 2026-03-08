@@ -1,7 +1,7 @@
 """Vessel optimization endpoint.
 
 Supports two modes:
-- **DB mode** (authenticated): provide build_id + character_id — data loaded from DB.
+- **DB mode** (authenticated): provide build_id + profile_id — data loaded from DB.
 - **Inline mode** (any): provide a full BuildDefinition + list[OwnedRelic].
 
 The character class used for vessel filtering is always taken from build_def.character.
@@ -17,7 +17,7 @@ from sqlmodel import select
 
 from app.api.deps import GameDataDep, OptionalUser, OptimizerPoolDep, SessionDep
 from app.core.config import settings
-from app.models import Build, CharacterSlot, Relic
+from app.models import Build, Profile, Relic
 from nrplanner.constants import CHARACTER_NAMES
 from nrplanner.models import BuildDefinition, OwnedRelic, RelicInventory, VesselResult, WeightGroup
 from nrplanner.scoring import BuildScorer
@@ -66,7 +66,7 @@ def _run_optimizer(
 class OptimizeRequest(BaseModel):
     # --- DB mode (authenticated) ---
     build_id: uuid.UUID | None = None
-    character_id: uuid.UUID | None = None
+    profile_id: uuid.UUID | None = None
 
     # --- Inline mode (anonymous or authenticated) ---
     build: BuildDefinition | None = None
@@ -87,10 +87,10 @@ def run_optimize(
 ) -> list[VesselResult]:
     """Run vessel optimization and return ranked VesselResults.
 
-    **DB mode** — authenticated users may supply `build_id` + `character_id` to
+    **DB mode** — authenticated users may supply `build_id` + `profile_id` to
     reference persisted data:
     ```json
-    { "build_id": "...", "character_id": "..." }
+    { "build_id": "...", "profile_id": "..." }
     ```
 
     **Inline mode** — supply the full build definition and relic list:
@@ -101,31 +101,31 @@ def run_optimize(
     The character class used for vessel filtering is taken from `build.character` in
     both modes. This matches the class selected when the build was created.
     """
-    using_db = req.build_id is not None or req.character_id is not None
+    using_db = req.build_id is not None or req.profile_id is not None
     using_inline = req.build is not None or req.relics is not None
 
     if using_db and using_inline:
         raise HTTPException(
             status_code=422,
-            detail="Provide either (build_id + character_id) or (build + relics), not both.",
+            detail="Provide either (build_id + profile_id) or (build + relics), not both.",
         )
 
     if using_db:
         if current_user is None:
             raise HTTPException(status_code=401, detail="Authentication required for DB mode")
-        if req.build_id is None or req.character_id is None:
+        if req.build_id is None or req.profile_id is None:
             raise HTTPException(
                 status_code=422,
-                detail="DB mode requires both build_id and character_id.",
+                detail="DB mode requires both build_id and profile_id.",
             )
 
         db_build = session.get(Build, req.build_id)
         if not db_build or db_build.owner_id != current_user.id:
             raise HTTPException(status_code=404, detail="Build not found")
 
-        char_slot = session.get(CharacterSlot, req.character_id)
-        if not char_slot or char_slot.owner_id != current_user.id:
-            raise HTTPException(status_code=404, detail="Character not found")
+        profile = session.get(Profile, req.profile_id)
+        if not profile or profile.owner_id != current_user.id:
+            raise HTTPException(status_code=404, detail="Profile not found")
 
         build_def = BuildDefinition(
             id=str(db_build.id),
@@ -145,7 +145,7 @@ def run_optimize(
         )
 
         db_relics = session.exec(
-            select(Relic).where(Relic.character_id == req.character_id)
+            select(Relic).where(Relic.profile_id == req.profile_id)
         ).all()
         owned_relics = [
             OwnedRelic(
@@ -202,31 +202,31 @@ def run_optimize_stream(
     before streaming begins.
     """
     # --- Resolve build_def + owned_relics (may raise HTTPException) ---
-    using_db = req.build_id is not None or req.character_id is not None
+    using_db = req.build_id is not None or req.profile_id is not None
     using_inline = req.build is not None or req.relics is not None
 
     if using_db and using_inline:
         raise HTTPException(
             status_code=422,
-            detail="Provide either (build_id + character_id) or (build + relics), not both.",
+            detail="Provide either (build_id + profile_id) or (build + relics), not both.",
         )
 
     if using_db:
         if current_user is None:
             raise HTTPException(status_code=401, detail="Authentication required for DB mode")
-        if req.build_id is None or req.character_id is None:
+        if req.build_id is None or req.profile_id is None:
             raise HTTPException(
                 status_code=422,
-                detail="DB mode requires both build_id and character_id.",
+                detail="DB mode requires both build_id and profile_id.",
             )
 
         db_build = session.get(Build, req.build_id)
         if not db_build or db_build.owner_id != current_user.id:
             raise HTTPException(status_code=404, detail="Build not found")
 
-        char_slot = session.get(CharacterSlot, req.character_id)
-        if not char_slot or char_slot.owner_id != current_user.id:
-            raise HTTPException(status_code=404, detail="Character not found")
+        profile = session.get(Profile, req.profile_id)
+        if not profile or profile.owner_id != current_user.id:
+            raise HTTPException(status_code=404, detail="Profile not found")
 
         build_def = BuildDefinition(
             id=str(db_build.id),
@@ -246,7 +246,7 @@ def run_optimize_stream(
         )
 
         db_relics = session.exec(
-            select(Relic).where(Relic.character_id == req.character_id)
+            select(Relic).where(Relic.profile_id == req.profile_id)
         ).all()
         owned_relics: list[OwnedRelic] = [
             OwnedRelic(

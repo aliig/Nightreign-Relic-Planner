@@ -37,8 +37,8 @@ function Dashboard() {
             {saveStatus.platform}
           </Badge>
           <span>
-            {saveStatus.character_count} character
-            {saveStatus.character_count !== 1 ? "s" : ""}
+            {saveStatus.profile_count} profile
+            {saveStatus.profile_count !== 1 ? "s" : ""}
           </span>
         </div>
         <p>
