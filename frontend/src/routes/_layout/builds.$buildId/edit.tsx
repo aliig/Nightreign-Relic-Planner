@@ -120,6 +120,7 @@ type BuildApiData = {
   excluded_families: string[]
   include_deep: boolean
   curse_max: number
+  default_curse_weight: number
   pinned_relics: number[]
   excluded_stacking_categories: number[]
   effect_limits: Record<number, number>
@@ -623,6 +624,7 @@ interface EditorUIProps {
   excludedFamilies: string[]
   includeDeep: boolean
   curseMax: number
+  defaultCurseWeight: number
   pinnedRelics: number[]
   pinnedRelicMeta: Map<number, RelicForPicker>
   excludedStackingCategories: number[]
@@ -638,6 +640,7 @@ interface EditorUIProps {
   onExcludedFamiliesChange: (names: string[]) => void
   onIncludeDeepChange: (v: boolean) => void
   onCurseMaxChange: (v: number) => void
+  onDefaultCurseWeightChange: (v: number) => void
   onPinnedRelicsChange: (
     handles: number[],
     meta: Map<number, RelicForPicker>,
@@ -656,6 +659,7 @@ function BuildEditorUI({
   excludedFamilies,
   includeDeep,
   curseMax,
+  defaultCurseWeight,
   pinnedRelics,
   pinnedRelicMeta,
   excludedStackingCategories,
@@ -669,6 +673,7 @@ function BuildEditorUI({
   onExcludedFamiliesChange,
   onIncludeDeepChange,
   onCurseMaxChange,
+  onDefaultCurseWeightChange,
   onPinnedRelicsChange,
   onExcludedStackingCategoriesChange,
   effectLimits,
@@ -905,6 +910,17 @@ function BuildEditorUI({
                 max={3}
                 value={curseMax}
                 onChange={(e) => onCurseMaxChange(Number(e.target.value))}
+                className="w-16"
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <Label htmlFor="default-curse-weight">Curse penalty</Label>
+              <Input
+                id="default-curse-weight"
+                type="number"
+                max={0}
+                value={defaultCurseWeight}
+                onChange={(e) => onDefaultCurseWeightChange(Number(e.target.value))}
                 className="w-16"
               />
             </div>
@@ -1424,6 +1440,9 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
   )
   const [includeDeep, setIncludeDeep] = useState(build.include_deep)
   const [curseMax, setCurseMax] = useState(build.curse_max)
+  const [defaultCurseWeight, setDefaultCurseWeight] = useState(
+    build.default_curse_weight ?? 0,
+  )
   const [pinnedRelics, setPinnedRelics] = useState<number[]>(
     build.pinned_relics ?? [],
   )
@@ -1445,6 +1464,7 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
   const excludedFamiliesRef = useRef(excludedFamilies)
   const includeDeepRef = useRef(includeDeep)
   const curseMaxRef = useRef(curseMax)
+  const defaultCurseWeightRef = useRef(defaultCurseWeight)
   const pinnedRelicsRef = useRef(pinnedRelics)
   const excludedStackingCategoriesRef = useRef(excludedStackingCategories)
   const effectLimitsRef = useRef(effectLimits)
@@ -1454,6 +1474,7 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
   excludedFamiliesRef.current = excludedFamilies
   includeDeepRef.current = includeDeep
   curseMaxRef.current = curseMax
+  defaultCurseWeightRef.current = defaultCurseWeight
   pinnedRelicsRef.current = pinnedRelics
   excludedStackingCategoriesRef.current = excludedStackingCategories
   effectLimitsRef.current = effectLimits
@@ -1509,6 +1530,7 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
     setExcludedFamilies(build.excluded_families ?? [])
     setIncludeDeep(build.include_deep)
     setCurseMax(build.curse_max)
+    setDefaultCurseWeight(build.default_curse_weight ?? 0)
     setPinnedRelics(build.pinned_relics ?? [])
     setExcludedStackingCategories(build.excluded_stacking_categories ?? [])
     setEffectLimits(build.effect_limits ?? {})
@@ -1528,6 +1550,7 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
           excluded_stacking_categories: excludedStackingCategoriesRef.current,
           include_deep: includeDeepRef.current,
           curse_max: curseMaxRef.current,
+          default_curse_weight: defaultCurseWeightRef.current,
           pinned_relics: pinnedRelicsRef.current,
           effect_limits: effectLimitsRef.current,
           family_limits: familyLimitsRef.current,
@@ -1571,6 +1594,7 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
       excludedFamilies={excludedFamilies}
       includeDeep={includeDeep}
       curseMax={curseMax}
+      defaultCurseWeight={defaultCurseWeight}
       pinnedRelics={pinnedRelics}
       pinnedRelicMeta={pinnedRelicMeta}
       excludedStackingCategories={excludedStackingCategories}
@@ -1597,6 +1621,10 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
       }}
       onCurseMaxChange={(v) => {
         setCurseMax(v)
+        scheduleAutoSave()
+      }}
+      onDefaultCurseWeightChange={(v) => {
+        setDefaultCurseWeight(v)
         scheduleAutoSave()
       }}
       onPinnedRelicsChange={(handles, meta) => {
@@ -1666,6 +1694,9 @@ function LocalBuildEditorContent({ buildId }: { buildId: string }) {
   )
   const [includeDeep, setIncludeDeep] = useState(build?.include_deep ?? false)
   const [curseMax, setCurseMax] = useState(build?.curse_max ?? 1)
+  const [defaultCurseWeight, setDefaultCurseWeight] = useState(
+    build?.default_curse_weight ?? 0,
+  )
   const [pinnedRelics, setPinnedRelics] = useState<number[]>(
     build?.pinned_relics ?? [],
   )
@@ -1703,6 +1734,7 @@ function LocalBuildEditorContent({ buildId }: { buildId: string }) {
   const excludedFamiliesRef = useRef(excludedFamilies)
   const includeDeepRef = useRef(includeDeep)
   const curseMaxRef = useRef(curseMax)
+  const defaultCurseWeightRef = useRef(defaultCurseWeight)
   const pinnedRelicsRef = useRef(pinnedRelics)
   const excludedStackingCategoriesRef = useRef(excludedStackingCategories)
   const effectLimitsRef = useRef(effectLimits)
@@ -1712,6 +1744,7 @@ function LocalBuildEditorContent({ buildId }: { buildId: string }) {
   excludedFamiliesRef.current = excludedFamilies
   includeDeepRef.current = includeDeep
   curseMaxRef.current = curseMax
+  defaultCurseWeightRef.current = defaultCurseWeight
   pinnedRelicsRef.current = pinnedRelics
   excludedStackingCategoriesRef.current = excludedStackingCategories
   effectLimitsRef.current = effectLimits
@@ -1733,6 +1766,7 @@ function LocalBuildEditorContent({ buildId }: { buildId: string }) {
       excluded_stacking_categories: excludedStackingCategoriesRef.current,
       include_deep: includeDeepRef.current,
       curse_max: curseMaxRef.current,
+      default_curse_weight: defaultCurseWeightRef.current,
       pinned_relics: pinnedRelicsRef.current,
       effect_limits: effectLimitsRef.current,
       family_limits: familyLimitsRef.current,
@@ -1748,6 +1782,7 @@ function LocalBuildEditorContent({ buildId }: { buildId: string }) {
       excluded_stacking_categories: excludedStackingCategoriesRef.current,
       include_deep: includeDeepRef.current,
       curse_max: curseMaxRef.current,
+      default_curse_weight: defaultCurseWeightRef.current,
       pinned_relics: pinnedRelicsRef.current,
       effect_limits: effectLimitsRef.current,
       family_limits: familyLimitsRef.current,
@@ -1775,6 +1810,7 @@ function LocalBuildEditorContent({ buildId }: { buildId: string }) {
         excluded_stacking_categories: excludedStackingCategoriesRef.current,
         include_deep: includeDeepRef.current,
         curse_max: curseMaxRef.current,
+        default_curse_weight: defaultCurseWeightRef.current,
         pinned_relics: pinnedRelicsRef.current,
         effect_limits: effectLimitsRef.current,
         family_limits: familyLimitsRef.current,
@@ -1800,6 +1836,7 @@ function LocalBuildEditorContent({ buildId }: { buildId: string }) {
       excludedFamilies={excludedFamilies}
       includeDeep={includeDeep}
       curseMax={curseMax}
+      defaultCurseWeight={defaultCurseWeight}
       pinnedRelics={pinnedRelics}
       pinnedRelicMeta={pinnedRelicMeta}
       excludedStackingCategories={excludedStackingCategories}
@@ -1826,6 +1863,10 @@ function LocalBuildEditorContent({ buildId }: { buildId: string }) {
       }}
       onCurseMaxChange={(v) => {
         setCurseMax(v)
+        scheduleAutoSave()
+      }}
+      onDefaultCurseWeightChange={(v) => {
+        setDefaultCurseWeight(v)
         scheduleAutoSave()
       }}
       onPinnedRelicsChange={(handles, meta) => {

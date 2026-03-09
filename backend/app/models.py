@@ -224,6 +224,7 @@ class Build(SQLModel, table=True):
     )
     include_deep: bool = True
     curse_max: int = 1
+    default_curse_weight: int = 0
     pinned_relics: list = Field(
         default_factory=list,
         sa_column=Column(JSON, nullable=False, server_default="[]"),
@@ -269,6 +270,7 @@ class BuildUpdate(SQLModel):
     excluded_families: list[str] | None = None
     include_deep: bool | None = None
     curse_max: int | None = Field(default=None, ge=1)
+    default_curse_weight: int | None = None
     pinned_relics: list[int] | None = None
     excluded_stacking_categories: list[int] | None = None
     effect_limits: dict[int, int] | None = None
@@ -287,6 +289,7 @@ class BuildPublic(SQLModel):
     excluded_families: list[str] = Field(default_factory=list)
     include_deep: bool
     curse_max: int
+    default_curse_weight: int
     pinned_relics: list[int] = Field(default_factory=list)
     excluded_stacking_categories: list[int] = Field(default_factory=list)
     effect_limits: dict[int, int] = Field(default_factory=dict)
@@ -312,6 +315,7 @@ class FeaturedBuildPublic(SQLModel):
     excluded_families: list[str] = Field(default_factory=list)
     include_deep: bool
     curse_max: int
+    default_curse_weight: int
     pinned_relics: list[int] = Field(default_factory=list)
     excluded_stacking_categories: list[int] = Field(default_factory=list)
     effect_limits: dict[int, int] = Field(default_factory=dict)

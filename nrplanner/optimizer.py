@@ -240,7 +240,7 @@ class VesselOptimizer:
                 completed += 1
                 yield {"type": "progress", "vessel": completed, "total": total, "name": name}
 
-        all_results.sort(key=lambda r: (not r.meets_requirements, -r.total_score))
+        all_results.sort(key=lambda r: -r.total_score)
         yield {"type": "result", "data": all_results[:top_n]}
 
     def optimize_all_vessels(self, build: BuildDefinition, inventory: RelicInventory,
@@ -283,7 +283,7 @@ class VesselOptimizer:
                 _vid, _name, results = future.result()
                 all_results.extend(results)
 
-        all_results.sort(key=lambda r: (not r.meets_requirements, -r.total_score))
+        all_results.sort(key=lambda r: -r.total_score)
         return all_results[:top_n]
 
     # ------------------------------------------------------------------

@@ -728,3 +728,85 @@ class TestOrphanedExclCategoryEffects:
         placed = {_DORMANT_DAGGERS, _DORMANT_GREATAXES}
         assert scorer.has_orphaned_excl_category_effects(
             placed, build, desired) is True
+
+
+# ---------------------------------------------------------------------------
+# Default curse weight
+# ---------------------------------------------------------------------------
+
+class TestDefaultCurseWeight:
+    """Verify the default_curse_weight fallback for unmatched curses."""
+
+    def test_unmatched_curse_with_default_weight(
+        self, scorer: BuildScorer, all_effects: list[dict],
+    ) -> None:
+        curse_id = all_effects[5]["id"]
+        build = _make_build()
+        build = build.model_copy(update={"default_curse_weight": -5})
+        relic = _make_relic([EMPTY, EMPTY, EMPTY], curses=[curse_id, EMPTY, EMPTY])
+        assert scorer.score_relic(relic, build) == -5
+
+    def test_unmatched_curse_default_zero_scores_zero(
+        self, scorer: BuildScorer, all_effects: list[dict],
+    ) -> None:
+        curse_id = all_effects[5]["id"]
+        build = _make_build()  # default_curse_weight=0
+        relic = _make_relic([EMPTY, EMPTY, EMPTY], curses=[curse_id, EMPTY, EMPTY])
+        assert scorer.score_relic(relic, build) == 0
+
+    def test_matched_curse_uses_group_weight(
+        self, scorer: BuildScorer, all_effects: list[dict],
+    ) -> None:
+        """When a curse is explicitly in a group, that weight takes precedence."""
+        curse_id = all_effects[5]["id"]
+        build = _make_build(
+            groups=[WeightGroup(weight=-20, effects=[curse_id])],
+        )
+        build = build.model_copy(update={"default_curse_weight": -5})
+        relic = _make_relic([EMPTY, EMPTY, EMPTY], curses=[curse_id, EMPTY, EMPTY])
+        assert scorer.score_relic(relic, build) == -20
+
+    def test_multiple_unmatched_curses_accumulate(
+        self, scorer: BuildScorer, all_effects: list[dict],
+    ) -> None:
+        c1, c2 = all_effects[5]["id"], all_effects[6]["id"]
+        build = _make_build()
+        build = build.model_copy(update={"default_curse_weight": -3})
+        relic = _make_relic([EMPTY, EMPTY, EMPTY], curses=[c1, c2, EMPTY])
+        assert scorer.score_relic(relic, build) == -6
+
+    def test_default_curse_weight_in_context(
+        self, scorer: BuildScorer, all_effects: list[dict],
+        ds: SourceDataHandler,
+    ) -> None:
+        curse_id = all_effects[5]["id"]
+        build = _make_build()
+        build = build.model_copy(update={"default_curse_weight": -5})
+        relic = _make_relic([EMPTY, EMPTY, EMPTY], curses=[curse_id, EMPTY, EMPTY])
+        state = VesselState(ds)
+        assert scorer.score_relic_in_context(relic, build, state) == -5
+
+    def test_breakdown_shows_default_curse(
+        self, scorer: BuildScorer, all_effects: list[dict],
+    ) -> None:
+        curse_id = all_effects[5]["id"]
+        build = _make_build()
+        build = build.model_copy(update={"default_curse_weight": -5})
+        relic = _make_relic([EMPTY, EMPTY, EMPTY], curses=[curse_id, EMPTY, EMPTY])
+        bd = scorer.get_breakdown(relic, build)
+        assert len(bd) == 1
+        assert bd[0]["category"] == "default_curse"
+        assert bd[0]["weight"] == -5
+        assert bd[0]["score"] == -5
+        assert bd[0]["is_curse"] is True
+
+    def test_breakdown_omits_default_curse_when_zero(
+        self, scorer: BuildScorer, all_effects: list[dict],
+    ) -> None:
+        curse_id = all_effects[5]["id"]
+        build = _make_build()  # default_curse_weight=0
+        relic = _make_relic([EMPTY, EMPTY, EMPTY], curses=[curse_id, EMPTY, EMPTY])
+        bd = scorer.get_breakdown(relic, build)
+        # Unmatched curse with weight 0 → still appended with cat=None
+        assert len(bd) == 1
+        assert bd[0]["category"] is None

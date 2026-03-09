@@ -148,6 +148,7 @@ class BuildDefinition(BaseModel):
     excluded_families: list[str] = Field(default_factory=list)
     include_deep: bool = True
     curse_max: int = 1  # max times the same curse is tolerated (0=avoid all)
+    default_curse_weight: int = 0  # fallback weight for curses not in any group
     pinned_relics: list[int] = Field(default_factory=list)  # ga_handle IDs to force-assign
     excluded_stacking_categories: list[int] = Field(default_factory=list)  # compatibilityId values
     effect_limits: dict[int, int] = Field(default_factory=dict)   # effect_id → max_count

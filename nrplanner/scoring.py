@@ -310,6 +310,8 @@ class BuildScorer:
             cat, weight = self._resolve_category_and_weight(curse, build)
             if cat is not None and cat != "excluded":
                 score += weight
+            elif cat is None:
+                score += build.default_curse_weight
         return score
 
     def get_desired_conflict_weights(self, build: BuildDefinition) -> dict[int, int]:
@@ -430,6 +432,8 @@ class BuildScorer:
                     score += adj
                 else:
                     score += self._effect_stacking_score(curse, cat, weight, state)
+            elif cat is None:
+                score += build.default_curse_weight
         for curse in relic.curses:
             if curse in (EMPTY_EFFECT, 0):
                 continue
@@ -466,6 +470,11 @@ class BuildScorer:
                     continue
                 cat, weight = self._resolve_category_and_weight(eff, build)
                 base_score = weight if (cat is not None and cat != "excluded") else 0
+                # Apply default curse weight for unmatched curses
+                if is_curse and cat is None and build.default_curse_weight != 0:
+                    cat = "default_curse"
+                    weight = build.default_curse_weight
+                    base_score = build.default_curse_weight
                 override_status = None
 
                 # Positional stacking category handling

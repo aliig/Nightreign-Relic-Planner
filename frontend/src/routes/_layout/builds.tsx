@@ -512,6 +512,7 @@ function SuggestedBuildsContent() {
         excluded_families: b.excluded_families ?? [],
         include_deep: build.include_deep,
         curse_max: build.curse_max,
+        default_curse_weight: b.default_curse_weight ?? 0,
         pinned_relics: b.pinned_relics ?? [],
       })
       showSuccessToast("Build saved to your browser.")

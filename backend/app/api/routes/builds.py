@@ -195,6 +195,7 @@ def clone_build(
         excluded_families=list(source.excluded_families or []),
         include_deep=source.include_deep,
         curse_max=source.curse_max,
+        default_curse_weight=source.default_curse_weight,
         pinned_relics=list(source.pinned_relics or []),
         excluded_stacking_categories=list(source.excluded_stacking_categories or []),
         effect_limits=dict(source.effect_limits or {}),
