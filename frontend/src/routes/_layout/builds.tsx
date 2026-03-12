@@ -62,6 +62,7 @@ import {
   type LocalBuild,
   useLocalBuilds,
 } from "@/hooks/useLocalBuilds"
+import { CHARACTER_NAMES } from "@/lib/constants"
 import { handleError } from "@/utils"
 
 export const Route = createFileRoute("/_layout/builds")({
@@ -70,19 +71,6 @@ export const Route = createFileRoute("/_layout/builds")({
     meta: [{ title: "Builds - Nightreign Relic Planner" }],
   }),
 })
-
-const CHARACTER_NAMES = [
-  "Wylder",
-  "Guardian",
-  "Ironeye",
-  "Duchess",
-  "Raider",
-  "Revenant",
-  "Recluse",
-  "Executor",
-  "Scholar",
-  "Undertaker",
-]
 
 const newBuildSchema = z.object({
   name: z.string().min(1, "Name is required").max(255),

@@ -72,6 +72,7 @@ import {
 } from "@/hooks/useLocalBuilds"
 import { cn } from "@/lib/utils"
 import { handleError } from "@/utils"
+import { CHARACTER_NAMES } from "@/lib/constants"
 
 export const Route = createFileRoute("/_layout/builds/$buildId/edit")({
   component: BuildEditorPage,
@@ -649,6 +650,7 @@ interface EditorUIProps {
   onEffectLimitsChange: (limits: Record<number, number>) => void
   onFamilyLimitsChange: (limits: Record<string, number>) => void
   onRename: (newName: string) => void
+  onChangeCharacter: (character: string) => void
 }
 
 function BuildEditorUI({
@@ -681,6 +683,7 @@ function BuildEditorUI({
   onEffectLimitsChange,
   onFamilyLimitsChange,
   onRename,
+  onChangeCharacter,
 }: EditorUIProps) {
   const [effectSearch, setEffectSearch] = useState("")
   const [draftName, setDraftName] = useState(name)
@@ -883,7 +886,18 @@ function BuildEditorUI({
               onBlur={commitRename}
               className="text-2xl font-semibold bg-transparent border-b border-transparent hover:border-muted-foreground/30 focus:border-primary focus:outline-none focus:ring-0 py-0.5 w-64 transition-colors"
             />
-            <p className="text-muted-foreground text-sm mt-0.5">{character}</p>
+            <Select value={character} onValueChange={onChangeCharacter}>
+              <SelectTrigger className="w-40 h-7 text-sm text-muted-foreground mt-0.5">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {CHARACTER_NAMES.map((c) => (
+                  <SelectItem key={c} value={c}>
+                    {c}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
           {saving && (
             <span className="text-sm text-muted-foreground">Saving…</span>
@@ -1429,6 +1443,9 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
   // Cast to new schema type (SDK will be regenerated separately)
   const build = buildRaw as unknown as BuildApiData
 
+  const [character, setCharacter] = useState<string>(
+    (buildRaw as any).character,
+  )
   const [groups, setGroups] = useState<WeightGroup[]>(
     () => build.groups ?? DEFAULT_GROUPS.map((g) => ({ ...g })),
   )
@@ -1459,6 +1476,8 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
     () => build.family_limits ?? {},
   )
 
+  const nameRef = useRef((buildRaw as any).name as string)
+  const characterRef = useRef(character)
   const groupsRef = useRef(groups)
   const excludedEffectsRef = useRef(excludedEffects)
   const excludedFamiliesRef = useRef(excludedFamilies)
@@ -1469,6 +1488,7 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
   const excludedStackingCategoriesRef = useRef(excludedStackingCategories)
   const effectLimitsRef = useRef(effectLimits)
   const familyLimitsRef = useRef(familyLimits)
+  characterRef.current = character
   groupsRef.current = groups
   excludedEffectsRef.current = excludedEffects
   excludedFamiliesRef.current = excludedFamilies
@@ -1525,6 +1545,7 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
   }, [build.pinned_relics, queryClient]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
+    setCharacter((buildRaw as any).character)
     setGroups(build.groups ?? DEFAULT_GROUPS.map((g) => ({ ...g })))
     setExcludedEffects(build.excluded_effects ?? [])
     setExcludedFamilies(build.excluded_families ?? [])
@@ -1535,13 +1556,15 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
     setExcludedStackingCategories(build.excluded_stacking_categories ?? [])
     setEffectLimits(build.effect_limits ?? {})
     setFamilyLimits(build.family_limits ?? {})
-  }, [build])
+  }, [build]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const saveMutation = useMutation({
     mutationFn: () =>
       BuildsService.updateBuild({
         buildId,
         requestBody: {
+          name: nameRef.current,
+          character: characterRef.current,
           groups: groupsRef.current,
           required_effects: [],
           required_families: [],
@@ -1578,17 +1601,10 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
     saveTimerRef.current = setTimeout(() => saveMutation.mutate(), 800)
   }, [saveMutation])
 
-  const renameMutation = useMutation({
-    mutationFn: (name: string) =>
-      BuildsService.updateBuild({ buildId, requestBody: { name } }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["builds"] }),
-    onError: handleError.bind(showErrorToast),
-  })
-
   return (
     <BuildEditorUI
       name={(buildRaw as any).name}
-      character={(buildRaw as any).character}
+      character={character}
       groups={groups}
       excludedEffects={excludedEffects}
       excludedFamilies={excludedFamilies}
@@ -1646,7 +1662,15 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
         setFamilyLimits(limits)
         scheduleAutoSave()
       }}
-      onRename={(name) => renameMutation.mutate(name)}
+      onRename={(name) => {
+        nameRef.current = name
+        scheduleAutoSave()
+      }}
+      onChangeCharacter={(c) => {
+        setCharacter(c)
+        characterRef.current = c
+        scheduleAutoSave()
+      }}
     />
   )
 }
@@ -1683,6 +1707,7 @@ function LocalBuildEditorContent({ buildId }: { buildId: string }) {
     []) as StackingCategory[]
   const build = getById(buildId)
 
+  const [character, setCharacter] = useState(build?.character ?? "Wylder")
   const [groups, setGroups] = useState<WeightGroup[]>(
     () => build?.groups ?? DEFAULT_GROUPS.map((g) => ({ ...g })),
   )
@@ -1729,6 +1754,8 @@ function LocalBuildEditorContent({ buildId }: { buildId: string }) {
     () => build?.family_limits ?? {},
   )
 
+  const nameRef = useRef(build?.name ?? "")
+  const characterRef = useRef(character)
   const groupsRef = useRef(groups)
   const excludedEffectsRef = useRef(excludedEffects)
   const excludedFamiliesRef = useRef(excludedFamilies)
@@ -1739,6 +1766,7 @@ function LocalBuildEditorContent({ buildId }: { buildId: string }) {
   const excludedStackingCategoriesRef = useRef(excludedStackingCategories)
   const effectLimitsRef = useRef(effectLimits)
   const familyLimitsRef = useRef(familyLimits)
+  characterRef.current = character
   groupsRef.current = groups
   excludedEffectsRef.current = excludedEffects
   excludedFamiliesRef.current = excludedFamilies
@@ -1755,38 +1783,29 @@ function LocalBuildEditorContent({ buildId }: { buildId: string }) {
 
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
+  const buildLocalSavePatch = () => ({
+    name: nameRef.current,
+    character: characterRef.current,
+    groups: groupsRef.current,
+    required_effects: [] as number[],
+    required_families: [] as string[],
+    excluded_effects: excludedEffectsRef.current,
+    excluded_families: excludedFamiliesRef.current,
+    excluded_stacking_categories: excludedStackingCategoriesRef.current,
+    include_deep: includeDeepRef.current,
+    curse_max: curseMaxRef.current,
+    default_curse_weight: defaultCurseWeightRef.current,
+    pinned_relics: pinnedRelicsRef.current,
+    effect_limits: effectLimitsRef.current,
+    family_limits: familyLimitsRef.current,
+  })
+
   // Store flush function in ref so cleanup always calls latest version
   const flushSaveRef = useRef(() => {
-    updateRef.current(buildId, {
-      groups: groupsRef.current,
-      required_effects: [],
-      required_families: [],
-      excluded_effects: excludedEffectsRef.current,
-      excluded_families: excludedFamiliesRef.current,
-      excluded_stacking_categories: excludedStackingCategoriesRef.current,
-      include_deep: includeDeepRef.current,
-      curse_max: curseMaxRef.current,
-      default_curse_weight: defaultCurseWeightRef.current,
-      pinned_relics: pinnedRelicsRef.current,
-      effect_limits: effectLimitsRef.current,
-      family_limits: familyLimitsRef.current,
-    })
+    updateRef.current(buildId, buildLocalSavePatch())
   })
   flushSaveRef.current = () => {
-    updateRef.current(buildId, {
-      groups: groupsRef.current,
-      required_effects: [],
-      required_families: [],
-      excluded_effects: excludedEffectsRef.current,
-      excluded_families: excludedFamiliesRef.current,
-      excluded_stacking_categories: excludedStackingCategoriesRef.current,
-      include_deep: includeDeepRef.current,
-      curse_max: curseMaxRef.current,
-      default_curse_weight: defaultCurseWeightRef.current,
-      pinned_relics: pinnedRelicsRef.current,
-      effect_limits: effectLimitsRef.current,
-      family_limits: familyLimitsRef.current,
-    })
+    updateRef.current(buildId, buildLocalSavePatch())
   }
 
   useEffect(() => {
@@ -1801,20 +1820,7 @@ function LocalBuildEditorContent({ buildId }: { buildId: string }) {
   const scheduleAutoSave = useCallback(() => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
     saveTimerRef.current = setTimeout(() => {
-      updateRef.current(buildId, {
-        groups: groupsRef.current,
-        required_effects: [],
-        required_families: [],
-        excluded_effects: excludedEffectsRef.current,
-        excluded_families: excludedFamiliesRef.current,
-        excluded_stacking_categories: excludedStackingCategoriesRef.current,
-        include_deep: includeDeepRef.current,
-        curse_max: curseMaxRef.current,
-        default_curse_weight: defaultCurseWeightRef.current,
-        pinned_relics: pinnedRelicsRef.current,
-        effect_limits: effectLimitsRef.current,
-        family_limits: familyLimitsRef.current,
-      })
+      updateRef.current(buildId, buildLocalSavePatch())
     }, 400)
   }, [buildId])
 
@@ -1830,7 +1836,7 @@ function LocalBuildEditorContent({ buildId }: { buildId: string }) {
   return (
     <BuildEditorUI
       name={build.name}
-      character={build.character}
+      character={character}
       groups={groups}
       excludedEffects={excludedEffects}
       excludedFamilies={excludedFamilies}
@@ -1888,7 +1894,15 @@ function LocalBuildEditorContent({ buildId }: { buildId: string }) {
         setFamilyLimits(limits)
         scheduleAutoSave()
       }}
-      onRename={(name) => updateRef.current(buildId, { name })}
+      onRename={(name) => {
+        nameRef.current = name
+        scheduleAutoSave()
+      }}
+      onChangeCharacter={(c) => {
+        setCharacter(c)
+        characterRef.current = c
+        scheduleAutoSave()
+      }}
     />
   )
 }
