@@ -240,8 +240,17 @@ class VesselOptimizer:
                 completed += 1
                 yield {"type": "progress", "vessel": completed, "total": total, "name": name}
 
-        all_results.sort(key=lambda r: -r.total_score)
-        yield {"type": "result", "data": all_results[:top_n]}
+        # Deduplicate results that are functionally identical (same effects
+        # per slot) but use different physical copies of a relic.
+        seen_layouts: set[tuple] = set()
+        unique: list[VesselResult] = []
+        for r in all_results:
+            fp = r.layout_fingerprint()
+            if fp not in seen_layouts:
+                seen_layouts.add(fp)
+                unique.append(r)
+        unique.sort(key=lambda r: -r.total_score)
+        yield {"type": "result", "data": unique[:top_n]}
 
     def optimize_all_vessels(self, build: BuildDefinition, inventory: RelicInventory,
                              hero_type: int, top_n: int = 10,
@@ -283,8 +292,17 @@ class VesselOptimizer:
                 _vid, _name, results = future.result()
                 all_results.extend(results)
 
-        all_results.sort(key=lambda r: -r.total_score)
-        return all_results[:top_n]
+        # Deduplicate results that are functionally identical (same effects
+        # per slot) but use different physical copies of a relic.
+        seen_layouts: set[tuple] = set()
+        unique: list[VesselResult] = []
+        for r in all_results:
+            fp = r.layout_fingerprint()
+            if fp not in seen_layouts:
+                seen_layouts.add(fp)
+                unique.append(r)
+        unique.sort(key=lambda r: -r.total_score)
+        return unique[:top_n]
 
     # ------------------------------------------------------------------
     # Result builder

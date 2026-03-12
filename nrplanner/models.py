@@ -234,6 +234,20 @@ class VesselResult(BaseModel):
     meets_requirements: bool = True
     missing_requirements: list[int | str] = Field(default_factory=list)
 
+    def layout_fingerprint(self) -> tuple:
+        """Hashable key identifying the functional layout (ignores ga_handle).
+
+        Two results that differ only in which physical copy of a relic sits
+        in a slot will produce the same fingerprint.
+        """
+        slots = []
+        for a in self.assignments:
+            if a.relic:
+                slots.append((tuple(a.relic.effects), tuple(a.relic.curses)))
+            else:
+                slots.append(None)
+        return (self.vessel_id, tuple(slots))
+
 
 # ---------------------------------------------------------------------------
 # Vessel stacking state
