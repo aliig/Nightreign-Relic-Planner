@@ -202,12 +202,8 @@ describe("UploadPage — success state with uploadResult", () => {
     // We need to trigger the onSuccess callback that useMutation uses.
     // Since useMutation is mocked, we patch mutate to directly set state.
     // The cleanest way: provide the actual onSuccess via a custom mutate mock.
-    let _capturedOnSuccess: ((data: typeof fakeResult) => void) | undefined
-
     // Re-mock useMutation for this test to capture the onSuccess callback
-    const { QueryClient, QueryClientProvider } = await import(
-      "@tanstack/react-query"
-    )
+    await import("@tanstack/react-query")
 
     // Unmock react-query temporarily and use real implementation with a mock API
     // Instead, simulate by rendering with mutation already succeeded by directly

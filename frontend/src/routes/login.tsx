@@ -35,8 +35,8 @@ type FormData = z.infer<typeof formSchema>
 
 export const Route = createFileRoute("/login")({
   component: Login,
-  validateSearch: (search: Record<string, string>) => ({
-    redirect: search.redirect as string | undefined,
+  validateSearch: z.object({
+    redirect: z.string().optional(),
   }),
   beforeLoad: async () => {
     if (isLoggedIn()) {

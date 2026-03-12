@@ -53,7 +53,7 @@ describe("useLocalBuilds", () => {
   it("update() patches an existing build by id", () => {
     const { result } = renderHook(() => useLocalBuilds())
 
-    let id: string
+    let id: string = ""
     act(() => {
       const b = result.current.create({ name: "Original", character: "Wylder" })
       id = b.id
@@ -71,7 +71,7 @@ describe("useLocalBuilds", () => {
   it("remove() deletes a build by id", () => {
     const { result } = renderHook(() => useLocalBuilds())
 
-    let id: string
+    let id: string = ""
     act(() => {
       const b = result.current.create({ name: "ToDelete", character: "Wylder" })
       id = b.id

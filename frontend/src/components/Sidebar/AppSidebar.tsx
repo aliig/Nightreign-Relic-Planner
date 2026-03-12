@@ -1,4 +1,4 @@
-import { Home, Layers, Package, Upload, Users, Zap } from "lucide-react"
+import { Home, Layers, Package, Upload, Users } from "lucide-react"
 
 import { Logo } from "@/components/Common/Logo"
 import {

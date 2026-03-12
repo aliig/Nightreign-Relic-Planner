@@ -153,12 +153,18 @@ export interface BuildCreate {
 export interface BuildUpdate {
   name?: string | null
   character?: string | null
-  tiers?: Record<string, number[]> | null
-  family_tiers?: Record<string, string[]> | null
+  groups?: Array<{ weight: number; effects: number[]; families: string[] }> | null
+  required_effects?: number[] | null
+  required_families?: string[] | null
+  excluded_effects?: number[] | null
+  excluded_families?: string[] | null
   include_deep?: boolean | null
   curse_max?: number | null
-  tier_weights?: Record<string, number> | null
+  default_curse_weight?: number | null
   pinned_relics?: number[] | null
+  excluded_stacking_categories?: number[] | null
+  effect_limits?: Record<number, number> | null
+  family_limits?: Record<string, number> | null
 }
 
 export interface SlotAssignment {

@@ -103,7 +103,7 @@ function loadFromStorage(): LocalBuild[] {
       if ("tiers" in obj && !("groups" in obj)) {
         return _migrateFromLegacy(obj)
       }
-      return obj as LocalBuild
+      return obj as unknown as LocalBuild
     })
   } catch {
     return []
