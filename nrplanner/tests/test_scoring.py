@@ -636,6 +636,141 @@ class TestExcludedStackingCategories:
         assert scorer.has_excluded_effect(relic, build) is False
 
 
+# Effects in compat=300 (Changes compatible armament's skill/sorcery/incantation)
+# Used to verify that the same priority logic applies to the second known
+# left-wins-in-game category.
+_ARM_HOARFROST_STOMP = 7124000  # ...skill to Hoarfrost Stomp
+_ARM_MAGMA_SHOT      = 7361300  # ...sorcery to Magma Shot
+_ARM_GLINTBLADE      = 7122700  # ...skill to Glintblade Phalanx
+_COMPAT_ARMAMENT     = 300
+
+
+class TestExcludedCategoryPositionalScoring:
+    """Bug-1 regression: unmatched undesired effects in an excluded compat
+    must incur the blocking penalty when the desired effect of the same
+    compat has not yet been placed to the LEFT.  Previously these effects
+    fell through scoring entirely (cat=None gate) and landed in priority
+    slots for free.
+    """
+
+    def test_unmatched_undesired_dormant_blocks_when_desired_not_yet_placed(
+        self, scorer: BuildScorer, ds: SourceDataHandler,
+    ) -> None:
+        """Greataxes Dormant Power (no group/family in build) must score
+        -max_desired_weight when Greatshields hasn't been placed yet."""
+        build = _dormant_build()  # weight 10 group on Greatshields
+        relic = _make_relic([_DORMANT_GREATAXES, EMPTY, EMPTY])
+        state = VesselState(
+            ds,
+            desired_compat_effects=scorer.get_desired_compat_effects(build),
+        )
+        score = scorer.score_relic_in_context(relic, build, state)
+        assert score == -10, (
+            f"Undesired Dormant Power must score -max_desired_weight=-10 "
+            f"when desired not yet placed; got {score}"
+        )
+
+    def test_unmatched_undesired_dormant_zero_after_desired_placed(
+        self, scorer: BuildScorer, ds: SourceDataHandler,
+    ) -> None:
+        """Once Greatshields (desired) is placed, a later slot's undesired
+        Dormant Power becomes harmless dead weight (score 0)."""
+        build = _dormant_build()
+        state = VesselState(
+            ds,
+            desired_compat_effects=scorer.get_desired_compat_effects(build),
+        )
+        # Place desired first
+        state.place(_make_relic([_DORMANT_GREATSHIELDS, EMPTY, EMPTY]))
+        relic = _make_relic([_DORMANT_GREATAXES, EMPTY, EMPTY])
+        score = scorer.score_relic_in_context(relic, build, state)
+        assert score == 0, (
+            f"Undesired Dormant Power must score 0 after desired is placed; got {score}"
+        )
+
+    def test_breakdown_marks_undesired_with_excl_category_status(
+        self, scorer: BuildScorer, ds: SourceDataHandler,
+    ) -> None:
+        """The breakdown for an undesired competitor should report the
+        excluded-category status string so the UI can label it."""
+        build = _dormant_build()
+        relic = _make_relic([_DORMANT_GREATAXES, EMPTY, EMPTY])
+        state = VesselState(
+            ds,
+            desired_compat_effects=scorer.get_desired_compat_effects(build),
+        )
+        bd = scorer.get_breakdown(relic, build, state)
+        entry = next(b for b in bd if b["effect_id"] == _DORMANT_GREATAXES)
+        assert entry["override_status"] in (
+            "excl_category_blocking", "excl_category_nullified",
+        )
+        assert entry["redundant"] is True
+
+    def test_armament_compat_undesired_blocks_when_desired_not_yet_placed(
+        self, scorer: BuildScorer, ds: SourceDataHandler,
+    ) -> None:
+        """Same priority logic must apply to compat=300
+        (Changes compatible armament's skill/sorcery/...).  This is the user's
+        explicit follow-up: "this should also apply for the other similar
+        stacking category family."
+        """
+        build = BuildDefinition(
+            id="armament-test", name="Armament Test", character="Wylder",
+            groups=[WeightGroup(weight=20, effects=[_ARM_MAGMA_SHOT])],
+            excluded_stacking_categories=[_COMPAT_ARMAMENT],
+        )
+        relic = _make_relic([_ARM_HOARFROST_STOMP, EMPTY, EMPTY])
+        state = VesselState(
+            ds,
+            desired_compat_effects=scorer.get_desired_compat_effects(build),
+        )
+        score = scorer.score_relic_in_context(relic, build, state)
+        assert score == -20, (
+            f"Undesired armament-changing effect must score -20 when desired "
+            f"Magma Shot not yet placed; got {score}"
+        )
+
+    def test_excluded_category_with_no_desired_is_handled_by_prefilter(
+        self, scorer: BuildScorer, ds: SourceDataHandler,
+    ) -> None:
+        """If a category is fully excluded (no desired exception), the
+        pre-filter alone handles it; the in-context scorer treats undesired
+        members as ordinary unmatched effects (score 0).  Regression guard
+        ensuring the new branch doesn't penalize categories without a dce
+        entry.
+        """
+        build = BuildDefinition(
+            id="t", name="T", character="Scholar",
+            excluded_stacking_categories=[_COMPAT_DORMANT],
+        )
+        # No desired effect in compat 6630000 → dce is empty for this compat
+        relic = _make_relic([_DORMANT_GREATAXES, EMPTY, EMPTY])
+        state = VesselState(
+            ds,
+            desired_compat_effects=scorer.get_desired_compat_effects(build),
+        )
+        score = scorer.score_relic_in_context(relic, build, state)
+        assert score == 0, (
+            "When no desired effect exists in the compat, in-context score "
+            "should be 0 (pre-filter would have removed the relic anyway)"
+        )
+
+    def test_protected_desired_effect_still_scores_positive(
+        self, scorer: BuildScorer, ds: SourceDataHandler,
+    ) -> None:
+        """The desired effect itself (Greatshields, in a weight-10 group) must
+        score at full weight even though its compat is in
+        excluded_stacking_categories."""
+        build = _dormant_build()
+        relic = _make_relic([_DORMANT_GREATSHIELDS, EMPTY, EMPTY])
+        state = VesselState(
+            ds,
+            desired_compat_effects=scorer.get_desired_compat_effects(build),
+        )
+        score = scorer.score_relic_in_context(relic, build, state)
+        assert score == 10, f"Desired effect must score at group weight; got {score}"
+
+
 class TestOrphanedExclCategoryEffects:
     """Verify the post-hoc validation layer for excluded stacking categories.
 
@@ -644,17 +779,28 @@ class TestOrphanedExclCategoryEffects:
     without the desired counterpart also being present.
     """
 
-    # -- Case 1: desired placed + undesired placed → OK ----------------------
+    # -- Case 1: desired placed + undesired placed in same slot → OK ---------
 
-    def test_desired_and_undesired_together_is_ok(
+    def test_desired_and_undesired_in_same_slot_is_ok(
         self, scorer: BuildScorer, ds: SourceDataHandler,
     ) -> None:
-        """If the desired effect (Greatshields) IS placed alongside an
-        undesired variant (Greataxes), the result is valid.  The game's
-        stacking rules mean the desired effect overrides the undesired one."""
+        """If the desired effect (Greatshields) shares a slot with an undesired
+        variant (Greataxes), neither is left of the other so we accept it.
+        The desired could activate; we don't second-guess intra-relic order."""
         build = _dormant_build()
         desired = scorer.get_desired_compat_effects(build)
-        placed = {_DORMANT_GREATSHIELDS, _DORMANT_GREATAXES}
+        placed = [{_DORMANT_GREATSHIELDS, _DORMANT_GREATAXES}]
+        assert scorer.has_orphaned_excl_category_effects(
+            placed, build, desired) is False
+
+    def test_desired_left_of_undesired_is_ok(
+        self, scorer: BuildScorer, ds: SourceDataHandler,
+    ) -> None:
+        """Desired in slot 0, undesired in slot 1 — in-game leftmost wins, so
+        the desired activates."""
+        build = _dormant_build()
+        desired = scorer.get_desired_compat_effects(build)
+        placed = [{_DORMANT_GREATSHIELDS}, {_DORMANT_GREATAXES}]
         assert scorer.has_orphaned_excl_category_effects(
             placed, build, desired) is False
 
@@ -667,7 +813,7 @@ class TestOrphanedExclCategoryEffects:
         is valid."""
         build = _dormant_build()
         desired = scorer.get_desired_compat_effects(build)
-        placed = {_DORMANT_GREATSHIELDS}
+        placed = [{_DORMANT_GREATSHIELDS}, set()]
         assert scorer.has_orphaned_excl_category_effects(
             placed, build, desired) is False
 
@@ -677,12 +823,10 @@ class TestOrphanedExclCategoryEffects:
         self, scorer: BuildScorer, ds: SourceDataHandler,
     ) -> None:
         """If an undesired variant (Greataxes) is placed but the desired
-        effect (Greatshields) is NOT, the result is orphaned and must be
-        rejected.  This is the core bug scenario: a relic with Greataxes +
-        other good effects scored well, but the user never wanted Greataxes."""
+        effect (Greatshields) is NOT, the result is orphaned and rejected."""
         build = _dormant_build()
         desired = scorer.get_desired_compat_effects(build)
-        placed = {_DORMANT_GREATAXES}
+        placed = [{_DORMANT_GREATAXES}]
         assert scorer.has_orphaned_excl_category_effects(
             placed, build, desired) is True
 
@@ -695,7 +839,7 @@ class TestOrphanedExclCategoryEffects:
         the result is valid."""
         build = _dormant_build()
         desired = scorer.get_desired_compat_effects(build)
-        placed = {_TAKING_ATTACKS_UP}
+        placed = [{_TAKING_ATTACKS_UP}]
         assert scorer.has_orphaned_excl_category_effects(
             placed, build, desired) is False
 
@@ -713,7 +857,7 @@ class TestOrphanedExclCategoryEffects:
         )
         desired = scorer.get_desired_compat_effects(build)
         assert desired == {}
-        placed = {_DORMANT_DAGGERS}
+        placed = [{_DORMANT_DAGGERS}]
         assert scorer.has_orphaned_excl_category_effects(
             placed, build, desired) is False
 
@@ -725,7 +869,38 @@ class TestOrphanedExclCategoryEffects:
         """Multiple undesired variants placed without the desired effect."""
         build = _dormant_build()
         desired = scorer.get_desired_compat_effects(build)
-        placed = {_DORMANT_DAGGERS, _DORMANT_GREATAXES}
+        placed = [{_DORMANT_DAGGERS}, {_DORMANT_GREATAXES}]
+        assert scorer.has_orphaned_excl_category_effects(
+            placed, build, desired) is True
+
+    # -- Case 7: undesired LEFT of desired → REJECTED (priority block) -------
+
+    def test_undesired_left_of_desired_is_priority_blocked(
+        self, scorer: BuildScorer, ds: SourceDataHandler,
+    ) -> None:
+        """Undesired in slot 0, desired in slot 1: in-game the leftmost wins,
+        so the undesired Dormant Power activates and the desired one is dead.
+        This is the magma-undertaker bug.
+        """
+        build = _dormant_build()
+        desired = scorer.get_desired_compat_effects(build)
+        placed = [{_DORMANT_GREATAXES}, {_DORMANT_GREATSHIELDS}]
+        assert scorer.has_orphaned_excl_category_effects(
+            placed, build, desired) is True
+
+    def test_undesired_in_deep_slot_left_of_desired_in_deeper_slot(
+        self, scorer: BuildScorer, ds: SourceDataHandler,
+    ) -> None:
+        """Reproduces the live magma-undertaker layout: undesired in slot 3
+        (leftmost deep), desired in slot 5 (rightmost deep)."""
+        build = _dormant_build()
+        desired = scorer.get_desired_compat_effects(build)
+        placed = [
+            set(), set(), set(),
+            {_DORMANT_GREATAXES},
+            set(),
+            {_DORMANT_GREATSHIELDS},
+        ]
         assert scorer.has_orphaned_excl_category_effects(
             placed, build, desired) is True
 

@@ -203,23 +203,28 @@ class BuildScorer:
 
     def has_orphaned_excl_category_effects(
         self,
-        placed_effects: set[int],
+        placed_effects_per_slot: list[set[int]],
         build: BuildDefinition,
         desired_compat_effects: dict[int, set[int]] | None = None,
     ) -> bool:
-        """True if placed effects contain an undesired excluded-category effect
-        without the corresponding desired effect also being present.
+        """True if undesired excluded-category effects compromise the desired one.
 
-        Called after all vessel slots are assigned to validate that the result
-        doesn't include "orphaned" excluded-category effects (e.g. Dormant
-        Power Helps Discover Greataxes when only Greatshields was desired).
+        Two failure modes (both rejected):
+        1. **Orphaned**: the category has a desired effect and at least one
+           undesired effect is placed, but the desired effect is absent.
+        2. **Priority-blocked**: the desired effect is placed, but an undesired
+           effect in the same compat sits in a slot to its **left**. In-game,
+           the leftmost effect in the compat wins, so the undesired one
+           activates and the desired one becomes dead weight.
+
+        ``placed_effects_per_slot`` is the per-slot effect set in slot order
+        (leftmost first). Callers should include both effects and curses in
+        each slot's set, plus text-id aliases of effects when relevant.
         """
         dce = desired_compat_effects or {}
         if not dce:
             return False
         excl_cats = set(build.excluded_stacking_categories)
-        # For each excluded category with desired effects, check whether
-        # an undesired member is placed without the desired member.
         for compat, desired_ids in dce.items():
             if compat not in excl_cats:
                 continue
@@ -229,16 +234,29 @@ class BuildScorer:
                 text_id = self.data_source.get_effect_text_id(d)
                 if text_id != -1:
                     desired_expanded.add(text_id)
-            # Check if desired effect is among placed effects
-            if placed_effects & desired_expanded:
-                continue  # desired is present — OK
-            # Desired not present — check if any undesired from this compat was placed
-            for eff in placed_effects:
-                if eff in desired_expanded:
-                    continue
-                eff_compat = self.data_source.get_effect_conflict_id(eff)
-                if eff_compat == compat:
-                    return True  # orphaned undesired effect found
+
+            leftmost_desired = None
+            leftmost_undesired = None
+            for slot_idx, slot_effects in enumerate(placed_effects_per_slot):
+                if leftmost_desired is None and (slot_effects & desired_expanded):
+                    leftmost_desired = slot_idx
+                if leftmost_undesired is None:
+                    for eff in slot_effects:
+                        if eff in desired_expanded:
+                            continue
+                        eff_compat = self.data_source.get_effect_conflict_id(eff)
+                        if eff_compat == compat:
+                            leftmost_undesired = slot_idx
+                            break
+                if leftmost_desired is not None and leftmost_undesired is not None:
+                    break
+
+            if leftmost_undesired is None:
+                continue  # no undesired competitor — OK
+            if leftmost_desired is None:
+                return True  # orphaned: undesired present, desired absent
+            if leftmost_undesired < leftmost_desired:
+                return True  # priority-blocked: undesired wins in-game
         return False
 
     def _excluded_category_score(
@@ -410,28 +428,34 @@ class BuildScorer:
         for eff in relic.effects:
             if eff in (EMPTY_EFFECT, 0):
                 continue
+            # Excluded-category positional check fires regardless of whether
+            # the effect resolves to a build category. An undesired competitor
+            # in the same compat (e.g. wrong-weapon Dormant Power) blocks the
+            # desired effect when placed left of it; the penalty must apply
+            # even though the effect itself isn't in any weight group.
+            if self._is_excl_category_effect(eff, build, state):
+                _, w_for_penalty = self._resolve_category_and_weight(eff, build)
+                adj, _ = self._excluded_category_score(eff, w_for_penalty, build, state)
+                score += adj
+                continue
             cat, weight = self._resolve_category_and_weight(eff, build)
             if cat is not None and cat != "excluded":
                 if self._is_at_limit(eff, state):
                     continue  # at user-defined limit, score 0 (neutral)
-                # Positional stacking category handling
-                if self._is_excl_category_effect(eff, build, state):
-                    adj, _ = self._excluded_category_score(eff, weight, build, state)
-                    score += adj
-                else:
-                    score += self._effect_stacking_score(eff, cat, weight, state)
+                score += self._effect_stacking_score(eff, cat, weight, state)
         for curse in relic.curses:
             if curse in (EMPTY_EFFECT, 0):
+                continue
+            if self._is_excl_category_effect(curse, build, state):
+                _, w_for_penalty = self._resolve_category_and_weight(curse, build)
+                adj, _ = self._excluded_category_score(curse, w_for_penalty, build, state)
+                score += adj
                 continue
             cat, weight = self._resolve_category_and_weight(curse, build)
             if cat is not None and cat != "excluded":
                 if self._is_at_limit(curse, state):
                     continue  # at user-defined limit, score 0 (neutral)
-                if self._is_excl_category_effect(curse, build, state):
-                    adj, _ = self._excluded_category_score(curse, weight, build, state)
-                    score += adj
-                else:
-                    score += self._effect_stacking_score(curse, cat, weight, state)
+                score += self._effect_stacking_score(curse, cat, weight, state)
             elif cat is None:
                 score += build.default_curse_weight
         for curse in relic.curses:
@@ -477,8 +501,11 @@ class BuildScorer:
                     base_score = build.default_curse_weight
                 override_status = None
 
-                # Positional stacking category handling
-                if (has_state and cat is not None and cat != "excluded"
+                # Positional stacking category handling — fires regardless of
+                # whether the effect resolves to a build category, because an
+                # undesired competitor (no group/family match) still blocks the
+                # desired effect in the same compat when placed to its left.
+                if (has_state
                         and self._is_excl_category_effect(eff, build, state)):
                     adj, excl_status = self._excluded_category_score(
                         eff, weight, build, state)

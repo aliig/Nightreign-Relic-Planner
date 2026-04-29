@@ -54,13 +54,12 @@ class VesselOptimizer:
         self.scorer = scorer
 
     @staticmethod
-    def _placed_effect_ids(result: VesselResult) -> set[int]:
-        """Collect all effect IDs from placed relics in a VesselResult."""
-        ids: set[int] = set()
-        for slot in result.assignments:
-            if slot.relic:
-                ids.update(slot.relic.all_effects)
-        return ids
+    def _placed_effects_per_slot(result: VesselResult) -> list[set[int]]:
+        """Per-slot effect IDs (effects + curses), in slot order (leftmost first)."""
+        return [
+            set(slot.relic.all_effects) if slot.relic else set()
+            for slot in result.assignments
+        ]
 
     # ------------------------------------------------------------------
     # Public API
@@ -176,15 +175,15 @@ class VesselOptimizer:
             for assignment in raw
         ]
 
-        # Post-hoc filter: drop results where an undesired effect from an
-        # excluded stacking category was placed but the desired effect from
-        # that category was NOT.  This enforces the user intent: "exclude
-        # this category, except for this one specific effect."
+        # Post-hoc filter: drop results where the desired effect of an
+        # excluded stacking category is missing OR is overridden by an
+        # undesired competitor placed to its left (in-game, the leftmost
+        # effect in a no_stack compat wins).
         if desired_compat_effs:
             results = [
                 r for r in results
                 if not self.scorer.has_orphaned_excl_category_effects(
-                    self._placed_effect_ids(r), build, desired_compat_effs)
+                    self._placed_effects_per_slot(r), build, desired_compat_effs)
             ]
 
         return results

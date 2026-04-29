@@ -638,3 +638,215 @@ class TestRealSaveFixture:
         results = optimizer.optimize_all_vessels(build, real_inventory, 1, top_n=5)
         _assert_score_consistency(results)
         _assert_redundant_zero(results)
+
+
+# ---------------------------------------------------------------------------
+# Excluded stacking category — leftmost-wins priority enforcement
+#
+# Regression test for the magma-undertaker bug: when a build excludes a
+# whole stacking category (e.g. "Dormant Power Helps Discover X" or
+# "Changes compatible armament's …") with one desired exception, the
+# optimizer must NOT place an undesired competitor in a slot to the left
+# of the desired one — in-game, the leftmost effect in the compat wins,
+# which would silently override the user's chosen effect.
+# ---------------------------------------------------------------------------
+
+# All compat=6630000, no_stack
+_DORMANT_CURVED_SWORDS = 6630400
+_DORMANT_GREAT_HAMMERS = 6631300
+_DORMANT_DAGGERS_INT   = 6630000
+_COMPAT_DORMANT_INT    = 6630000
+
+# All compat=300, no_stack
+_ARM_HOARFROST_STOMP_INT = 7124000
+_ARM_MAGMA_SHOT_INT      = 7361300
+_COMPAT_ARMAMENT_INT     = 300
+
+
+def _excl_compat_build(
+    desired_eff: int,
+    compat: int,
+    weight: int = 100,
+) -> BuildDefinition:
+    """Build that excludes a compat category with one desired exception."""
+    return BuildDefinition(
+        id="excl-compat-test",
+        name="Excl Compat Test",
+        character="Wylder",
+        groups=[WeightGroup(weight=weight, effects=[desired_eff])],
+        excluded_stacking_categories=[compat],
+        include_deep=True,
+        curse_max=2,
+    )
+
+
+class TestExcludedCompatPriorityEnforcement:
+    """End-to-end optimizer tests verifying leftmost-wins priority for
+    excluded stacking categories with a desired exception.
+    """
+
+    def _all_results_compliant(
+        self,
+        results,
+        ds: SourceDataHandler,
+        compat: int,
+        desired_id: int,
+    ) -> None:
+        """Assert that for every result, the desired effect (if placed) is in
+        a slot ≤ the leftmost slot containing any undesired competitor in the
+        same compat."""
+        for result in results:
+            leftmost_desired = None
+            leftmost_undesired = None
+            for slot_idx, a in enumerate(result.assignments):
+                if a.relic is None:
+                    continue
+                effs = set(a.relic.all_effects)
+                if leftmost_desired is None and desired_id in effs:
+                    leftmost_desired = slot_idx
+                if leftmost_undesired is None:
+                    for e in effs:
+                        if e == desired_id:
+                            continue
+                        if ds.get_effect_conflict_id(e) == compat:
+                            leftmost_undesired = slot_idx
+                            break
+            if leftmost_undesired is None:
+                continue  # no competitor — fine
+            assert leftmost_desired is not None, (
+                f"Vessel '{result.vessel_name}': undesired competitor in compat "
+                f"{compat} at slot {leftmost_undesired} but no desired effect "
+                f"placed (orphaned)"
+            )
+            assert leftmost_desired <= leftmost_undesired, (
+                f"Vessel '{result.vessel_name}': desired effect {desired_id} "
+                f"at slot {leftmost_desired} is dominated by undesired "
+                f"competitor at slot {leftmost_undesired} (leftmost wins in-game)"
+            )
+
+    def test_undesired_dormant_never_left_of_desired_curved_swords(
+        self, optimizer: VesselOptimizer, ds: SourceDataHandler,
+    ) -> None:
+        """Synthetic magma-undertaker scenario: a relic with Great Hammers
+        Dormant Power + a strong unrelated effect must not be picked for a
+        slot left of the relic carrying Curved Swords Dormant Power.
+        """
+        build = _excl_compat_build(_DORMANT_CURVED_SWORDS, _COMPAT_DORMANT_INT)
+        # Two yellow relics, deep — both viable for the same slot positions.
+        # Relic A (deep): Curved Swords + medium effect.
+        # Relic B (deep): Great Hammers + a strong unrelated effect (HP
+        # restore +2 = +50). Without the fix, B was preferred for the
+        # leftmost deep slot because the optimizer didn't penalize the
+        # undesired Dormant Power.
+        relic_curved = _make_relic(
+            [_DORMANT_CURVED_SWORDS, _PHYSICAL_ATK_1, EMPTY],
+            color="Yellow", is_deep=True, ga_handle=1,
+        )
+        relic_hammers = _make_relic(
+            [_DORMANT_GREAT_HAMMERS, _HP_RESTORE_PLUS2, EMPTY],
+            color="Yellow", is_deep=True, ga_handle=2,
+        )
+        # Add a benign filler so the rest of the vessel can be filled
+        filler = _make_relic([_PHYSICAL_ATK_1, EMPTY, EMPTY], color="Yellow", ga_handle=3)
+        inventory = RelicInventory.from_owned_relics(
+            [relic_curved, relic_hammers, filler])
+
+        results = optimizer.optimize_all_vessels(build, inventory, 1, top_n=10)
+        _assert_score_consistency(results)
+        # Strict invariant: no result violates leftmost priority.
+        self._all_results_compliant(
+            results, ds, _COMPAT_DORMANT_INT, _DORMANT_CURVED_SWORDS)
+
+    def test_armament_compat_priority_enforced(
+        self, optimizer: VesselOptimizer, ds: SourceDataHandler,
+    ) -> None:
+        """Same priority enforcement for compat=300 (Changes compatible
+        armament's …).  Reproduces the user's follow-up requirement.
+        """
+        build = _excl_compat_build(
+            _ARM_MAGMA_SHOT_INT, _COMPAT_ARMAMENT_INT, weight=50)
+        relic_magma = _make_relic(
+            [_ARM_MAGMA_SHOT_INT, _PHYSICAL_ATK_1, EMPTY],
+            color="Yellow", is_deep=True, ga_handle=11,
+        )
+        relic_hoarfrost = _make_relic(
+            [_ARM_HOARFROST_STOMP_INT, _HP_RESTORE_PLUS2, EMPTY],
+            color="Yellow", is_deep=True, ga_handle=12,
+        )
+        filler = _make_relic(
+            [_PHYSICAL_ATK_1, EMPTY, EMPTY], color="Yellow", ga_handle=13)
+        inventory = RelicInventory.from_owned_relics(
+            [relic_magma, relic_hoarfrost, filler])
+
+        results = optimizer.optimize_all_vessels(build, inventory, 1, top_n=10)
+        self._all_results_compliant(
+            results, ds, _COMPAT_ARMAMENT_INT, _ARM_MAGMA_SHOT_INT)
+
+    def test_orphan_rejected_when_only_undesired_present(
+        self, optimizer: VesselOptimizer, ds: SourceDataHandler,
+    ) -> None:
+        """If only undesired competitors are available (no desired effect at
+        all), all results must be filtered out — the user's intent ("only
+        Curved Swords") is unmet by any layout."""
+        build = _excl_compat_build(_DORMANT_CURVED_SWORDS, _COMPAT_DORMANT_INT)
+        relic_hammers = _make_relic(
+            [_DORMANT_GREAT_HAMMERS, _HP_RESTORE_PLUS2, EMPTY],
+            color="Yellow", is_deep=True, ga_handle=21,
+        )
+        relic_daggers = _make_relic(
+            [_DORMANT_DAGGERS_INT, _PHYSICAL_ATK_1, EMPTY],
+            color="Yellow", is_deep=True, ga_handle=22,
+        )
+        inventory = RelicInventory.from_owned_relics(
+            [relic_hammers, relic_daggers])
+
+        results = optimizer.optimize_all_vessels(build, inventory, 1, top_n=10)
+        # Every undesired-only relic should have been dropped at the
+        # candidate-pruning stage (pre_score == 0 for the dormant effect, no
+        # build category match → pre_score is just from the unrelated effect
+        # = +50).  But the post-hoc filter must drop layouts that placed any
+        # undesired Dormant Power.  No surviving result may contain one.
+        for r in results:
+            for a in r.assignments:
+                if a.relic is None:
+                    continue
+                for e in a.relic.all_effects:
+                    if (ds.get_effect_conflict_id(e) == _COMPAT_DORMANT_INT
+                            and e != _DORMANT_CURVED_SWORDS):
+                        raise AssertionError(
+                            f"Vessel '{r.vessel_name}': undesired competitor "
+                            f"{e} survived without desired effect being placed"
+                        )
+
+    def test_desired_only_layout_is_preferred_over_undesired(
+        self, optimizer: VesselOptimizer, ds: SourceDataHandler,
+    ) -> None:
+        """Given a choice between (A) one relic with the desired effect and
+        (B) one relic with an undesired competitor + a higher unrelated
+        score, the optimizer must prefer (A) — because (B) would block the
+        desired effect when it eventually appears, and post-hoc the (B)
+        layout is rejected."""
+        build = _excl_compat_build(_DORMANT_CURVED_SWORDS, _COMPAT_DORMANT_INT)
+        # Same color/deep, only one of each can fit slot 3 (leftmost deep)
+        relic_curved = _make_relic(
+            [_DORMANT_CURVED_SWORDS, EMPTY, EMPTY],
+            color="Yellow", is_deep=True, ga_handle=31,
+        )
+        relic_hammers = _make_relic(
+            [_DORMANT_GREAT_HAMMERS, _HP_RESTORE_PLUS2, _PHYSICAL_ATK_1],
+            color="Yellow", is_deep=True, ga_handle=32,
+        )
+        inventory = RelicInventory.from_owned_relics(
+            [relic_curved, relic_hammers])
+
+        results = optimizer.optimize_all_vessels(build, inventory, 1, top_n=5)
+        assert results, "expected at least one result"
+        best = results[0]
+        # The best result must contain the desired Curved Swords effect.
+        all_effs = {
+            e for a in best.assignments if a.relic
+            for e in a.relic.all_effects
+        }
+        assert _DORMANT_CURVED_SWORDS in all_effs, (
+            f"Best result missing desired Curved Swords; effects={all_effs}"
+        )
