@@ -121,33 +121,40 @@ class VesselOptimizer:
         if num_free == 0:
             raw_free: list[list] = [[]]
         else:
-            total = sum(len(c) for c in candidates_per_free_slot)
-
             # Always run greedy first — it's fast O(n*k) and gives a
             # baseline score that seeds backtracking for aggressive pruning.
             raw_free = self._greedy_solve(
                 candidates_per_free_slot, num_free, build, top_n, desired_cw,
                 desired_compat_effs, effect_limit_by_name, family_limit_map)
 
-            if total <= 500 and num_free <= 6:
-                greedy_best = max(
-                    (sum(s for _, s in a) for a in raw_free), default=0)
-                bt_results = self._backtrack_solve(
-                    candidates_per_free_slot, num_free, build, top_n, desired_cw,
-                    desired_compat_effs, initial_threshold=greedy_best - 1,
-                    effect_limit_by_name=effect_limit_by_name,
-                    family_limit_map=family_limit_map)
-                if bt_results:
-                    # Merge and deduplicate by relic set
-                    seen: set[frozenset] = set()
-                    merged: list[list] = []
-                    for assignment in bt_results + raw_free:
-                        key = frozenset(
-                            r.ga_handle for r, _ in assignment if r is not None)
-                        if key not in seen:
-                            seen.add(key)
-                            merged.append(assignment)
-                    raw_free = merged
+            # Always run the exhaustive backtracking solver for an optimal
+            # assignment.  Greedy commits each slot before later slots are
+            # scored, so it can miss globally better placements — e.g. when a
+            # family/effect limit only bites once a later deep slot is filled,
+            # greedy over-values the earlier slot and locks in a worse relic.
+            # The per-call deadline in _backtrack_solve bounds worst-case
+            # runtime, and the greedy result is retained in the merge below as
+            # a floor whenever the search is truncated.  (Previously this was
+            # gated behind a `total <= 500` candidate cap, which silently
+            # disabled optimal search for large inventories.)
+            greedy_best = max(
+                (sum(s for _, s in a) for a in raw_free), default=0)
+            bt_results = self._backtrack_solve(
+                candidates_per_free_slot, num_free, build, top_n, desired_cw,
+                desired_compat_effs, initial_threshold=greedy_best - 1,
+                effect_limit_by_name=effect_limit_by_name,
+                family_limit_map=family_limit_map)
+            if bt_results:
+                # Merge and deduplicate by relic set
+                seen: set[frozenset] = set()
+                merged: list[list] = []
+                for assignment in bt_results + raw_free:
+                    key = frozenset(
+                        r.ga_handle for r, _ in assignment if r is not None)
+                    if key not in seen:
+                        seen.add(key)
+                        merged.append(assignment)
+                raw_free = merged
 
         # When solvers find no useful free-slot relics, still produce one
         # result so pinned relics (if any) are represented.

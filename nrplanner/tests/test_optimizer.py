@@ -8,7 +8,7 @@ import pytest
 
 from nrplanner import BuildScorer, VesselOptimizer, SourceDataHandler
 from nrplanner.models import (
-    BuildDefinition, OwnedRelic, RelicInventory, VesselResult,
+    BuildDefinition, OwnedRelic, RelicInventory, VesselResult, WeightGroup,
 )
 
 EMPTY = 4294967295  # EMPTY_EFFECT sentinel
@@ -211,3 +211,113 @@ class TestPinnedRelics:
         results_no_pins = optimizer.optimize_all_vessels(build_no_pins, small_inventory, 1)
         results_empty_pins = optimizer.optimize_all_vessels(build_empty_pins, small_inventory, 1)
         assert len(results_no_pins) == len(results_empty_pins)
+
+
+class TestGreedyMyopiaWithLimits:
+    """Regression: the exhaustive solver must run even for large candidate pools.
+
+    Greedy assigns slots left-to-right and commits each before later slots are
+    scored.  When a family limit only "bites" once a later DEEP slot is filled,
+    greedy over-values an earlier standard slot and locks in a worse relic.
+
+    Concretely (mirrors the real 'Claws undertaker' bug, Undertaker's Chalice):
+      - One White (wildcard) standard slot is contested by two relics:
+          A = X(+100) + PhysAtkUp+3(+80)            -> greedy sees 180 in slot 0
+          B = X(+100) + UltArtAutoCharge(+50)        -> 150, no limited family
+      - C in a deep slot carries PhysAtkUp+2(+100) from the SAME limited family.
+      - With family limit "Physical Attack Up" = 1, placing A in the (earlier)
+        White slot consumes the limit, so C scores 0; the true optimum places B
+        (freeing C for +100), netting more overall.
+
+    Greedy picks A; only the exhaustive backtracking solver finds B.  This used
+    to be gated behind a `total <= 500` candidate cap, so large inventories
+    silently fell back to greedy and produced the sub-optimal layout.  The pool
+    here is intentionally >500 to exercise that path.
+    """
+
+    # Real effect IDs (see test_gold_standard for the same convention).
+    _X       = 7012300   # Improved Damage Negation at Low HP (stack, own family)
+    _Y       = 7000902   # Ultimate Art Auto Charge +3 (stack)
+    _PAU3    = 6001400   # Physical Attack Up +3 (stack, family "Physical Attack Up")
+    _PAU2    = 7001402   # Physical Attack Up +2 (stack, family "Physical Attack Up")
+    _FAMILY  = "Physical Attack Up"
+
+    A_HANDLE = 0xC1000001
+    B_HANDLE = 0xC1000002
+    C_HANDLE = 0xC1000003
+
+    def _guard_game_data_assumptions(self, ds: SourceDataHandler) -> None:
+        # If game data drifts and breaks these assumptions, fail loudly here
+        # rather than letting the regression test silently pass.
+        assert ds.get_effect_stacking_type(self._X) == "stack"
+        assert ds.get_effect_stacking_type(self._Y) == "stack"
+        assert ds.get_effect_stacking_type(self._PAU3) == "stack"
+        assert ds.get_effect_stacking_type(self._PAU2) == "stack"
+        assert ds.get_effect_family(self._PAU3) == self._FAMILY
+        assert ds.get_effect_family(self._PAU2) == self._FAMILY
+        assert ds.get_effect_family(self._X) != self._FAMILY
+        assert ds.get_effect_family(self._Y) != self._FAMILY
+
+    def _build(self) -> BuildDefinition:
+        return BuildDefinition(
+            id="myopia", name="Greedy Myopia", character="Wylder",
+            include_deep=True, curse_max=1,
+            groups=[
+                WeightGroup(weight=100, effects=[self._X, self._PAU2]),
+                WeightGroup(weight=80,  effects=[self._PAU3]),
+                WeightGroup(weight=50,  effects=[self._Y]),
+            ],
+            family_limits={self._FAMILY: 1},
+        )
+
+    def _inventory(self) -> RelicInventory:
+        relics = [
+            # Contested White-slot pair (mutually exclusive — A is Red, B is Blue,
+            # so each fits ONLY the single White standard slot below).
+            _make_relic([self._X, self._PAU3, EMPTY], color="Red",  ga_handle=self.A_HANDLE),
+            _make_relic([self._X, self._Y, EMPTY],    color="Blue", ga_handle=self.B_HANDLE),
+            # Deep relic carrying the limited family's high-value variant.
+            _make_relic([self._PAU2, EMPTY, EMPTY], color="Blue", is_deep=True,
+                        ga_handle=self.C_HANDLE),
+        ]
+        # Filler relics, each worth +50 (< B's 150 and < the +70 swap margin),
+        # purely to push the candidate pool > 500 and force the large-pool path.
+        h = 0xC2000000
+        for _ in range(330):  # Red standard -> only the White slot sees these
+            relics.append(_make_relic([self._Y, EMPTY, EMPTY], color="Red", ga_handle=h)); h += 1
+        for color in ("Blue", "Green", "Yellow"):  # deep fillers per deep slot
+            for _ in range(70):
+                relics.append(_make_relic([self._Y, EMPTY, EMPTY], color=color,
+                                          is_deep=True, ga_handle=h)); h += 1
+        return RelicInventory.from_owned_relics(relics)
+
+    def test_exhaustive_solver_beats_greedy_on_large_pool(
+        self, optimizer: VesselOptimizer, ds: SourceDataHandler
+    ) -> None:
+        self._guard_game_data_assumptions(ds)
+        build = self._build()
+        inventory = self._inventory()
+        # Slot 0 = White wildcard (contested); deep slots 3/4/5 = Blue/Green/Yellow.
+        vessel = {
+            "Name": "Synthetic Test Vessel", "Character": "Wylder", "unlockFlag": 0,
+            "_id": 999999,
+            "Colors": ("White", "Green", "Yellow", "Blue", "Green", "Yellow"),
+        }
+
+        results = optimizer.optimize(build, inventory, vessel, top_n=3)
+        assert results, "optimizer returned no results"
+        best = results[0]
+
+        slot0 = best.assignments[0].relic
+        assert slot0 is not None and slot0.ga_handle == self.B_HANDLE, (
+            "Contested White slot should hold relic B (the globally optimal pick); "
+            f"got {slot0.ga_handle if slot0 else None:#x} "
+            f"(A={self.A_HANDLE:#x}, B={self.B_HANDLE:#x}). "
+            "Greedy would lock in A here — exhaustive search was likely skipped."
+        )
+        # Optimum: B(150) + C(100) + two deep fillers(50+50) = 350.
+        # Greedy myopia would yield A(180) + three deep fillers(150) = 330.
+        assert best.total_score == 350, (
+            f"Expected optimal total 350, got {best.total_score} "
+            "(330 indicates the greedy myopia path)."
+        )
