@@ -11,6 +11,13 @@ from nrplanner.models import (
 )
 from nrplanner.scoring import BuildScorer
 
+# Time budget for one vessel's exhaustive backtracking search.  The solver is
+# optimal when it finishes within this window; if it is hit, it returns the
+# best layout found so far (always >= greedy) and flags the result via
+# VesselResult.search_truncated.  Generous by default — pruning normally makes
+# the search finish in well under a second even on large inventories.
+DEFAULT_BACKTRACK_DEADLINE_SECS = 10.0
+
 # ---------------------------------------------------------------------------
 # Worker-process globals (set once per worker by init_optimizer_worker)
 # ---------------------------------------------------------------------------
@@ -34,12 +41,14 @@ def _optimize_vessel_task(
     relics: list[OwnedRelic],
     vessel_data: dict,
     max_per_vessel: int,
+    deadline_secs: float = DEFAULT_BACKTRACK_DEADLINE_SECS,
 ) -> tuple[int, str, list[VesselResult]]:
     """Top-level picklable worker function for ProcessPoolExecutor."""
     assert _worker_ds is not None and _worker_scorer is not None
     inventory = RelicInventory.from_owned_relics(relics)
     optimizer = VesselOptimizer(_worker_ds, _worker_scorer)
-    results = optimizer.optimize(build, inventory, vessel_data, max_per_vessel)
+    results = optimizer.optimize(
+        build, inventory, vessel_data, max_per_vessel, deadline_secs=deadline_secs)
     vessel_id = vessel_data.get("_id", 0)
     for r in results:
         r.vessel_id = vessel_id
@@ -66,10 +75,13 @@ class VesselOptimizer:
     # ------------------------------------------------------------------
 
     def optimize(self, build: BuildDefinition, inventory: RelicInventory,
-                 vessel_data: dict, top_n: int = 3) -> list[VesselResult]:
+                 vessel_data: dict, top_n: int = 3,
+                 deadline_secs: float = DEFAULT_BACKTRACK_DEADLINE_SECS,
+                 ) -> list[VesselResult]:
         """Best relic assignments for one vessel. Returns up to top_n results."""
         slot_colors = vessel_data["Colors"]
         num_slots = 6 if build.include_deep else 3
+        search_truncated = False
 
         # Precompute conflict penalty weights once per optimization call.
         desired_cw = self.scorer.get_desired_conflict_weights(build)
@@ -139,11 +151,11 @@ class VesselOptimizer:
             # disabled optimal search for large inventories.)
             greedy_best = max(
                 (sum(s for _, s in a) for a in raw_free), default=0)
-            bt_results = self._backtrack_solve(
+            bt_results, search_truncated = self._backtrack_solve(
                 candidates_per_free_slot, num_free, build, top_n, desired_cw,
                 desired_compat_effs, initial_threshold=greedy_best - 1,
                 effect_limit_by_name=effect_limit_by_name,
-                family_limit_map=family_limit_map)
+                family_limit_map=family_limit_map, deadline_secs=deadline_secs)
             if bt_results:
                 # Merge and deduplicate by relic set
                 seen: set[frozenset] = set()
@@ -178,7 +190,8 @@ class VesselOptimizer:
         results = [
             self._build_vessel_result(
                 assignment, num_slots, slot_colors, vessel_data, build, desired_cw,
-                desired_compat_effs, effect_limit_by_name, family_limit_map)
+                desired_compat_effs, effect_limit_by_name, family_limit_map,
+                search_truncated=search_truncated)
             for assignment in raw
         ]
 
@@ -203,6 +216,7 @@ class VesselOptimizer:
         top_n: int = 10,
         max_per_vessel: int = 3,
         executor: ProcessPoolExecutor | None = None,
+        deadline_secs: float = DEFAULT_BACKTRACK_DEADLINE_SECS,
     ):
         """Like optimize_all_vessels but yields events for SSE streaming.
 
@@ -223,7 +237,8 @@ class VesselOptimizer:
             for i, v in enumerate(vessels):
                 vessel_data = dict(v)
                 vessel_data["_id"] = v["vessel_id"]
-                results = self.optimize(build, inventory, vessel_data, max_per_vessel)
+                results = self.optimize(build, inventory, vessel_data, max_per_vessel,
+                                        deadline_secs=deadline_secs)
                 for r in results:
                     r.vessel_id = v["vessel_id"]
                 all_results.extend(results)
@@ -237,6 +252,7 @@ class VesselOptimizer:
                 vd["_id"] = v["vessel_id"]
                 fut = executor.submit(
                     _optimize_vessel_task, build, relics, vd, max_per_vessel,
+                    deadline_secs,
                 )
                 futures[fut] = v
             completed = 0
@@ -262,6 +278,7 @@ class VesselOptimizer:
                              hero_type: int, top_n: int = 10,
                              max_per_vessel: int = 3,
                              executor: ProcessPoolExecutor | None = None,
+                             deadline_secs: float = DEFAULT_BACKTRACK_DEADLINE_SECS,
                              ) -> list[VesselResult]:
         """Optimize all vessels for a hero. Returns top_n globally ranked results.
 
@@ -279,7 +296,8 @@ class VesselOptimizer:
             for v in vessels:
                 vessel_data = dict(v)
                 vessel_data["_id"] = v["vessel_id"]
-                results = self.optimize(build, inventory, vessel_data, max_per_vessel)
+                results = self.optimize(build, inventory, vessel_data, max_per_vessel,
+                                        deadline_secs=deadline_secs)
                 for r in results:
                     r.vessel_id = v["vessel_id"]
                 all_results.extend(results)
@@ -292,6 +310,7 @@ class VesselOptimizer:
                 vd["_id"] = v["vessel_id"]
                 fut = executor.submit(
                     _optimize_vessel_task, build, relics, vd, max_per_vessel,
+                    deadline_secs,
                 )
                 futures[fut] = v
             for future in as_completed(futures):
@@ -321,6 +340,7 @@ class VesselOptimizer:
                              desired_compat_effects: dict[int, set[int]] | None = None,
                              effect_limit_by_name: dict[str, int] | None = None,
                              family_limit_map: dict[str, int] | None = None,
+                             search_truncated: bool = False,
                              ) -> VesselResult:
         """Construct VesselResult from raw slot assignments (left-to-right priority)."""
         slot_results: list[tuple] = [(None, 0, [])] * num_slots
@@ -407,6 +427,7 @@ class VesselOptimizer:
             total_score=total_score,
             meets_requirements=len(missing) == 0,
             missing_requirements=missing,
+            search_truncated=search_truncated,
         )
 
     # ------------------------------------------------------------------
@@ -489,11 +510,13 @@ class VesselOptimizer:
                          initial_threshold: int = -1,
                          effect_limit_by_name: dict[str, int] | None = None,
                          family_limit_map: dict[str, int] | None = None,
-                         ) -> list[list]:
+                         deadline_secs: float = DEFAULT_BACKTRACK_DEADLINE_SECS,
+                         ) -> tuple[list[list], bool]:
         top: list[tuple[int, list]] = []
         seen: set[frozenset] = set()
         min_threshold = initial_threshold
-        deadline = time.time() + 2.0
+        deadline = time.time() + deadline_secs
+        truncated = False
 
         state = VesselState(
             self.data_source,
@@ -505,8 +528,9 @@ class VesselOptimizer:
 
         def backtrack(slot_idx: int, current: list, used: set[int],
                       score: int) -> None:
-            nonlocal min_threshold
+            nonlocal min_threshold, truncated
             if time.time() > deadline:
+                truncated = True
                 return
 
             if slot_idx == num_slots:
@@ -557,7 +581,7 @@ class VesselOptimizer:
 
         backtrack(0, [(None, 0)] * num_slots, set(), 0)
         valid = [(s, a) for s, a in top if any(r is not None for r, _ in a)]
-        return [assignment for _, assignment in valid]
+        return [assignment for _, assignment in valid], truncated
 
     # ------------------------------------------------------------------
     # Pinned relic pre-assignment

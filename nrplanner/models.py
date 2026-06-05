@@ -233,6 +233,10 @@ class VesselResult(BaseModel):
     total_score: int
     meets_requirements: bool = True
     missing_requirements: list[int | str] = Field(default_factory=list)
+    # True when the exhaustive backtracking search hit its time budget before
+    # completing — the returned layout is the best found so far (always >=
+    # greedy) but may not be provably optimal.
+    search_truncated: bool = False
 
     def layout_fingerprint(self) -> tuple:
         """Hashable key identifying the functional layout (ignores ga_handle).

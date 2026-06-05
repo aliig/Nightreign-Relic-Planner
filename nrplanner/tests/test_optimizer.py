@@ -321,3 +321,24 @@ class TestGreedyMyopiaWithLimits:
             f"Expected optimal total 350, got {best.total_score} "
             "(330 indicates the greedy myopia path)."
         )
+        # The search completes comfortably for this pool, so the result is
+        # provably optimal — not a timed-out best-effort.
+        assert best.search_truncated is False
+
+    def test_deadline_truncation_is_flagged(
+        self, optimizer: VesselOptimizer, ds: SourceDataHandler
+    ) -> None:
+        """A search that hits its time budget still returns results, flagged."""
+        self._guard_game_data_assumptions(ds)
+        build = self._build()
+        inventory = self._inventory()
+        vessel = {
+            "Name": "Synthetic Test Vessel", "Character": "Wylder", "unlockFlag": 0,
+            "_id": 999999,
+            "Colors": ("White", "Green", "Yellow", "Blue", "Green", "Yellow"),
+        }
+        # A deadline already in the past forces immediate truncation; the
+        # greedy floor still yields a (sub-optimal) result, marked truncated.
+        results = optimizer.optimize(build, inventory, vessel, top_n=3, deadline_secs=-1.0)
+        assert results, "optimizer should still return the greedy floor on truncation"
+        assert all(r.search_truncated for r in results)
