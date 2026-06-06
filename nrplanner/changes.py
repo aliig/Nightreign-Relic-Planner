@@ -79,34 +79,34 @@ def relics_signature_from_fingerprints(fps: Iterable[Fingerprint]) -> str:
 
 
 def build_signature(build: BuildDefinition) -> str:
-    """Hash of the scoring-relevant build fields only.
+    """Hash of the scoring-relevant build fields, **order included**.
 
-    Excludes id/name/timestamps so a rename does not invalidate a snapshot.
-    Includes character (vessel eligibility) and pinned_relics: both change the
-    result, hence affect staleness.
+    Order is preserved (lists are not sorted) because the optimizer is
+    order-sensitive — e.g. leftmost-wins priority among excluded stacking
+    categories — so reordering effects/groups can change the result and must
+    therefore change the signature (which resets the build's snapshot).
+    Excludes id/name/timestamps so a rename does not invalidate.  effect/family
+    limits are maps, so their items are sorted for a canonical hash.
     """
     payload = {
         "character": build.character,
-        "groups": sorted(
-            [
-                {
-                    "weight": g.weight,
-                    "effects": sorted(g.effects),
-                    "families": sorted(g.families),
-                }
-                for g in build.groups
-            ],
-            key=lambda d: (d["weight"], d["effects"], d["families"]),
-        ),
-        "required_effects": sorted(build.required_effects),
-        "required_families": sorted(build.required_families),
-        "excluded_effects": sorted(build.excluded_effects),
-        "excluded_families": sorted(build.excluded_families),
+        "groups": [
+            {
+                "weight": g.weight,
+                "effects": list(g.effects),
+                "families": list(g.families),
+            }
+            for g in build.groups
+        ],
+        "required_effects": list(build.required_effects),
+        "required_families": list(build.required_families),
+        "excluded_effects": list(build.excluded_effects),
+        "excluded_families": list(build.excluded_families),
         "include_deep": build.include_deep,
         "curse_max": build.curse_max,
         "default_curse_weight": build.default_curse_weight,
-        "pinned_relics": sorted(build.pinned_relics),
-        "excluded_stacking_categories": sorted(build.excluded_stacking_categories),
+        "pinned_relics": list(build.pinned_relics),
+        "excluded_stacking_categories": list(build.excluded_stacking_categories),
         "effect_limits": {str(k): v for k, v in sorted(build.effect_limits.items())},
         "family_limits": dict(sorted(build.family_limits.items())),
     }

@@ -29,6 +29,7 @@ from app.api.deps import (
     OptimizerPoolDep,
     SessionDep,
 )
+from app.core.build_def import build_def_from_db
 from app.core.config import settings
 from app.core.db import engine
 from app.core.game_data import game_data_version
@@ -53,7 +54,6 @@ from nrplanner.models import (
     OwnedRelic,
     RelicInventory,
     VesselResult,
-    WeightGroup,
 )
 from nrplanner.optimizer import OPTIMIZER_VERSION, VesselOptimizer
 from nrplanner.scoring import BuildScorer
@@ -103,26 +103,6 @@ class _SnapshotCtx:
     build_id: uuid.UUID
     build_name: str
     slot_index: int
-
-
-def _build_def_from_db(db_build: Build) -> BuildDefinition:
-    return BuildDefinition(
-        id=str(db_build.id),
-        name=db_build.name,
-        character=db_build.character,
-        groups=[WeightGroup(**g) for g in (db_build.groups or [])],
-        required_effects=db_build.required_effects or [],
-        required_families=db_build.required_families or [],
-        excluded_effects=db_build.excluded_effects or [],
-        excluded_families=db_build.excluded_families or [],
-        include_deep=db_build.include_deep,
-        curse_max=db_build.curse_max,
-        default_curse_weight=db_build.default_curse_weight,
-        pinned_relics=db_build.pinned_relics or [],
-        excluded_stacking_categories=db_build.excluded_stacking_categories or [],
-        effect_limits={int(k): v for k, v in (db_build.effect_limits or {}).items()},
-        family_limits=db_build.family_limits or {},
-    )
 
 
 def _owned_from_db(relics: list[Relic]) -> list[OwnedRelic]:
@@ -178,7 +158,7 @@ def _resolve(
         if not profile or profile.owner_id != current_user.id:
             raise HTTPException(status_code=404, detail="Profile not found")
 
-        build_def = _build_def_from_db(db_build)
+        build_def = build_def_from_db(db_build)
         db_relics = session.exec(
             select(Relic).where(Relic.profile_id == req.profile_id)
         ).all()

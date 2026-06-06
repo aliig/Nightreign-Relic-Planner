@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException
 from sqlmodel import col, func, select
 
 from app.api.deps import CurrentUser, SessionDep
+from app.core.build_def import build_def_from_db
 from app.models import (
     Build,
     BuildCreate,
@@ -16,8 +17,10 @@ from app.models import (
     FeaturedBuildPublic,
     FeaturedBuildsPublic,
     Message,
+    OptimizationSnapshot,
     User,
 )
+from nrplanner.changes import build_signature
 
 router = APIRouter(prefix="/builds", tags=["builds"])
 
@@ -144,8 +147,19 @@ def update_build(
     for field, value in update_data.items():
         setattr(build, field, value)
     build.updated_at = datetime.now(timezone.utc)
-
     session.add(build)
+
+    # Reset change-tracking when the scoring definition actually changed: drop
+    # snapshots whose baseline no longer matches this build, so a build edit is
+    # never surfaced as a "since your last save" point change (and any pending
+    # review badge for it clears).  A pure rename leaves the signature unchanged.
+    new_sig = build_signature(build_def_from_db(build))
+    for snap in session.exec(
+        select(OptimizationSnapshot).where(OptimizationSnapshot.build_id == build.id)
+    ).all():
+        if snap.build_hash != new_sig:
+            session.delete(snap)
+
     session.commit()
     session.refresh(build)
     return build

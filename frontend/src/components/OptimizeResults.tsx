@@ -63,10 +63,13 @@ export function relicKey(r: {
   return `${r.real_id ?? ""}:${(r.effects ?? []).join(",")}:${(r.curses ?? []).join(",")}`
 }
 
-/** Content keys of relics that entered the best arrangement (for "NEW" badges). */
+/** Content keys of relics that entered the best arrangement (for "NEW" badges).
+ *  Only meaningful for a save-driven change — a build edit re-baselines and is
+ *  not a "since last save" event, so nothing is tagged NEW for it. */
 export function enteredKeys(change?: BuildChange | null): Set<string> {
   const keys = new Set<string>()
-  for (const r of change?.entered ?? []) keys.add(relicKey(r))
+  if (!change || change.cause !== "relics") return keys
+  for (const r of change.entered ?? []) keys.add(relicKey(r))
   return keys
 }
 
@@ -339,8 +342,10 @@ export function VesselCard({
 // --- Save-diff banner (shown above results after a re-optimize) ---
 
 export function ChangeBanner({ change }: { change?: BuildChange | null }) {
-  if (!change || change.status === "unchanged" || change.status === "new")
-    return null
+  // Only narrate changes a newer save caused. Build edits (cause "build_edit" /
+  // "mixed") and run-to-run search noise (cause null) re-baseline silently.
+  if (!change || change.cause !== "relics") return null
+  if (change.status === "unchanged" || change.status === "new") return null
 
   const delta = change.delta ?? 0
   let Icon = Sparkles

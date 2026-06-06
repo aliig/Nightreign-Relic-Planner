@@ -92,6 +92,13 @@ class TestSignatures:
         b2 = _build(groups=[WeightGroup(weight=20, effects=[10])])
         assert build_signature(b1) != build_signature(b2)
 
+    def test_build_signature_changes_on_reorder(self):
+        # Order matters to the optimizer (leftmost-wins), so a reorder must
+        # change the signature → resets the build's change-tracking snapshot.
+        b1 = _build(groups=[WeightGroup(weight=10, effects=[10, 20])])
+        b2 = _build(groups=[WeightGroup(weight=10, effects=[20, 10])])
+        assert build_signature(b1) != build_signature(b2)
+
 
 class TestMultisetDiff:
     def test_added_and_removed(self):
