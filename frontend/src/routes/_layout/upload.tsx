@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { createFileRoute, useNavigate } from "@tanstack/react-router"
-import { AlertCircle, Info, Upload, User2 } from "lucide-react"
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router"
+import { AlertCircle, Info, Sparkles, Upload, User2 } from "lucide-react"
 import { useRef, useState } from "react"
 
 import { SavesService } from "@/client"
@@ -81,6 +81,8 @@ function UploadPage() {
       setUploadResult(data)
       queryClient.invalidateQueries({ queryKey: ["profiles"] })
       queryClient.invalidateQueries({ queryKey: ["save-status"] })
+      queryClient.invalidateQueries({ queryKey: ["builds"] })
+      queryClient.invalidateQueries({ queryKey: ["build-changes"] })
       if (!data.persisted) {
         storeAnonUploadMeta({
           profile_count: data.profile_count,
@@ -104,6 +106,12 @@ function UploadPage() {
         showSuccessToast(
           `Save imported — ${data.profile_count} profile${data.profile_count !== 1 ? "s" : ""} found.`,
         )
+        const affected = data.affected_builds ?? []
+        if (affected.length > 0) {
+          showSuccessToast(
+            `${affected.length} build${affected.length !== 1 ? "s" : ""} may have a better arrangement — open to review.`,
+          )
+        }
       }
     },
     onError: handleError.bind(showErrorToast),
@@ -200,6 +208,41 @@ function UploadPage() {
             Found {uploadResult.profile_count} profile
             {uploadResult.profile_count !== 1 ? "s" : ""}
           </h2>
+          {uploadResult.affected_builds &&
+            uploadResult.affected_builds.length > 0 && (
+              <Alert>
+                <Sparkles className="h-4 w-4" />
+                <AlertTitle>
+                  {uploadResult.relic_delta &&
+                  (uploadResult.relic_delta.added ?? 0) > 0
+                    ? `${uploadResult.relic_delta.added} new relic${uploadResult.relic_delta.added !== 1 ? "s" : ""} — `
+                    : ""}
+                  {uploadResult.affected_builds.length} build
+                  {uploadResult.affected_builds.length !== 1 ? "s" : ""} to
+                  review
+                </AlertTitle>
+                <AlertDescription>
+                  <ul className="mt-1 space-y-0.5">
+                    {uploadResult.affected_builds.map((c) => (
+                      <li key={`${c.build_id}-${c.slot_index}`}>
+                        <Link
+                          to="/builds/$buildId/optimize"
+                          params={{ buildId: c.build_id ?? "" }}
+                          className="underline"
+                        >
+                          {c.build_name || "Build"}
+                        </Link>
+                        {c.status === "broken_pin"
+                          ? " — a pinned relic is gone"
+                          : c.relevant_added
+                            ? ` — ${c.relevant_added} relevant new relic${c.relevant_added !== 1 ? "s" : ""}`
+                            : ""}
+                      </li>
+                    ))}
+                  </ul>
+                </AlertDescription>
+              </Alert>
+            )}
           <div className="grid gap-3 sm:grid-cols-2">
             {uploadResult.profiles.map((prof) => (
               <Card

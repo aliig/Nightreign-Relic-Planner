@@ -229,7 +229,7 @@ export async function migrateLocalBuildsToDb(): Promise<number> {
         await BuildsService.updateBuild({
           buildId: created.id,
           requestBody: {
-            groups: build.groups,
+            groups: build.groups as unknown as { [key: string]: unknown }[],
             required_effects: build.required_effects,
             required_families: build.required_families,
             excluded_effects: build.excluded_effects,

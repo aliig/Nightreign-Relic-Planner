@@ -1,6 +1,7 @@
 import { zodResolver } from "@hookform/resolvers/zod"
 import {
   useMutation,
+  useQuery,
   useQueryClient,
   useSuspenseQuery,
 } from "@tanstack/react-query"
@@ -10,12 +11,27 @@ import {
   Outlet,
   useRouterState,
 } from "@tanstack/react-router"
-import { Copy, MoreVertical, Pencil, Plus, Star, Trash2, Zap } from "lucide-react"
+import {
+  Copy,
+  MoreVertical,
+  Pencil,
+  Plus,
+  Sparkles,
+  Star,
+  Trash2,
+  Zap,
+} from "lucide-react"
 import { Suspense, useState } from "react"
 import { useForm } from "react-hook-form"
 import { z } from "zod"
 
-import { BuildsService, type FeaturedBuildPublic } from "@/client"
+import {
+  type BuildChange,
+  BuildsService,
+  type FeaturedBuildPublic,
+  OptimizeService,
+} from "@/client"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -182,6 +198,7 @@ function BuildCard({
   onDuplicate,
   onToggleFeatured,
   isDeleting,
+  pendingChange,
 }: {
   build: BuildCardData
   onDelete: (id: string) => void
@@ -190,6 +207,7 @@ function BuildCard({
   onDuplicate?: (id: string) => void
   onToggleFeatured?: (id: string) => void
   isDeleting?: boolean
+  pendingChange?: BuildChange
 }) {
   const [draftName, setDraftName] = useState(build.name)
   const [deleteOpen, setDeleteOpen] = useState(false)
@@ -229,6 +247,21 @@ function BuildCard({
             onBlur={commitRename}
             className="text-base font-semibold bg-transparent border-b border-transparent hover:border-muted-foreground/30 focus:border-primary focus:outline-none focus:ring-0 py-0.5 min-w-0 flex-1 truncate transition-colors"
           />
+          {pendingChange && (
+            <span
+              className="shrink-0"
+              title={
+                pendingChange.status === "broken_pin"
+                  ? "A pinned relic is no longer in your save"
+                  : "New relics may improve this build — re-optimize to see"
+              }
+            >
+              <Badge className="h-5 gap-1 px-1.5 py-0 text-[10px] bg-green-600 text-white hover:bg-green-600">
+                <Sparkles className="h-3 w-3" />
+                {pendingChange.status === "broken_pin" ? "Pin lost" : "Review"}
+              </Badge>
+            </span>
+          )}
           <div className="flex items-center gap-1 shrink-0">
             <Button
               asChild
@@ -548,6 +581,14 @@ function AuthBuildList() {
     queryKey: ["builds"],
     queryFn: () => BuildsService.listBuilds(),
   })
+  const { data: buildChanges } = useQuery({
+    queryKey: ["build-changes"],
+    queryFn: () => OptimizeService.listBuildChanges(),
+  })
+  const changeByBuild = new Map<string, BuildChange>()
+  for (const c of buildChanges ?? []) {
+    if (c.build_id) changeByBuild.set(c.build_id, c)
+  }
   const { user } = useAuth()
   const { showSuccessToast, showErrorToast } = useCustomToast()
   const queryClient = useQueryClient()
@@ -638,6 +679,7 @@ function AuthBuildList() {
           isDeleting={
             deleteMutation.isPending && deleteMutation.variables === build.id
           }
+          pendingChange={changeByBuild.get(build.id)}
         />
       ))}
     </div>

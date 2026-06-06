@@ -3,12 +3,15 @@ import {
   ChevronDown,
   ChevronUp,
   Pin,
+  Sparkles,
+  TrendingDown,
+  TrendingUp,
   Trophy,
   XCircle,
 } from "lucide-react"
 import { useState } from "react"
 
-import type { VesselResult } from "@/client"
+import type { BuildChange, VesselResult } from "@/client"
 import { COLOR_HEX, RelicNameCell } from "@/components/RelicDisplay"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -50,11 +53,29 @@ export function cacheKey(
   return parts.map((p) => String(p ?? "")).join(":")
 }
 
+// --- Change highlighting (save-diff) ---
+
+export function relicKey(r: {
+  real_id?: number
+  effects?: number[] | null
+  curses?: number[] | null
+}): string {
+  return `${r.real_id ?? ""}:${(r.effects ?? []).join(",")}:${(r.curses ?? []).join(",")}`
+}
+
+/** Content keys of relics that entered the best arrangement (for "NEW" badges). */
+export function enteredKeys(change?: BuildChange | null): Set<string> {
+  const keys = new Set<string>()
+  for (const r of change?.entered ?? []) keys.add(relicKey(r))
+  return keys
+}
+
 // --- SSE streaming ---
 
 export async function runOptimizeStream(
   requestBody: Record<string, unknown>,
   onProgress: (p: OptimizeProgress) => void,
+  onChange?: (change: BuildChange | null) => void,
 ): Promise<VesselResult[]> {
   const token = localStorage.getItem("access_token")
   const headers: HeadersInit = { "Content-Type": "application/json" }
@@ -99,6 +120,7 @@ export async function runOptimizeStream(
           name: payload.name,
         })
       } else if (payload.type === "result") {
+        onChange?.((payload.change ?? null) as BuildChange | null)
         return payload.data as VesselResult[]
       } else if (payload.type === "error") {
         throw new Error(payload.detail ?? "Optimization failed")
@@ -114,9 +136,11 @@ export async function runOptimizeStream(
 export function SlotCard({
   slot,
   isPinned = false,
+  isNew = false,
 }: {
   slot: SlotAssignment
   isPinned?: boolean
+  isNew?: boolean
 }) {
   const relic = slot.relic
   const effects =
@@ -126,7 +150,13 @@ export function SlotCard({
 
   return (
     <div
-      className={`rounded-md border p-3 space-y-1.5${isPinned ? " border-primary/40 bg-primary/5" : ""}`}
+      className={`rounded-md border p-3 space-y-1.5${
+        isNew
+          ? " border-green-500/50 bg-green-500/5"
+          : isPinned
+            ? " border-primary/40 bg-primary/5"
+            : ""
+      }`}
     >
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
@@ -140,6 +170,11 @@ export function SlotCard({
           </span>
         </div>
         <div className="flex items-center gap-1.5">
+          {isNew && (
+            <Badge className="h-4 px-1.5 py-0 text-[10px] bg-green-600 text-white hover:bg-green-600">
+              NEW
+            </Badge>
+          )}
           {isPinned && (
             <span title="Pinned relic">
               <Pin className="h-3 w-3 text-primary shrink-0" />
@@ -217,12 +252,14 @@ export function VesselCard({
   highlighted = false,
   pinnedHandles = new Set(),
   effectMap = new Map(),
+  enteredFingerprints,
 }: {
   vessel: VesselResult
   defaultExpanded?: boolean
   highlighted?: boolean
   pinnedHandles?: Set<number>
   effectMap?: Map<number, string>
+  enteredFingerprints?: Set<string>
 }) {
   const [expanded, setExpanded] = useState(defaultExpanded)
 
@@ -273,14 +310,18 @@ export function VesselCard({
                   slot.relic != null &&
                   pinnedHandles.has((slot.relic as any).ga_handle)
                 }
+                isNew={
+                  slot.relic != null &&
+                  (enteredFingerprints?.has(relicKey(slot.relic as any)) ?? false)
+                }
               />
             ))}
           </div>
           {!vessel.meets_requirements &&
-            vessel.missing_requirements?.length > 0 && (
+            (vessel.missing_requirements?.length ?? 0) > 0 && (
               <p className="text-xs text-destructive mt-3">
                 Missing required effects:{" "}
-                {vessel.missing_requirements
+                {(vessel.missing_requirements ?? [])
                   .map((m) =>
                     typeof m === "number"
                       ? (effectMap.get(m) ?? `Effect ${m}`)
@@ -292,5 +333,46 @@ export function VesselCard({
         </CardContent>
       )}
     </Card>
+  )
+}
+
+// --- Save-diff banner (shown above results after a re-optimize) ---
+
+export function ChangeBanner({ change }: { change?: BuildChange | null }) {
+  if (!change || change.status === "unchanged" || change.status === "new")
+    return null
+
+  const delta = change.delta ?? 0
+  let Icon = Sparkles
+  let tone = "border-muted-foreground/30 bg-muted/40 text-foreground"
+  let text = ""
+
+  if (change.status === "improved") {
+    Icon = TrendingUp
+    tone = "border-green-500/40 bg-green-500/10 text-green-700 dark:text-green-400"
+    text = `Your best arrangement improved by ${delta} pts since your last save.`
+  } else if (change.status === "degraded") {
+    Icon = TrendingDown
+    tone = "border-destructive/40 bg-destructive/10 text-destructive"
+    text = `Your best arrangement dropped by ${Math.abs(delta)} pts since your last save.`
+  } else if (change.status === "reordered") {
+    text = "A different relic arrangement now ties your best — worth a look."
+  } else if (change.status === "broken_pin") {
+    Icon = TrendingDown
+    tone = "border-destructive/40 bg-destructive/10 text-destructive"
+    text = "A relic this build pins is no longer in your save."
+  } else if (change.status === "potentially_affected") {
+    const n = change.relevant_added ?? 0
+    text = `New relics may improve this build${n ? ` (${n} relevant)` : ""}.`
+  }
+
+  return (
+    <div className={`flex items-center gap-2 rounded-md border px-3 py-2 text-sm ${tone}`}>
+      <Icon className="h-4 w-4 shrink-0" />
+      <span>{text}</span>
+      {change.reliable === false && (
+        <span className="text-xs opacity-70">(approximate)</span>
+      )}
+    </div>
   )
 }

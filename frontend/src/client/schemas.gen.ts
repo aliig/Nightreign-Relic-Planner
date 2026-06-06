@@ -57,66 +57,259 @@ export const Body_login_login_access_tokenSchema = {
     title: 'Body_login-login_access_token'
 } as const;
 
-export const HTTPValidationErrorSchema = {
+export const Body_saves_upload_saveSchema = {
     properties: {
-        detail: {
+        file: {
+            type: 'string',
+            format: 'binary',
+            title: 'File'
+        }
+    },
+    type: 'object',
+    required: ['file'],
+    title: 'Body_saves-upload_save'
+} as const;
+
+export const BuildChangeSchema = {
+    properties: {
+        build_id: {
+            type: 'string',
+            title: 'Build Id',
+            default: ''
+        },
+        build_name: {
+            type: 'string',
+            title: 'Build Name',
+            default: ''
+        },
+        slot_index: {
+            type: 'integer',
+            title: 'Slot Index',
+            default: -1
+        },
+        status: {
+            type: 'string',
+            enum: ['improved', 'degraded', 'reordered', 'unchanged', 'new', 'broken_pin', 'potentially_affected'],
+            title: 'Status'
+        },
+        best_before: {
+            anyOf: [
+                {
+                    type: 'integer'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Best Before'
+        },
+        best_after: {
+            anyOf: [
+                {
+                    type: 'integer'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Best After'
+        },
+        delta: {
+            type: 'integer',
+            title: 'Delta',
+            default: 0
+        },
+        entered: {
             items: {
-                '$ref': '#/components/schemas/ValidationError'
+                '$ref': '#/components/schemas/RelicRef'
             },
             type: 'array',
-            title: 'Detail'
-        }
-    },
-    type: 'object',
-    title: 'HTTPValidationError'
-} as const;
-
-export const ItemCreateSchema = {
-    properties: {
-        title: {
-            type: 'string',
-            maxLength: 255,
-            minLength: 1,
-            title: 'Title'
+            title: 'Entered'
         },
-        description: {
+        left: {
+            items: {
+                '$ref': '#/components/schemas/RelicRef'
+            },
+            type: 'array',
+            title: 'Left'
+        },
+        pinned_removed: {
+            items: {
+                '$ref': '#/components/schemas/RelicRef'
+            },
+            type: 'array',
+            title: 'Pinned Removed'
+        },
+        relevant_added: {
+            type: 'integer',
+            title: 'Relevant Added',
+            default: 0
+        },
+        cause: {
             anyOf: [
                 {
                     type: 'string',
-                    maxLength: 255
+                    enum: ['relics', 'build_edit', 'game_data', 'mixed']
                 },
                 {
                     type: 'null'
                 }
             ],
-            title: 'Description'
+            title: 'Cause'
+        },
+        reliable: {
+            type: 'boolean',
+            title: 'Reliable',
+            default: true
         }
     },
     type: 'object',
-    required: ['title'],
-    title: 'ItemCreate'
+    required: ['status'],
+    title: 'BuildChange',
+    description: `How a build's optimal arrangement changed between two optimization inputs.
+
+Produced two ways with the same shape: a cheap relic-diff at save-upload
+time (\`\`potentially_affected\`\` / \`\`broken_pin\`\`), and a precise recompute on
+optimize (\`\`improved\`\` / \`\`degraded\`\` / \`\`reordered\`\` / \`\`unchanged\`\`).
+\`\`reliable\`\` is False when a truncated (non-exhaustive) search makes a small
+delta untrustworthy.  Relics are referenced by content, never by ga_handle.`
 } as const;
 
-export const ItemPublicSchema = {
+export const BuildCreateSchema = {
     properties: {
-        title: {
+        name: {
             type: 'string',
             maxLength: 255,
             minLength: 1,
-            title: 'Title'
+            title: 'Name'
         },
-        description: {
+        character: {
+            type: 'string',
+            maxLength: 50,
+            title: 'Character'
+        },
+        groups: {
             anyOf: [
                 {
-                    type: 'string',
-                    maxLength: 255
+                    items: {
+                        additionalProperties: true,
+                        type: 'object'
+                    },
+                    type: 'array'
                 },
                 {
                     type: 'null'
                 }
             ],
-            title: 'Description'
+            title: 'Groups'
+        }
+    },
+    type: 'object',
+    required: ['name', 'character'],
+    title: 'BuildCreate'
+} as const;
+
+export const BuildDefinitionSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            title: 'Id'
         },
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        character: {
+            type: 'string',
+            title: 'Character'
+        },
+        groups: {
+            items: {
+                '$ref': '#/components/schemas/WeightGroup'
+            },
+            type: 'array',
+            title: 'Groups'
+        },
+        required_effects: {
+            items: {
+                type: 'integer'
+            },
+            type: 'array',
+            title: 'Required Effects'
+        },
+        required_families: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Required Families'
+        },
+        excluded_effects: {
+            items: {
+                type: 'integer'
+            },
+            type: 'array',
+            title: 'Excluded Effects'
+        },
+        excluded_families: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Excluded Families'
+        },
+        include_deep: {
+            type: 'boolean',
+            title: 'Include Deep',
+            default: true
+        },
+        curse_max: {
+            type: 'integer',
+            title: 'Curse Max',
+            default: 1
+        },
+        default_curse_weight: {
+            type: 'integer',
+            title: 'Default Curse Weight',
+            default: 0
+        },
+        pinned_relics: {
+            items: {
+                type: 'integer'
+            },
+            type: 'array',
+            title: 'Pinned Relics'
+        },
+        excluded_stacking_categories: {
+            items: {
+                type: 'integer'
+            },
+            type: 'array',
+            title: 'Excluded Stacking Categories'
+        },
+        effect_limits: {
+            additionalProperties: {
+                type: 'integer'
+            },
+            type: 'object',
+            title: 'Effect Limits'
+        },
+        family_limits: {
+            additionalProperties: {
+                type: 'integer'
+            },
+            type: 'object',
+            title: 'Family Limits'
+        }
+    },
+    type: 'object',
+    required: ['id', 'name', 'character'],
+    title: 'BuildDefinition',
+    description: 'User-defined build configuration. Stable API schema.'
+} as const;
+
+export const BuildPublicSchema = {
+    properties: {
         id: {
             type: 'string',
             format: 'uuid',
@@ -126,6 +319,438 @@ export const ItemPublicSchema = {
             type: 'string',
             format: 'uuid',
             title: 'Owner Id'
+        },
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        character: {
+            type: 'string',
+            title: 'Character'
+        },
+        groups: {
+            items: {
+                additionalProperties: true,
+                type: 'object'
+            },
+            type: 'array',
+            title: 'Groups'
+        },
+        required_effects: {
+            items: {
+                type: 'integer'
+            },
+            type: 'array',
+            title: 'Required Effects'
+        },
+        required_families: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Required Families'
+        },
+        excluded_effects: {
+            items: {
+                type: 'integer'
+            },
+            type: 'array',
+            title: 'Excluded Effects'
+        },
+        excluded_families: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Excluded Families'
+        },
+        include_deep: {
+            type: 'boolean',
+            title: 'Include Deep'
+        },
+        curse_max: {
+            type: 'integer',
+            title: 'Curse Max'
+        },
+        default_curse_weight: {
+            type: 'integer',
+            title: 'Default Curse Weight'
+        },
+        pinned_relics: {
+            items: {
+                type: 'integer'
+            },
+            type: 'array',
+            title: 'Pinned Relics'
+        },
+        excluded_stacking_categories: {
+            items: {
+                type: 'integer'
+            },
+            type: 'array',
+            title: 'Excluded Stacking Categories'
+        },
+        effect_limits: {
+            additionalProperties: {
+                type: 'integer'
+            },
+            type: 'object',
+            title: 'Effect Limits'
+        },
+        family_limits: {
+            additionalProperties: {
+                type: 'integer'
+            },
+            type: 'object',
+            title: 'Family Limits'
+        },
+        is_featured: {
+            type: 'boolean',
+            title: 'Is Featured'
+        },
+        created_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Created At'
+        },
+        updated_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Updated At'
+        }
+    },
+    type: 'object',
+    required: ['id', 'owner_id', 'name', 'character', 'include_deep', 'curse_max', 'default_curse_weight', 'is_featured'],
+    title: 'BuildPublic'
+} as const;
+
+export const BuildUpdateSchema = {
+    properties: {
+        name: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 255,
+                    minLength: 1
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Name'
+        },
+        character: {
+            anyOf: [
+                {
+                    type: 'string',
+                    maxLength: 50
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Character'
+        },
+        groups: {
+            anyOf: [
+                {
+                    items: {
+                        additionalProperties: true,
+                        type: 'object'
+                    },
+                    type: 'array'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Groups'
+        },
+        required_effects: {
+            anyOf: [
+                {
+                    items: {
+                        type: 'integer'
+                    },
+                    type: 'array'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Required Effects'
+        },
+        required_families: {
+            anyOf: [
+                {
+                    items: {
+                        type: 'string'
+                    },
+                    type: 'array'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Required Families'
+        },
+        excluded_effects: {
+            anyOf: [
+                {
+                    items: {
+                        type: 'integer'
+                    },
+                    type: 'array'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Excluded Effects'
+        },
+        excluded_families: {
+            anyOf: [
+                {
+                    items: {
+                        type: 'string'
+                    },
+                    type: 'array'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Excluded Families'
+        },
+        include_deep: {
+            anyOf: [
+                {
+                    type: 'boolean'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Include Deep'
+        },
+        curse_max: {
+            anyOf: [
+                {
+                    type: 'integer',
+                    minimum: 1
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Curse Max'
+        },
+        default_curse_weight: {
+            anyOf: [
+                {
+                    type: 'integer'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Default Curse Weight'
+        },
+        pinned_relics: {
+            anyOf: [
+                {
+                    items: {
+                        type: 'integer'
+                    },
+                    type: 'array'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Pinned Relics'
+        },
+        excluded_stacking_categories: {
+            anyOf: [
+                {
+                    items: {
+                        type: 'integer'
+                    },
+                    type: 'array'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Excluded Stacking Categories'
+        },
+        effect_limits: {
+            anyOf: [
+                {
+                    additionalProperties: {
+                        type: 'integer'
+                    },
+                    type: 'object'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Effect Limits'
+        },
+        family_limits: {
+            anyOf: [
+                {
+                    additionalProperties: {
+                        type: 'integer'
+                    },
+                    type: 'object'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Family Limits'
+        }
+    },
+    type: 'object',
+    title: 'BuildUpdate'
+} as const;
+
+export const BuildsPublicSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/BuildPublic'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        }
+    },
+    type: 'object',
+    required: ['data', 'count'],
+    title: 'BuildsPublic'
+} as const;
+
+export const FeaturedBuildPublicSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        character: {
+            type: 'string',
+            title: 'Character'
+        },
+        groups: {
+            items: {
+                additionalProperties: true,
+                type: 'object'
+            },
+            type: 'array',
+            title: 'Groups'
+        },
+        required_effects: {
+            items: {
+                type: 'integer'
+            },
+            type: 'array',
+            title: 'Required Effects'
+        },
+        required_families: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Required Families'
+        },
+        excluded_effects: {
+            items: {
+                type: 'integer'
+            },
+            type: 'array',
+            title: 'Excluded Effects'
+        },
+        excluded_families: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Excluded Families'
+        },
+        include_deep: {
+            type: 'boolean',
+            title: 'Include Deep'
+        },
+        curse_max: {
+            type: 'integer',
+            title: 'Curse Max'
+        },
+        default_curse_weight: {
+            type: 'integer',
+            title: 'Default Curse Weight'
+        },
+        pinned_relics: {
+            items: {
+                type: 'integer'
+            },
+            type: 'array',
+            title: 'Pinned Relics'
+        },
+        excluded_stacking_categories: {
+            items: {
+                type: 'integer'
+            },
+            type: 'array',
+            title: 'Excluded Stacking Categories'
+        },
+        effect_limits: {
+            additionalProperties: {
+                type: 'integer'
+            },
+            type: 'object',
+            title: 'Effect Limits'
+        },
+        family_limits: {
+            additionalProperties: {
+                type: 'integer'
+            },
+            type: 'object',
+            title: 'Family Limits'
+        },
+        owner_name: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Owner Name'
         },
         created_at: {
             anyOf: [
@@ -141,47 +766,15 @@ export const ItemPublicSchema = {
         }
     },
     type: 'object',
-    required: ['title', 'id', 'owner_id'],
-    title: 'ItemPublic'
+    required: ['id', 'name', 'character', 'include_deep', 'curse_max', 'default_curse_weight'],
+    title: 'FeaturedBuildPublic'
 } as const;
 
-export const ItemUpdateSchema = {
-    properties: {
-        title: {
-            anyOf: [
-                {
-                    type: 'string',
-                    maxLength: 255,
-                    minLength: 1
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Title'
-        },
-        description: {
-            anyOf: [
-                {
-                    type: 'string',
-                    maxLength: 255
-                },
-                {
-                    type: 'null'
-                }
-            ],
-            title: 'Description'
-        }
-    },
-    type: 'object',
-    title: 'ItemUpdate'
-} as const;
-
-export const ItemsPublicSchema = {
+export const FeaturedBuildsPublicSchema = {
     properties: {
         data: {
             items: {
-                '$ref': '#/components/schemas/ItemPublic'
+                '$ref': '#/components/schemas/FeaturedBuildPublic'
             },
             type: 'array',
             title: 'Data'
@@ -193,7 +786,21 @@ export const ItemsPublicSchema = {
     },
     type: 'object',
     required: ['data', 'count'],
-    title: 'ItemsPublic'
+    title: 'FeaturedBuildsPublic'
+} as const;
+
+export const HTTPValidationErrorSchema = {
+    properties: {
+        detail: {
+            items: {
+                '$ref': '#/components/schemas/ValidationError'
+            },
+            type: 'array',
+            title: 'Detail'
+        }
+    },
+    type: 'object',
+    title: 'HTTPValidationError'
 } as const;
 
 export const MessageSchema = {
@@ -226,6 +833,295 @@ export const NewPasswordSchema = {
     title: 'NewPassword'
 } as const;
 
+export const OptimizeRequestSchema = {
+    properties: {
+        build_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Build Id'
+        },
+        profile_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Profile Id'
+        },
+        build: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/BuildDefinition'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        relics: {
+            anyOf: [
+                {
+                    items: {
+                        '$ref': '#/components/schemas/OwnedRelic-Input'
+                    },
+                    type: 'array'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Relics'
+        },
+        top_n: {
+            type: 'integer',
+            maximum: 50,
+            minimum: 1,
+            title: 'Top N',
+            default: 10
+        },
+        max_per_vessel: {
+            type: 'integer',
+            maximum: 5,
+            minimum: 1,
+            title: 'Max Per Vessel',
+            default: 3
+        }
+    },
+    type: 'object',
+    title: 'OptimizeRequest'
+} as const;
+
+export const OwnedRelic_InputSchema = {
+    properties: {
+        ga_handle: {
+            type: 'integer',
+            title: 'Ga Handle'
+        },
+        item_id: {
+            type: 'integer',
+            title: 'Item Id'
+        },
+        real_id: {
+            type: 'integer',
+            title: 'Real Id'
+        },
+        color: {
+            type: 'string',
+            title: 'Color'
+        },
+        effects: {
+            items: {
+                type: 'integer'
+            },
+            type: 'array',
+            title: 'Effects'
+        },
+        curses: {
+            items: {
+                type: 'integer'
+            },
+            type: 'array',
+            title: 'Curses'
+        },
+        is_deep: {
+            type: 'boolean',
+            title: 'Is Deep'
+        },
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        tier: {
+            type: 'string',
+            title: 'Tier'
+        }
+    },
+    type: 'object',
+    required: ['ga_handle', 'item_id', 'real_id', 'color', 'effects', 'curses', 'is_deep', 'name', 'tier'],
+    title: 'OwnedRelic',
+    description: 'A relic owned by the player, parsed from save data.'
+} as const;
+
+export const OwnedRelic_OutputSchema = {
+    properties: {
+        ga_handle: {
+            type: 'integer',
+            title: 'Ga Handle'
+        },
+        item_id: {
+            type: 'integer',
+            title: 'Item Id'
+        },
+        real_id: {
+            type: 'integer',
+            title: 'Real Id'
+        },
+        color: {
+            type: 'string',
+            title: 'Color'
+        },
+        effects: {
+            items: {
+                type: 'integer'
+            },
+            type: 'array',
+            title: 'Effects'
+        },
+        curses: {
+            items: {
+                type: 'integer'
+            },
+            type: 'array',
+            title: 'Curses'
+        },
+        is_deep: {
+            type: 'boolean',
+            title: 'Is Deep'
+        },
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        tier: {
+            type: 'string',
+            title: 'Tier'
+        },
+        effect_count: {
+            type: 'integer',
+            title: 'Effect Count',
+            readOnly: true
+        },
+        curse_count: {
+            type: 'integer',
+            title: 'Curse Count',
+            readOnly: true
+        },
+        all_effects: {
+            items: {
+                type: 'integer'
+            },
+            type: 'array',
+            title: 'All Effects',
+            readOnly: true
+        }
+    },
+    type: 'object',
+    required: ['ga_handle', 'item_id', 'real_id', 'color', 'effects', 'curses', 'is_deep', 'name', 'tier', 'effect_count', 'curse_count', 'all_effects'],
+    title: 'OwnedRelic',
+    description: 'A relic owned by the player, parsed from save data.'
+} as const;
+
+export const ParsedProfileDataSchema = {
+    properties: {
+        slot_index: {
+            type: 'integer',
+            title: 'Slot Index'
+        },
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        relic_count: {
+            type: 'integer',
+            title: 'Relic Count'
+        },
+        relics: {
+            items: {
+                '$ref': '#/components/schemas/ParsedRelicData'
+            },
+            type: 'array',
+            title: 'Relics'
+        },
+        id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Id'
+        }
+    },
+    type: 'object',
+    required: ['slot_index', 'name', 'relic_count', 'relics'],
+    title: 'ParsedProfileData'
+} as const;
+
+export const ParsedRelicDataSchema = {
+    properties: {
+        ga_handle: {
+            type: 'integer',
+            title: 'Ga Handle'
+        },
+        item_id: {
+            type: 'integer',
+            title: 'Item Id'
+        },
+        real_id: {
+            type: 'integer',
+            title: 'Real Id'
+        },
+        color: {
+            type: 'string',
+            title: 'Color'
+        },
+        effect_1: {
+            type: 'integer',
+            title: 'Effect 1'
+        },
+        effect_2: {
+            type: 'integer',
+            title: 'Effect 2'
+        },
+        effect_3: {
+            type: 'integer',
+            title: 'Effect 3'
+        },
+        curse_1: {
+            type: 'integer',
+            title: 'Curse 1'
+        },
+        curse_2: {
+            type: 'integer',
+            title: 'Curse 2'
+        },
+        curse_3: {
+            type: 'integer',
+            title: 'Curse 3'
+        },
+        is_deep: {
+            type: 'boolean',
+            title: 'Is Deep'
+        },
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        tier: {
+            type: 'string',
+            title: 'Tier'
+        }
+    },
+    type: 'object',
+    required: ['ga_handle', 'item_id', 'real_id', 'color', 'effect_1', 'effect_2', 'effect_3', 'curse_1', 'curse_2', 'curse_3', 'is_deep', 'name', 'tier'],
+    title: 'ParsedRelicData',
+    description: 'OwnedRelic data as returned in the upload response (before DB persistence).'
+} as const;
+
 export const PrivateUserCreateSchema = {
     properties: {
         email: {
@@ -249,6 +1145,279 @@ export const PrivateUserCreateSchema = {
     type: 'object',
     required: ['email', 'password', 'full_name'],
     title: 'PrivateUserCreate'
+} as const;
+
+export const ProfilePublicSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        save_upload_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Save Upload Id'
+        },
+        slot_index: {
+            type: 'integer',
+            title: 'Slot Index'
+        },
+        name: {
+            type: 'string',
+            title: 'Name'
+        }
+    },
+    type: 'object',
+    required: ['id', 'save_upload_id', 'slot_index', 'name'],
+    title: 'ProfilePublic'
+} as const;
+
+export const ProfilesPublicSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/ProfilePublic'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        }
+    },
+    type: 'object',
+    required: ['data', 'count'],
+    title: 'ProfilesPublic'
+} as const;
+
+export const RelicDeltaSchema = {
+    properties: {
+        added: {
+            type: 'integer',
+            title: 'Added',
+            default: 0
+        },
+        removed: {
+            type: 'integer',
+            title: 'Removed',
+            default: 0
+        }
+    },
+    type: 'object',
+    title: 'RelicDelta',
+    description: 'How many relics were gained/lost versus the previous save.'
+} as const;
+
+export const RelicPublicSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        profile_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Profile Id'
+        },
+        ga_handle: {
+            type: 'integer',
+            title: 'Ga Handle'
+        },
+        item_id: {
+            type: 'integer',
+            title: 'Item Id'
+        },
+        real_id: {
+            type: 'integer',
+            title: 'Real Id'
+        },
+        color: {
+            type: 'string',
+            title: 'Color'
+        },
+        effect_1: {
+            type: 'integer',
+            title: 'Effect 1'
+        },
+        effect_2: {
+            type: 'integer',
+            title: 'Effect 2'
+        },
+        effect_3: {
+            type: 'integer',
+            title: 'Effect 3'
+        },
+        curse_1: {
+            type: 'integer',
+            title: 'Curse 1'
+        },
+        curse_2: {
+            type: 'integer',
+            title: 'Curse 2'
+        },
+        curse_3: {
+            type: 'integer',
+            title: 'Curse 3'
+        },
+        is_deep: {
+            type: 'boolean',
+            title: 'Is Deep'
+        },
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        tier: {
+            type: 'string',
+            title: 'Tier'
+        }
+    },
+    type: 'object',
+    required: ['id', 'profile_id', 'ga_handle', 'item_id', 'real_id', 'color', 'effect_1', 'effect_2', 'effect_3', 'curse_1', 'curse_2', 'curse_3', 'is_deep', 'name', 'tier'],
+    title: 'RelicPublic'
+} as const;
+
+export const RelicRefSchema = {
+    properties: {
+        real_id: {
+            type: 'integer',
+            title: 'Real Id'
+        },
+        name: {
+            type: 'string',
+            title: 'Name',
+            default: ''
+        },
+        color: {
+            type: 'string',
+            title: 'Color',
+            default: ''
+        },
+        effects: {
+            items: {
+                type: 'integer'
+            },
+            type: 'array',
+            title: 'Effects'
+        },
+        curses: {
+            items: {
+                type: 'integer'
+            },
+            type: 'array',
+            title: 'Curses'
+        }
+    },
+    type: 'object',
+    required: ['real_id'],
+    title: 'RelicRef',
+    description: 'Lightweight relic identity for change display (no ga_handle — unstable).'
+} as const;
+
+export const RelicsPublicSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/RelicPublic'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        }
+    },
+    type: 'object',
+    required: ['data', 'count'],
+    title: 'RelicsPublic'
+} as const;
+
+export const SaveStatusPublicSchema = {
+    properties: {
+        id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Id'
+        },
+        platform: {
+            type: 'string',
+            title: 'Platform'
+        },
+        uploaded_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Uploaded At'
+        },
+        profile_count: {
+            type: 'integer',
+            title: 'Profile Count'
+        },
+        profile_names: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Profile Names'
+        }
+    },
+    type: 'object',
+    required: ['id', 'platform', 'profile_count', 'profile_names'],
+    title: 'SaveStatusPublic',
+    description: "Lightweight status of the user's most recent save upload."
+} as const;
+
+export const SlotAssignmentSchema = {
+    properties: {
+        slot_index: {
+            type: 'integer',
+            title: 'Slot Index'
+        },
+        slot_color: {
+            type: 'string',
+            title: 'Slot Color'
+        },
+        is_deep: {
+            type: 'boolean',
+            title: 'Is Deep'
+        },
+        relic: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/OwnedRelic-Output'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        score: {
+            type: 'integer',
+            title: 'Score'
+        },
+        breakdown: {
+            items: {
+                additionalProperties: true,
+                type: 'object'
+            },
+            type: 'array',
+            title: 'Breakdown'
+        }
+    },
+    type: 'object',
+    required: ['slot_index', 'slot_color', 'is_deep', 'score', 'breakdown'],
+    title: 'SlotAssignment',
+    description: 'A relic assigned to one vessel slot.'
 } as const;
 
 export const TokenSchema = {
@@ -286,6 +1455,63 @@ export const UpdatePasswordSchema = {
     type: 'object',
     required: ['current_password', 'new_password'],
     title: 'UpdatePassword'
+} as const;
+
+export const UploadResponseSchema = {
+    properties: {
+        platform: {
+            type: 'string',
+            title: 'Platform'
+        },
+        profile_count: {
+            type: 'integer',
+            title: 'Profile Count'
+        },
+        profiles: {
+            items: {
+                '$ref': '#/components/schemas/ParsedProfileData'
+            },
+            type: 'array',
+            title: 'Profiles'
+        },
+        save_upload_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Save Upload Id'
+        },
+        persisted: {
+            type: 'boolean',
+            title: 'Persisted',
+            default: false
+        },
+        relic_delta: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/RelicDelta'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        affected_builds: {
+            items: {
+                '$ref': '#/components/schemas/BuildChange'
+            },
+            type: 'array',
+            title: 'Affected Builds'
+        }
+    },
+    type: 'object',
+    required: ['platform', 'profile_count', 'profiles'],
+    title: 'UploadResponse'
 } as const;
 
 export const UserCreateSchema = {
@@ -556,4 +1782,98 @@ export const ValidationErrorSchema = {
     type: 'object',
     required: ['loc', 'msg', 'type'],
     title: 'ValidationError'
+} as const;
+
+export const VesselResultSchema = {
+    properties: {
+        vessel_id: {
+            type: 'integer',
+            title: 'Vessel Id'
+        },
+        vessel_name: {
+            type: 'string',
+            title: 'Vessel Name'
+        },
+        vessel_character: {
+            type: 'string',
+            title: 'Vessel Character'
+        },
+        unlock_flag: {
+            type: 'integer',
+            title: 'Unlock Flag'
+        },
+        slot_colors: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Slot Colors'
+        },
+        assignments: {
+            items: {
+                '$ref': '#/components/schemas/SlotAssignment'
+            },
+            type: 'array',
+            title: 'Assignments'
+        },
+        total_score: {
+            type: 'integer',
+            title: 'Total Score'
+        },
+        meets_requirements: {
+            type: 'boolean',
+            title: 'Meets Requirements',
+            default: true
+        },
+        missing_requirements: {
+            items: {
+                anyOf: [
+                    {
+                        type: 'integer'
+                    },
+                    {
+                        type: 'string'
+                    }
+                ]
+            },
+            type: 'array',
+            title: 'Missing Requirements'
+        },
+        search_truncated: {
+            type: 'boolean',
+            title: 'Search Truncated',
+            default: false
+        }
+    },
+    type: 'object',
+    required: ['vessel_id', 'vessel_name', 'vessel_character', 'unlock_flag', 'slot_colors', 'assignments', 'total_score'],
+    title: 'VesselResult',
+    description: 'Optimization result for a single vessel. Ready as FastAPI response.'
+} as const;
+
+export const WeightGroupSchema = {
+    properties: {
+        weight: {
+            type: 'integer',
+            title: 'Weight'
+        },
+        effects: {
+            items: {
+                type: 'integer'
+            },
+            type: 'array',
+            title: 'Effects'
+        },
+        families: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Families'
+        }
+    },
+    type: 'object',
+    required: ['weight'],
+    title: 'WeightGroup',
+    description: 'A user-defined group of effects/families sharing a scoring weight.'
 } as const;

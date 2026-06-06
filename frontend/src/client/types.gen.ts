@@ -9,31 +9,159 @@ export type Body_login_login_access_token = {
     client_secret?: (string | null);
 };
 
-export type HTTPValidationError = {
-    detail?: Array<ValidationError>;
+export type Body_saves_upload_save = {
+    file: (Blob | File);
 };
 
-export type ItemCreate = {
-    title: string;
-    description?: (string | null);
+/**
+ * How a build's optimal arrangement changed between two optimization inputs.
+ *
+ * Produced two ways with the same shape: a cheap relic-diff at save-upload
+ * time (``potentially_affected`` / ``broken_pin``), and a precise recompute on
+ * optimize (``improved`` / ``degraded`` / ``reordered`` / ``unchanged``).
+ * ``reliable`` is False when a truncated (non-exhaustive) search makes a small
+ * delta untrustworthy.  Relics are referenced by content, never by ga_handle.
+ */
+export type BuildChange = {
+    build_id?: string;
+    build_name?: string;
+    slot_index?: number;
+    status: 'improved' | 'degraded' | 'reordered' | 'unchanged' | 'new' | 'broken_pin' | 'potentially_affected';
+    best_before?: (number | null);
+    best_after?: (number | null);
+    delta?: number;
+    entered?: Array<RelicRef>;
+    left?: Array<RelicRef>;
+    pinned_removed?: Array<RelicRef>;
+    relevant_added?: number;
+    cause?: ('relics' | 'build_edit' | 'game_data' | 'mixed' | null);
+    reliable?: boolean;
 };
 
-export type ItemPublic = {
-    title: string;
-    description?: (string | null);
+export type status = 'improved' | 'degraded' | 'reordered' | 'unchanged' | 'new' | 'broken_pin' | 'potentially_affected';
+
+export type BuildCreate = {
+    name: string;
+    character: string;
+    groups?: (Array<{
+    [key: string]: unknown;
+}> | null);
+};
+
+/**
+ * User-defined build configuration. Stable API schema.
+ */
+export type BuildDefinition = {
+    id: string;
+    name: string;
+    character: string;
+    groups?: Array<WeightGroup>;
+    required_effects?: Array<(number)>;
+    required_families?: Array<(string)>;
+    excluded_effects?: Array<(number)>;
+    excluded_families?: Array<(string)>;
+    include_deep?: boolean;
+    curse_max?: number;
+    default_curse_weight?: number;
+    pinned_relics?: Array<(number)>;
+    excluded_stacking_categories?: Array<(number)>;
+    effect_limits?: {
+        [key: string]: (number);
+    };
+    family_limits?: {
+        [key: string]: (number);
+    };
+};
+
+export type BuildPublic = {
     id: string;
     owner_id: string;
+    name: string;
+    character: string;
+    groups?: Array<{
+        [key: string]: unknown;
+    }>;
+    required_effects?: Array<(number)>;
+    required_families?: Array<(string)>;
+    excluded_effects?: Array<(number)>;
+    excluded_families?: Array<(string)>;
+    include_deep: boolean;
+    curse_max: number;
+    default_curse_weight: number;
+    pinned_relics?: Array<(number)>;
+    excluded_stacking_categories?: Array<(number)>;
+    effect_limits?: {
+        [key: string]: (number);
+    };
+    family_limits?: {
+        [key: string]: (number);
+    };
+    is_featured: boolean;
     created_at?: (string | null);
+    updated_at?: (string | null);
 };
 
-export type ItemsPublic = {
-    data: Array<ItemPublic>;
+export type BuildsPublic = {
+    data: Array<BuildPublic>;
     count: number;
 };
 
-export type ItemUpdate = {
-    title?: (string | null);
-    description?: (string | null);
+export type BuildUpdate = {
+    name?: (string | null);
+    character?: (string | null);
+    groups?: (Array<{
+    [key: string]: unknown;
+}> | null);
+    required_effects?: (Array<(number)> | null);
+    required_families?: (Array<(string)> | null);
+    excluded_effects?: (Array<(number)> | null);
+    excluded_families?: (Array<(string)> | null);
+    include_deep?: (boolean | null);
+    curse_max?: (number | null);
+    default_curse_weight?: (number | null);
+    pinned_relics?: (Array<(number)> | null);
+    excluded_stacking_categories?: (Array<(number)> | null);
+    effect_limits?: ({
+    [key: string]: (number);
+} | null);
+    family_limits?: ({
+    [key: string]: (number);
+} | null);
+};
+
+export type FeaturedBuildPublic = {
+    id: string;
+    name: string;
+    character: string;
+    groups?: Array<{
+        [key: string]: unknown;
+    }>;
+    required_effects?: Array<(number)>;
+    required_families?: Array<(string)>;
+    excluded_effects?: Array<(number)>;
+    excluded_families?: Array<(string)>;
+    include_deep: boolean;
+    curse_max: number;
+    default_curse_weight: number;
+    pinned_relics?: Array<(number)>;
+    excluded_stacking_categories?: Array<(number)>;
+    effect_limits?: {
+        [key: string]: (number);
+    };
+    family_limits?: {
+        [key: string]: (number);
+    };
+    owner_name?: (string | null);
+    created_at?: (string | null);
+};
+
+export type FeaturedBuildsPublic = {
+    data: Array<FeaturedBuildPublic>;
+    count: number;
+};
+
+export type HTTPValidationError = {
+    detail?: Array<ValidationError>;
 };
 
 export type Message = {
@@ -45,11 +173,159 @@ export type NewPassword = {
     new_password: string;
 };
 
+export type OptimizeRequest = {
+    build_id?: (string | null);
+    profile_id?: (string | null);
+    build?: (BuildDefinition | null);
+    relics?: (Array<OwnedRelic_Input> | null);
+    top_n?: number;
+    max_per_vessel?: number;
+};
+
+/**
+ * A relic owned by the player, parsed from save data.
+ */
+export type OwnedRelic_Input = {
+    ga_handle: number;
+    item_id: number;
+    real_id: number;
+    color: string;
+    effects: Array<(number)>;
+    curses: Array<(number)>;
+    is_deep: boolean;
+    name: string;
+    tier: string;
+};
+
+/**
+ * A relic owned by the player, parsed from save data.
+ */
+export type OwnedRelic_Output = {
+    ga_handle: number;
+    item_id: number;
+    real_id: number;
+    color: string;
+    effects: Array<(number)>;
+    curses: Array<(number)>;
+    is_deep: boolean;
+    name: string;
+    tier: string;
+    readonly effect_count: number;
+    readonly curse_count: number;
+    readonly all_effects: Array<(number)>;
+};
+
+export type ParsedProfileData = {
+    slot_index: number;
+    name: string;
+    relic_count: number;
+    relics: Array<ParsedRelicData>;
+    id?: (string | null);
+};
+
+/**
+ * OwnedRelic data as returned in the upload response (before DB persistence).
+ */
+export type ParsedRelicData = {
+    ga_handle: number;
+    item_id: number;
+    real_id: number;
+    color: string;
+    effect_1: number;
+    effect_2: number;
+    effect_3: number;
+    curse_1: number;
+    curse_2: number;
+    curse_3: number;
+    is_deep: boolean;
+    name: string;
+    tier: string;
+};
+
 export type PrivateUserCreate = {
     email: string;
     password: string;
     full_name: string;
     is_verified?: boolean;
+};
+
+export type ProfilePublic = {
+    id: string;
+    save_upload_id: string;
+    slot_index: number;
+    name: string;
+};
+
+export type ProfilesPublic = {
+    data: Array<ProfilePublic>;
+    count: number;
+};
+
+/**
+ * How many relics were gained/lost versus the previous save.
+ */
+export type RelicDelta = {
+    added?: number;
+    removed?: number;
+};
+
+export type RelicPublic = {
+    id: string;
+    profile_id: string;
+    ga_handle: number;
+    item_id: number;
+    real_id: number;
+    color: string;
+    effect_1: number;
+    effect_2: number;
+    effect_3: number;
+    curse_1: number;
+    curse_2: number;
+    curse_3: number;
+    is_deep: boolean;
+    name: string;
+    tier: string;
+};
+
+/**
+ * Lightweight relic identity for change display (no ga_handle — unstable).
+ */
+export type RelicRef = {
+    real_id: number;
+    name?: string;
+    color?: string;
+    effects?: Array<(number)>;
+    curses?: Array<(number)>;
+};
+
+export type RelicsPublic = {
+    data: Array<RelicPublic>;
+    count: number;
+};
+
+/**
+ * Lightweight status of the user's most recent save upload.
+ */
+export type SaveStatusPublic = {
+    id: string;
+    platform: string;
+    uploaded_at?: (string | null);
+    profile_count: number;
+    profile_names: Array<(string)>;
+};
+
+/**
+ * A relic assigned to one vessel slot.
+ */
+export type SlotAssignment = {
+    slot_index: number;
+    slot_color: string;
+    is_deep: boolean;
+    relic?: (OwnedRelic_Output | null);
+    score: number;
+    breakdown: Array<{
+        [key: string]: unknown;
+    }>;
 };
 
 export type Token = {
@@ -60,6 +336,16 @@ export type Token = {
 export type UpdatePassword = {
     current_password: string;
     new_password: string;
+};
+
+export type UploadResponse = {
+    platform: string;
+    profile_count: number;
+    profiles: Array<ParsedProfileData>;
+    save_upload_id?: (string | null);
+    persisted?: boolean;
+    relic_delta?: (RelicDelta | null);
+    affected_builds?: Array<BuildChange>;
 };
 
 export type UserCreate = {
@@ -113,37 +399,109 @@ export type ValidationError = {
     };
 };
 
-export type ItemsReadItemsData = {
+/**
+ * Optimization result for a single vessel. Ready as FastAPI response.
+ */
+export type VesselResult = {
+    vessel_id: number;
+    vessel_name: string;
+    vessel_character: string;
+    unlock_flag: number;
+    slot_colors: Array<(string)>;
+    assignments: Array<SlotAssignment>;
+    total_score: number;
+    meets_requirements?: boolean;
+    missing_requirements?: Array<(number | string)>;
+    search_truncated?: boolean;
+};
+
+/**
+ * A user-defined group of effects/families sharing a scoring weight.
+ */
+export type WeightGroup = {
+    weight: number;
+    effects?: Array<(number)>;
+    families?: Array<(string)>;
+};
+
+export type BuildsListBuildsData = {
     limit?: number;
     skip?: number;
 };
 
-export type ItemsReadItemsResponse = (ItemsPublic);
+export type BuildsListBuildsResponse = (BuildsPublic);
 
-export type ItemsCreateItemData = {
-    requestBody: ItemCreate;
+export type BuildsCreateBuildData = {
+    requestBody: BuildCreate;
 };
 
-export type ItemsCreateItemResponse = (ItemPublic);
+export type BuildsCreateBuildResponse = (BuildPublic);
 
-export type ItemsReadItemData = {
-    id: string;
+export type BuildsListFeaturedBuildsData = {
+    limit?: number;
+    skip?: number;
 };
 
-export type ItemsReadItemResponse = (ItemPublic);
+export type BuildsListFeaturedBuildsResponse = (FeaturedBuildsPublic);
 
-export type ItemsUpdateItemData = {
-    id: string;
-    requestBody: ItemUpdate;
+export type BuildsGetBuildData = {
+    buildId: string;
 };
 
-export type ItemsUpdateItemResponse = (ItemPublic);
+export type BuildsGetBuildResponse = (BuildPublic);
 
-export type ItemsDeleteItemData = {
-    id: string;
+export type BuildsUpdateBuildData = {
+    buildId: string;
+    requestBody: BuildUpdate;
 };
 
-export type ItemsDeleteItemResponse = (Message);
+export type BuildsUpdateBuildResponse = (BuildPublic);
+
+export type BuildsDeleteBuildData = {
+    buildId: string;
+};
+
+export type BuildsDeleteBuildResponse = (Message);
+
+export type BuildsToggleFeaturedData = {
+    buildId: string;
+};
+
+export type BuildsToggleFeaturedResponse = (BuildPublic);
+
+export type BuildsCloneBuildData = {
+    buildId: string;
+};
+
+export type BuildsCloneBuildResponse = (BuildPublic);
+
+export type GameGetEffectsResponse = (Array<{
+    [key: string]: unknown;
+}>);
+
+export type GameGetFamiliesResponse = (Array<{
+    [key: string]: unknown;
+}>);
+
+export type GameGetCharactersResponse = (Array<{
+    [key: string]: unknown;
+}>);
+
+export type GameGetVesselsData = {
+    heroType: number;
+};
+
+export type GameGetVesselsResponse = (Array<{
+    [key: string]: unknown;
+}>);
+
+export type GameGetStackingCategoriesResponse = (Array<{
+    [key: string]: unknown;
+}>);
+
+export type GameGetColorsResponse = ({
+    [key: string]: (string);
+});
 
 export type LoginLoginAccessTokenData = {
     formData: Body_login_login_access_token;
@@ -171,11 +529,57 @@ export type LoginRecoverPasswordHtmlContentData = {
 
 export type LoginRecoverPasswordHtmlContentResponse = (string);
 
+export type OauthLoginGoogleResponse = (unknown);
+
+export type OauthGoogleCallbackData = {
+    code?: (string | null);
+    error?: (string | null);
+    state?: (string | null);
+};
+
+export type OauthGoogleCallbackResponse = (unknown);
+
+export type OptimizeRunOptimizeData = {
+    requestBody: OptimizeRequest;
+};
+
+export type OptimizeRunOptimizeResponse = (Array<VesselResult>);
+
+export type OptimizeRunOptimizeStreamData = {
+    requestBody: OptimizeRequest;
+};
+
+export type OptimizeRunOptimizeStreamResponse = (unknown);
+
+export type OptimizeListBuildChangesResponse = (Array<BuildChange>);
+
+export type OptimizeAckBuildChangeData = {
+    buildId: string;
+};
+
+export type OptimizeAckBuildChangeResponse = (Message);
+
 export type PrivateCreateUserData = {
     requestBody: PrivateUserCreate;
 };
 
 export type PrivateCreateUserResponse = (UserPublic);
+
+export type SavesUploadSaveData = {
+    formData: Body_saves_upload_save;
+};
+
+export type SavesUploadSaveResponse = (UploadResponse);
+
+export type SavesGetSaveStatusResponse = ((SaveStatusPublic | null));
+
+export type SavesListProfilesResponse = (ProfilesPublic);
+
+export type SavesGetProfileRelicsData = {
+    profileId: string;
+};
+
+export type SavesGetProfileRelicsResponse = (RelicsPublic);
 
 export type UsersReadUsersData = {
     limit?: number;

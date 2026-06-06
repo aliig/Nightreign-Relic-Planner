@@ -17,6 +17,7 @@ from nrplanner.models import (
     BuildDefinition,
     SlotAssignment, VesselResult,
     PlacementDelta, VesselState,
+    BuildChange, RelicRef,
 )
 from nrplanner.scoring import BuildScorer
 from nrplanner.optimizer import VesselOptimizer
@@ -38,6 +39,7 @@ __all__ = [
     "BuildDefinition",
     "SlotAssignment", "VesselResult",
     "PlacementDelta", "VesselState",
+    "BuildChange", "RelicRef",
     # Optimizer
     "BuildScorer", "VesselOptimizer",
     # Persistence

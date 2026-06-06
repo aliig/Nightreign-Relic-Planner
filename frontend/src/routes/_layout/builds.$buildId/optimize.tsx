@@ -1,10 +1,12 @@
-import { useSuspenseQuery } from "@tanstack/react-query"
+import { useQueryClient, useSuspenseQuery } from "@tanstack/react-query"
 import { createFileRoute, Link, useParams } from "@tanstack/react-router"
 import { Suspense, useEffect, useMemo, useRef, useState } from "react"
-import type { VesselResult } from "@/client"
+import type { BuildChange, VesselResult } from "@/client"
 import { BuildsService, GameService, SavesService } from "@/client"
 import {
   cacheKey,
+  ChangeBanner,
+  enteredKeys,
   type OptimizeProgress,
   resultCache,
   runOptimizeStream,
@@ -37,6 +39,7 @@ export const Route = createFileRoute("/_layout/builds/$buildId/optimize")({
 
 function AuthOptimizeForm({ buildId }: { buildId: string }) {
   const { showErrorToast } = useCustomToast()
+  const queryClient = useQueryClient()
   const { data: buildRaw } = useSuspenseQuery({
     queryKey: ["builds", buildId],
     queryFn: () => BuildsService.getBuild({ buildId }),
@@ -76,6 +79,7 @@ function AuthOptimizeForm({ buildId }: { buildId: string }) {
   const [isPending, setIsPending] = useState(false)
   const [progress, setProgress] = useState<OptimizeProgress | null>(null)
   const [hasRun, setHasRun] = useState(() => resultCache.has(key))
+  const [change, setChange] = useState<BuildChange | null>(null)
   const autoOptimizeRef = useRef(false)
 
   useEffect(() => {
@@ -88,13 +92,17 @@ function AuthOptimizeForm({ buildId }: { buildId: string }) {
     setIsPending(true)
     setProgress(null)
     setResults([])
+    setChange(null)
     try {
       const data = await runOptimizeStream(
         { build_id: buildId, profile_id: profileId },
         setProgress,
+        setChange,
       )
       setResults(data)
       resultCache.set(key, data)
+      // Server marks this build's snapshot reviewed on optimize — refresh badges.
+      queryClient.invalidateQueries({ queryKey: ["build-changes"] })
     } catch (err) {
       showErrorToast(err instanceof Error ? err.message : "Optimization failed")
     } finally {
@@ -169,6 +177,7 @@ function AuthOptimizeForm({ buildId }: { buildId: string }) {
 
       {results.length > 0 && (
         <div className="space-y-3">
+          <ChangeBanner change={change} />
           <h2 className="text-lg font-medium">
             Top {results.length} vessel{results.length !== 1 ? "s" : ""}
           </h2>
@@ -180,6 +189,7 @@ function AuthOptimizeForm({ buildId }: { buildId: string }) {
               highlighted={index === 0}
               pinnedHandles={pinnedHandles}
               effectMap={effectMap}
+              enteredFingerprints={index === 0 ? enteredKeys(change) : undefined}
             />
           ))}
         </div>
@@ -253,6 +263,7 @@ function AnonOptimizeForm({ buildId }: { buildId: string }) {
   const [isPending, setIsPending] = useState(false)
   const [progress, setProgress] = useState<OptimizeProgress | null>(null)
   const [hasRun, setHasRun] = useState(() => resultCache.has(key))
+  const [change, setChange] = useState<BuildChange | null>(null)
   const autoOptimizeRef = useRef(false)
 
   useEffect(() => {
@@ -280,6 +291,7 @@ function AnonOptimizeForm({ buildId }: { buildId: string }) {
     setIsPending(true)
     setProgress(null)
     setResults([])
+    setChange(null)
     try {
       const data = await runOptimizeStream(
         {
@@ -299,6 +311,7 @@ function AnonOptimizeForm({ buildId }: { buildId: string }) {
           relics,
         },
         setProgress,
+        setChange,
       )
       setResults(data)
       resultCache.set(key, data)
@@ -402,6 +415,7 @@ function AnonOptimizeForm({ buildId }: { buildId: string }) {
 
       {results.length > 0 && (
         <div className="space-y-3">
+          <ChangeBanner change={change} />
           <h2 className="text-lg font-medium">
             Top {results.length} vessel{results.length !== 1 ? "s" : ""}
           </h2>
@@ -413,6 +427,7 @@ function AnonOptimizeForm({ buildId }: { buildId: string }) {
               highlighted={index === 0}
               pinnedHandles={pinnedHandles}
               effectMap={effectMap}
+              enteredFingerprints={index === 0 ? enteredKeys(change) : undefined}
             />
           ))}
         </div>

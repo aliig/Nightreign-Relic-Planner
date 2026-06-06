@@ -3,8 +3,10 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from pydantic import EmailStr
-from sqlalchemy import BigInteger, Column, DateTime, JSON
+from sqlalchemy import BigInteger, Column, DateTime, JSON, UniqueConstraint
 from sqlmodel import Field, Relationship, SQLModel
+
+from nrplanner.models import BuildChange
 
 
 def get_datetime_utc() -> datetime:
@@ -330,6 +332,66 @@ class FeaturedBuildsPublic(SQLModel):
 
 
 # ---------------------------------------------------------------------------
+# Optimization snapshots (save-diff change detection)
+# ---------------------------------------------------------------------------
+
+class OptimizationSnapshot(SQLModel, table=True):
+    """Persisted optimization result + the inputs it was computed from.
+
+    Keyed by (build_id, slot_index) — NOT profile_id — because Profile rows are
+    cascade-deleted and recreated on every save re-upload, while slot_index is the
+    stable identity of a save's character slot.  This lets the prior result
+    survive a re-upload so the new inventory can be diffed against it.
+
+    Staleness is a pure function of recorded provenance: the snapshot is current
+    iff relics_hash, build_hash, game_data_version and optimizer_version all match
+    the live inputs.
+    """
+    __tablename__ = "optimization_snapshot"
+    __table_args__ = (
+        UniqueConstraint(
+            "build_id", "slot_index", name="uq_optimization_snapshot_build_slot"
+        ),
+    )
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    owner_id: uuid.UUID = Field(
+        foreign_key="user.id", nullable=False, ondelete="CASCADE"
+    )
+    build_id: uuid.UUID = Field(
+        foreign_key="build.id", nullable=False, ondelete="CASCADE"
+    )
+    slot_index: int
+
+    # --- provenance (stale ⇔ any differs from the live inputs) ---
+    relics_hash: str = Field(max_length=64)
+    build_hash: str = Field(max_length=64)
+    game_data_version: str = Field(max_length=32)
+    optimizer_version: int
+
+    # --- result + cached change summary ---
+    top_layouts: list = Field(
+        default_factory=list,
+        sa_column=Column(JSON, nullable=False, server_default="[]"),
+    )
+    best_score: int = 0
+    any_truncated: bool = False
+    last_change: Optional[dict] = Field(
+        default=None, sa_column=Column(JSON, nullable=True)
+    )
+    reviewed: bool = Field(default=False)
+
+    computed_at: datetime | None = Field(
+        default_factory=get_datetime_utc,
+        sa_type=DateTime(timezone=True),  # type: ignore
+    )
+    updated_at: datetime | None = Field(
+        default_factory=get_datetime_utc,
+        sa_type=DateTime(timezone=True),  # type: ignore
+    )
+
+
+# ---------------------------------------------------------------------------
 # Save status schema
 # ---------------------------------------------------------------------------
 
@@ -372,12 +434,21 @@ class ParsedProfileData(SQLModel):
     id: uuid.UUID | None = None
 
 
+class RelicDelta(SQLModel):
+    """How many relics were gained/lost versus the previous save."""
+    added: int = 0
+    removed: int = 0
+
+
 class UploadResponse(SQLModel):
     platform: str
     profile_count: int
     profiles: list[ParsedProfileData]
     save_upload_id: uuid.UUID | None = None
     persisted: bool = False
+    # Save-diff summary (authenticated uploads only).
+    relic_delta: Optional[RelicDelta] = None
+    affected_builds: list[BuildChange] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------

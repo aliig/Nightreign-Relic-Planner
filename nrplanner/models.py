@@ -5,7 +5,7 @@ These are the FastAPI-ready schemas — keep field names stable.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 
@@ -251,6 +251,49 @@ class VesselResult(BaseModel):
             else:
                 slots.append(None)
         return (self.vessel_id, tuple(slots))
+
+
+# ---------------------------------------------------------------------------
+# Change detection (save-diff notifications)
+# ---------------------------------------------------------------------------
+
+ChangeStatus = Literal[
+    "improved", "degraded", "reordered", "unchanged",
+    "new", "broken_pin", "potentially_affected",
+]
+
+
+class RelicRef(BaseModel):
+    """Lightweight relic identity for change display (no ga_handle — unstable)."""
+    real_id: int
+    name: str = ""
+    color: str = ""
+    effects: list[int] = Field(default_factory=list)
+    curses: list[int] = Field(default_factory=list)
+
+
+class BuildChange(BaseModel):
+    """How a build's optimal arrangement changed between two optimization inputs.
+
+    Produced two ways with the same shape: a cheap relic-diff at save-upload
+    time (``potentially_affected`` / ``broken_pin``), and a precise recompute on
+    optimize (``improved`` / ``degraded`` / ``reordered`` / ``unchanged``).
+    ``reliable`` is False when a truncated (non-exhaustive) search makes a small
+    delta untrustworthy.  Relics are referenced by content, never by ga_handle.
+    """
+    build_id: str = ""
+    build_name: str = ""
+    slot_index: int = -1
+    status: ChangeStatus
+    best_before: Optional[int] = None
+    best_after: Optional[int] = None
+    delta: int = 0
+    entered: list[RelicRef] = Field(default_factory=list)
+    left: list[RelicRef] = Field(default_factory=list)
+    pinned_removed: list[RelicRef] = Field(default_factory=list)
+    relevant_added: int = 0
+    cause: Optional[Literal["relics", "build_edit", "game_data", "mixed"]] = None
+    reliable: bool = True
 
 
 # ---------------------------------------------------------------------------

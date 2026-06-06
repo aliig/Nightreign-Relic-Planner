@@ -18,6 +18,11 @@ from nrplanner.scoring import BuildScorer
 # the search finish in well under a second even on large inventories.
 DEFAULT_BACKTRACK_DEADLINE_SECS = 10.0
 
+# Bump whenever a change to the solver/scoring could alter optimization results.
+# Recorded in OptimizationSnapshot provenance so old snapshots are known to be
+# incomparable after an algorithm change (forces a fresh diff baseline).
+OPTIMIZER_VERSION = 1
+
 # ---------------------------------------------------------------------------
 # Worker-process globals (set once per worker by init_optimizer_worker)
 # ---------------------------------------------------------------------------

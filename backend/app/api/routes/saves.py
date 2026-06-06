@@ -13,12 +13,14 @@ from app.core.config import settings
 from app.core.game_data import get_items_json
 from app.models import (
     Build,
+    OptimizationSnapshot,
     ProfilePublic,
     ProfilesPublic,
     Profile,
     ParsedProfileData,
     ParsedRelicData,
     Relic,
+    RelicDelta,
     RelicPublic,
     RelicsPublic,
     SaveUpload,
@@ -32,6 +34,8 @@ from nrplanner import (
     parse_relics,
     split_memory_dat,
 )
+from nrplanner.changes import multiset_diff, relevant_to_build, relic_fingerprint
+from nrplanner.models import BuildChange, BuildDefinition, RelicRef, WeightGroup
 
 router = APIRouter(prefix="/saves", tags=["saves"])
 
@@ -48,21 +52,20 @@ def _compute_handle_remap(
     relic is absent from the new save are simply omitted — callers should drop
     any pinned references to missing handles.
     """
-    _Fp = tuple  # (real_id, e1, e2, e3, c1, c2, c3)
-
-    def _fp(real_id: int, e1: int, e2: int, e3: int, c1: int, c2: int, c3: int) -> _Fp:
-        return (real_id, e1, e2, e3, c1, c2, c3)
-
-    old_fp: dict[_Fp, list[int]] = defaultdict(list)
+    old_fp: dict[tuple, list[int]] = defaultdict(list)
     for r in old_relics:
-        old_fp[_fp(r.real_id, r.effect_1, r.effect_2, r.effect_3,
-                   r.curse_1, r.curse_2, r.curse_3)].append(r.ga_handle)
+        old_fp[relic_fingerprint(
+            r.real_id, (r.effect_1, r.effect_2, r.effect_3),
+            (r.curse_1, r.curse_2, r.curse_3),
+        )].append(r.ga_handle)
 
-    new_fp: dict[_Fp, list[int]] = defaultdict(list)
+    new_fp: dict[tuple, list[int]] = defaultdict(list)
     for prof in new_profiles:
         for r in prof.relics:
-            new_fp[_fp(r.real_id, r.effect_1, r.effect_2, r.effect_3,
-                       r.curse_1, r.curse_2, r.curse_3)].append(r.ga_handle)
+            new_fp[relic_fingerprint(
+                r.real_id, (r.effect_1, r.effect_2, r.effect_3),
+                (r.curse_1, r.curse_2, r.curse_3),
+            )].append(r.ga_handle)
 
     remap: dict[int, int] = {}
     for fp, old_handles in old_fp.items():
@@ -71,6 +74,130 @@ def _compute_handle_remap(
             remap[old_h] = new_h
 
     return remap
+
+
+def _db_relic_fingerprint(r: Relic) -> tuple:
+    return relic_fingerprint(
+        r.real_id, (r.effect_1, r.effect_2, r.effect_3),
+        (r.curse_1, r.curse_2, r.curse_3),
+    )
+
+
+def _parsed_relic_fingerprint(r: ParsedRelicData) -> tuple:
+    return relic_fingerprint(
+        r.real_id, (r.effect_1, r.effect_2, r.effect_3),
+        (r.curse_1, r.curse_2, r.curse_3),
+    )
+
+
+def _relic_ref_from_db(r: Relic) -> RelicRef:
+    return RelicRef(
+        real_id=r.real_id, name=r.name, color=r.color,
+        effects=[r.effect_1, r.effect_2, r.effect_3],
+        curses=[r.curse_1, r.curse_2, r.curse_3],
+    )
+
+
+def _build_def_for_relevance(build: Build) -> BuildDefinition:
+    """Minimal BuildDefinition carrying only the fields relevance scanning reads."""
+    return BuildDefinition(
+        id=str(build.id),
+        name=build.name,
+        character=build.character,
+        groups=[WeightGroup(**g) for g in (build.groups or [])],
+        required_effects=build.required_effects or [],
+        required_families=build.required_families or [],
+    )
+
+
+def _compute_relic_delta(
+    old_relics: list[Relic], new_profiles: list[ParsedProfileData]
+) -> RelicDelta:
+    old_fps = [_db_relic_fingerprint(r) for r in old_relics]
+    new_fps = [_parsed_relic_fingerprint(r) for prof in new_profiles for r in prof.relics]
+    added, removed = multiset_diff(old_fps, new_fps)
+    return RelicDelta(added=len(added), removed=len(removed))
+
+
+def _flag_affected_snapshots(
+    session: Any,
+    ds: Any,
+    owner_id: uuid.UUID,
+    old_relics: list[Relic],
+    old_profiles: list[Profile],
+    new_profiles: list[ParsedProfileData],
+    db_builds: list[Build],
+    handle_remap: dict[int, int],
+) -> list[BuildChange]:
+    """Cheaply flag builds whose stored arrangement may have changed.
+
+    For each existing (build, slot) snapshot: diff that slot's relics, test
+    relevance to the build, and detect pinned relics that vanished from the save.
+    Affected snapshots are marked unreviewed with a coarse ``last_change``; the
+    precise before/after is computed later when the build is re-optimized.
+    """
+    old_slot_of = {p.id: p.slot_index for p in old_profiles}
+
+    old_by_slot: dict[int, list] = defaultdict(list)
+    for r in old_relics:
+        slot = old_slot_of.get(r.profile_id)
+        if slot is not None:
+            old_by_slot[slot].append(_db_relic_fingerprint(r))
+
+    new_by_slot: dict[int, list] = defaultdict(list)
+    for prof in new_profiles:
+        for r in prof.relics:
+            new_by_slot[prof.slot_index].append(_parsed_relic_fingerprint(r))
+
+    old_by_handle = {r.ga_handle: r for r in old_relics}
+    builds_by_id = {b.id: b for b in db_builds}
+
+    snaps = session.exec(
+        select(OptimizationSnapshot).where(OptimizationSnapshot.owner_id == owner_id)
+    ).all()
+
+    affected: list[BuildChange] = []
+    for snap in snaps:
+        build = builds_by_id.get(snap.build_id)
+        if build is None:
+            continue
+
+        added, removed = multiset_diff(
+            old_by_slot.get(snap.slot_index, []),
+            new_by_slot.get(snap.slot_index, []),
+        )
+        build_def = _build_def_for_relevance(build)
+        relevant_added, relevant_removed = relevant_to_build(build_def, added, removed, ds)
+
+        broken: list[RelicRef] = []
+        for handle in build.pinned_relics or []:
+            if handle in handle_remap:
+                continue  # survived the re-upload (relic still present)
+            old_relic = old_by_handle.get(handle)
+            if old_relic is None or old_slot_of.get(old_relic.profile_id) != snap.slot_index:
+                continue
+            broken.append(_relic_ref_from_db(old_relic))
+
+        if relevant_added == 0 and relevant_removed == 0 and not broken:
+            continue
+
+        change = BuildChange(
+            build_id=str(build.id),
+            build_name=build.name,
+            slot_index=snap.slot_index,
+            status="broken_pin" if broken else "potentially_affected",
+            relevant_added=relevant_added,
+            pinned_removed=broken,
+            cause="relics",
+            reliable=False,
+        )
+        snap.last_change = change.model_dump(mode="json")
+        snap.reviewed = False
+        session.add(snap)
+        affected.append(change)
+
+    return affected
+
 
 _ALLOWED_EXTENSIONS = {".sl2", ".dat"}
 
@@ -215,6 +342,8 @@ async def upload_save(
     # (e.g. when relics are acquired or the inventory is reorganised).  We match
     # relics by content fingerprint so pinned relics survive re-uploads.
     # Pins for relics no longer present in the new save are silently dropped.
+    affected_builds: list[BuildChange] = []
+    relic_delta = RelicDelta()
     old_relics = session.exec(
         select(Relic).where(Relic.owner_id == current_user.id)
     ).all()
@@ -231,6 +360,17 @@ async def upload_save(
                 build.pinned_relics = new_pinned
                 session.add(build)
         session.flush()
+
+        # Cheap save-diff: flag builds whose stored arrangement may have changed
+        # (snapshots survive the re-upload — they key on slot_index, not profile).
+        old_profiles = session.exec(
+            select(Profile).where(Profile.owner_id == current_user.id)
+        ).all()
+        relic_delta = _compute_relic_delta(list(old_relics), profiles)
+        affected_builds = _flag_affected_snapshots(
+            session, ds, current_user.id, list(old_relics), list(old_profiles),
+            profiles, list(db_builds), handle_remap,
+        )
 
     # Authenticated — delete old upload and persist fresh data
     old_uploads = session.exec(
@@ -288,6 +428,8 @@ async def upload_save(
         profiles=profiles,
         save_upload_id=save_upload.id,
         persisted=True,
+        relic_delta=relic_delta,
+        affected_builds=affected_builds,
     )
 
 
