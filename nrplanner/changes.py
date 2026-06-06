@@ -264,13 +264,13 @@ def diff_results(
         else None
     )
 
-    # First time we've ever optimized this build+slot — nothing to compare.
+    # First time we've ever optimized this build+slot — there is no prior
+    # arrangement to compare against, so nothing has "entered".  Record the
+    # baseline only (otherwise run one would tag every relic in the layout NEW).
     if old_best is None:
-        entered = _entered_refs(new_best, _result_relic_fps(new_best)) if new_best else []
         return BuildChange(
             status="new",
             best_after=new_best.total_score if new_best else None,
-            entered=entered,
             reliable=not (new_best.search_truncated if new_best else False),
         )
 

@@ -125,7 +125,8 @@ class TestDiffResults:
         change = diff_results(None, [_vessel([_relic(1, [10])], 50)])
         assert change.status == "new"
         assert change.best_after == 50
-        assert len(change.entered) == 1
+        # First run: no prior baseline, so nothing is flagged as newly entered.
+        assert change.entered == []
 
     def test_unchanged_identical(self):
         old = serialize_top_layouts([_vessel([_relic(1, [10])], 50)])
