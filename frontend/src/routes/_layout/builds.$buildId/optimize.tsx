@@ -1,8 +1,8 @@
-import { useQueryClient, useSuspenseQuery } from "@tanstack/react-query"
+import { useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query"
 import { createFileRoute, Link, useParams } from "@tanstack/react-router"
 import { Suspense, useEffect, useMemo, useRef, useState } from "react"
 import type { BuildChange, VesselResult } from "@/client"
-import { BuildsService, GameService, SavesService } from "@/client"
+import { BuildsService, GameService, OptimizeService, SavesService } from "@/client"
 import { ExportDebugButton } from "@/components/Debug/ExportDebugButton"
 import {
   cacheKey,
@@ -83,10 +83,30 @@ function AuthOptimizeForm({ buildId }: { buildId: string }) {
   const [change, setChange] = useState<BuildChange | null>(null)
   const autoOptimizeRef = useRef(false)
 
+  // Load cached snapshot from server if fresh
+  const { data: snapshot, isLoading: snapshotLoading } = useQuery({
+    queryKey: ["snapshot", buildId, profileId],
+    queryFn: () =>
+      OptimizeService.getSnapshot({ buildId, profileId }),
+    enabled: !!profileId && !resultCache.has(key),
+    staleTime: Infinity,
+  })
+
+  // Populate results from snapshot when it arrives
+  useEffect(() => {
+    if (snapshot && !resultCache.has(key) && !hasRun) {
+      setResults(snapshot.results)
+      setChange(snapshot.last_change ?? null)
+      resultCache.set(key, snapshot.results)
+      setHasRun(true)
+    }
+  }, [snapshot, key, hasRun])
+
   useEffect(() => {
     const cached = resultCache.get(key)
     setResults(cached ?? [])
     setHasRun(cached !== undefined)
+    setChange(null)
   }, [key])
 
   const handleOptimize = async () => {
@@ -102,8 +122,7 @@ function AuthOptimizeForm({ buildId }: { buildId: string }) {
       )
       setResults(data)
       resultCache.set(key, data)
-      // Server marks this build's snapshot reviewed on optimize — refresh badges.
-      queryClient.invalidateQueries({ queryKey: ["build-changes"] })
+      queryClient.invalidateQueries({ queryKey: ["snapshot", buildId, profileId] })
     } catch (err) {
       showErrorToast(err instanceof Error ? err.message : "Optimization failed")
     } finally {
@@ -113,13 +132,20 @@ function AuthOptimizeForm({ buildId }: { buildId: string }) {
     }
   }
 
-  // Auto-optimize when there's only one profile and no cached results
+  // Auto-optimize when there's only one profile, no cached results, and no server snapshot
   useEffect(() => {
-    if (profiles.length === 1 && profileId && !resultCache.has(key) && !autoOptimizeRef.current) {
+    if (
+      profiles.length === 1 &&
+      profileId &&
+      !resultCache.has(key) &&
+      !autoOptimizeRef.current &&
+      !snapshotLoading &&
+      !snapshot
+    ) {
       autoOptimizeRef.current = true
       handleOptimize()
     }
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [snapshotLoading, snapshot]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="space-y-6">
@@ -165,6 +191,12 @@ function AuthOptimizeForm({ buildId }: { buildId: string }) {
         </div>
       )}
 
+      {snapshotLoading && !hasRun && !isPending && (
+        <p className="text-sm text-muted-foreground animate-pulse">
+          Loading cached results…
+        </p>
+      )}
+
       {profiles.length === 0 && (
         <p className="text-sm text-muted-foreground">
           No inventory found.{" "}
@@ -175,7 +207,7 @@ function AuthOptimizeForm({ buildId }: { buildId: string }) {
         </p>
       )}
 
-      {!isPending && hasRun && results.length === 0 && (
+      {!isPending && !snapshotLoading && hasRun && results.length === 0 && (
         <p className="text-sm text-muted-foreground">
           No matching relics found for this build. Check that your inventory has
           relics with the effects your build is looking for.

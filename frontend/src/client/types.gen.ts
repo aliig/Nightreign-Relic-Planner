@@ -551,13 +551,21 @@ export type OptimizeRunOptimizeStreamData = {
 
 export type OptimizeRunOptimizeStreamResponse = (unknown);
 
-export type OptimizeListBuildChangesResponse = (Array<BuildChange>);
-
-export type OptimizeAckBuildChangeData = {
-    buildId: string;
+export type OptimizeGetSnapshotResponse = {
+    results: Array<VesselResult>;
+    last_change: BuildChange | null;
+    computed_at: string | null;
 };
 
-export type OptimizeAckBuildChangeResponse = (Message);
+export type BuildSnapshotSummary = {
+    build_id: string;
+    status: string | null;
+    delta: number;
+    best_score: number;
+    computed_at: string | null;
+};
+
+export type OptimizeListBuildSummariesResponse = Array<BuildSnapshotSummary>;
 
 export type PrivateCreateUserData = {
     requestBody: PrivateUserCreate;

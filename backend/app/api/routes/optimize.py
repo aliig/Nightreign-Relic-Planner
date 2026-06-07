@@ -35,7 +35,6 @@ from app.core.db import engine
 from app.core.game_data import game_data_version
 from app.models import (
     Build,
-    Message,
     OptimizationSnapshot,
     Profile,
     Relic,
@@ -471,47 +470,118 @@ def optimize_slot_alternative(
     return results[0]
 
 
-@router.get("/changes", response_model=list[BuildChange])
-def list_build_changes(
+class SnapshotResponse(BaseModel):
+    """Cached optimization results from a fresh snapshot."""
+    results: list[VesselResult]
+    last_change: BuildChange | None = None
+    computed_at: str | None = None
+
+
+@router.get("/snapshot", response_model=SnapshotResponse | None)
+def get_snapshot(
+    build_id: uuid.UUID,
+    profile_id: uuid.UUID,
     current_user: CurrentUser,
     session: SessionDep,
-) -> list[BuildChange]:
-    """Unacknowledged, interesting arrangement changes across the user's builds.
+    ds: GameDataDep,
+) -> SnapshotResponse | None:
+    """Return cached optimization results if the snapshot is fresh.
 
-    Populated cheaply at save-upload time (``potentially_affected`` /
-    ``broken_pin``) and refined to a precise status when the build is re-optimized.
+    A snapshot is fresh when its relics_hash and build_hash match the current
+    live inputs.  Returns null if stale or missing — the frontend should then
+    trigger a fresh optimization.
+    """
+    db_build = session.get(Build, build_id)
+    if not db_build or db_build.owner_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Build not found")
+
+    profile = session.get(Profile, profile_id)
+    if not profile or profile.owner_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Profile not found")
+
+    snap = session.exec(
+        select(OptimizationSnapshot).where(
+            OptimizationSnapshot.build_id == build_id,
+            OptimizationSnapshot.slot_index == profile.slot_index,
+        )
+    ).first()
+    if snap is None:
+        return None
+
+    build_def = build_def_from_db(db_build)
+    current_build_hash = build_signature(build_def)
+
+    db_relics = session.exec(
+        select(Relic).where(Relic.profile_id == profile_id)
+    ).all()
+    owned_relics = [
+        OwnedRelic(
+            ga_handle=r.ga_handle,
+            item_id=r.item_id,
+            real_id=r.real_id,
+            color=r.color,
+            effects=[r.effect_1, r.effect_2, r.effect_3],
+            curses=[r.curse_1, r.curse_2, r.curse_3],
+            is_deep=r.is_deep,
+            name=r.name,
+            tier=r.tier,
+        )
+        for r in db_relics
+    ]
+    current_relics_hash = relics_signature(owned_relics)
+
+    if snap.relics_hash != current_relics_hash or snap.build_hash != current_build_hash:
+        return None
+
+    # Snapshot is fresh — deserialize results
+    results = [VesselResult(**layout) for layout in snap.top_layouts]
+    last_change = BuildChange(**snap.last_change) if snap.last_change else None
+
+    return SnapshotResponse(
+        results=results,
+        last_change=last_change,
+        computed_at=snap.computed_at.isoformat() if snap.computed_at else None,
+    )
+
+
+class BuildSnapshotSummary(BaseModel):
+    """Lightweight summary of a build's most recent optimization change."""
+    build_id: str
+    status: str | None = None
+    delta: int = 0
+    best_score: int = 0
+    computed_at: str | None = None
+
+
+@router.get("/summaries", response_model=list[BuildSnapshotSummary])
+def list_build_summaries(
+    current_user: CurrentUser,
+    session: SessionDep,
+) -> list[BuildSnapshotSummary]:
+    """Return the most recent optimization status for each of the user's builds.
+
+    Used by the builds list to show subtle score change indicators without
+    requiring a full snapshot load.  Only returns builds that have at least
+    one snapshot; builds that have never been optimized are omitted.
     """
     snaps = session.exec(
         select(OptimizationSnapshot).where(
             OptimizationSnapshot.owner_id == current_user.id,
-            OptimizationSnapshot.reviewed == False,  # noqa: E712
         )
     ).all()
-    changes: list[BuildChange] = []
-    for snap in snaps:
-        if not snap.last_change:
-            continue
-        if snap.last_change.get("status") in (None, "unchanged", "new"):
-            continue
-        changes.append(BuildChange(**snap.last_change))
-    return changes
 
-
-@router.post("/changes/{build_id}/ack", response_model=Message)
-def ack_build_change(
-    build_id: uuid.UUID,
-    current_user: CurrentUser,
-    session: SessionDep,
-) -> Message:
-    """Mark a build's pending change(s) as reviewed (clears its badge)."""
-    snaps = session.exec(
-        select(OptimizationSnapshot).where(
-            OptimizationSnapshot.build_id == build_id,
-            OptimizationSnapshot.owner_id == current_user.id,
-        )
-    ).all()
+    summaries: list[BuildSnapshotSummary] = []
     for snap in snaps:
-        snap.reviewed = True
-        session.add(snap)
-    session.commit()
-    return Message(message="acknowledged")
+        lc = snap.last_change or {}
+        status = lc.get("status")
+        # Only surface interesting changes (not "unchanged", "new", None)
+        if status in (None, "unchanged", "new"):
+            status = None
+        summaries.append(BuildSnapshotSummary(
+            build_id=str(snap.build_id),
+            status=status,
+            delta=lc.get("delta", 0),
+            best_score=snap.best_score,
+            computed_at=snap.computed_at.isoformat() if snap.computed_at else None,
+        ))
+    return summaries

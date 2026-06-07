@@ -12,11 +12,12 @@ import {
   useRouterState,
 } from "@tanstack/react-router"
 import {
+  ArrowDown,
+  ArrowUp,
   Copy,
   MoreVertical,
   Pencil,
   Plus,
-  Sparkles,
   Star,
   Trash2,
   Zap,
@@ -26,12 +27,11 @@ import { useForm } from "react-hook-form"
 import { z } from "zod"
 
 import {
-  type BuildChange,
+  type BuildSnapshotSummary,
   BuildsService,
   type FeaturedBuildPublic,
   OptimizeService,
 } from "@/client"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -198,7 +198,7 @@ function BuildCard({
   onDuplicate,
   onToggleFeatured,
   isDeleting,
-  pendingChange,
+  summary,
 }: {
   build: BuildCardData
   onDelete: (id: string) => void
@@ -207,7 +207,7 @@ function BuildCard({
   onDuplicate?: (id: string) => void
   onToggleFeatured?: (id: string) => void
   isDeleting?: boolean
-  pendingChange?: BuildChange
+  summary?: BuildSnapshotSummary
 }) {
   const [draftName, setDraftName] = useState(build.name)
   const [deleteOpen, setDeleteOpen] = useState(false)
@@ -247,19 +247,14 @@ function BuildCard({
             onBlur={commitRename}
             className="text-base font-semibold bg-transparent border-b border-transparent hover:border-muted-foreground/30 focus:border-primary focus:outline-none focus:ring-0 py-0.5 min-w-0 flex-1 truncate transition-colors"
           />
-          {pendingChange && (
-            <span
-              className="shrink-0"
-              title={
-                pendingChange.status === "broken_pin"
-                  ? "A pinned relic is no longer in your save"
-                  : "New relics may improve this build — re-optimize to see"
-              }
-            >
-              <Badge className="h-5 gap-1 px-1.5 py-0 text-[10px] bg-green-600 text-white hover:bg-green-600">
-                <Sparkles className="h-3 w-3" />
-                {pendingChange.status === "broken_pin" ? "Pin lost" : "Review"}
-              </Badge>
+          {summary?.status === "improved" && summary.delta > 0 && (
+            <span className="shrink-0 inline-flex items-center gap-0.5 text-green-600 text-xs font-medium" title={`Score improved by ${summary.delta} pts`}>
+              <ArrowUp className="h-3 w-3" />+{summary.delta}
+            </span>
+          )}
+          {summary?.status === "degraded" && summary.delta < 0 && (
+            <span className="shrink-0 inline-flex items-center gap-0.5 text-red-500 text-xs font-medium" title={`Score decreased by ${Math.abs(summary.delta)} pts`}>
+              <ArrowDown className="h-3 w-3" />{summary.delta}
             </span>
           )}
           <div className="flex items-center gap-1 shrink-0">
@@ -581,13 +576,13 @@ function AuthBuildList() {
     queryKey: ["builds"],
     queryFn: () => BuildsService.listBuilds(),
   })
-  const { data: buildChanges } = useQuery({
-    queryKey: ["build-changes"],
-    queryFn: () => OptimizeService.listBuildChanges(),
+  const { data: summaries } = useQuery({
+    queryKey: ["build-summaries"],
+    queryFn: () => OptimizeService.listBuildSummaries(),
   })
-  const changeByBuild = new Map<string, BuildChange>()
-  for (const c of buildChanges ?? []) {
-    if (c.build_id) changeByBuild.set(c.build_id, c)
+  const summaryByBuild = new Map<string, BuildSnapshotSummary>()
+  for (const s of summaries ?? []) {
+    if (s.build_id) summaryByBuild.set(s.build_id, s)
   }
   const { user } = useAuth()
   const { showSuccessToast, showErrorToast } = useCustomToast()
@@ -679,7 +674,7 @@ function AuthBuildList() {
           isDeleting={
             deleteMutation.isPending && deleteMutation.variables === build.id
           }
-          pendingChange={changeByBuild.get(build.id)}
+          summary={summaryByBuild.get(build.id)}
         />
       ))}
     </div>

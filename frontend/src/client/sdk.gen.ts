@@ -3,7 +3,7 @@
 import type { CancelablePromise } from './core/CancelablePromise';
 import { OpenAPI } from './core/OpenAPI';
 import { request as __request } from './core/request';
-import type { BuildsListBuildsData, BuildsListBuildsResponse, BuildsCreateBuildData, BuildsCreateBuildResponse, BuildsListFeaturedBuildsData, BuildsListFeaturedBuildsResponse, BuildsGetBuildData, BuildsGetBuildResponse, BuildsUpdateBuildData, BuildsUpdateBuildResponse, BuildsDeleteBuildData, BuildsDeleteBuildResponse, BuildsToggleFeaturedData, BuildsToggleFeaturedResponse, BuildsCloneBuildData, BuildsCloneBuildResponse, GameGetEffectsResponse, GameGetFamiliesResponse, GameGetCharactersResponse, GameGetVesselsData, GameGetVesselsResponse, GameGetStackingCategoriesResponse, GameGetColorsResponse, LoginLoginAccessTokenData, LoginLoginAccessTokenResponse, LoginTestTokenResponse, LoginRecoverPasswordData, LoginRecoverPasswordResponse, LoginResetPasswordData, LoginResetPasswordResponse, LoginRecoverPasswordHtmlContentData, LoginRecoverPasswordHtmlContentResponse, OauthLoginGoogleResponse, OauthGoogleCallbackData, OauthGoogleCallbackResponse, OptimizeRunOptimizeData, OptimizeRunOptimizeResponse, OptimizeRunOptimizeStreamData, OptimizeRunOptimizeStreamResponse, OptimizeListBuildChangesResponse, OptimizeAckBuildChangeData, OptimizeAckBuildChangeResponse, PrivateCreateUserData, PrivateCreateUserResponse, SavesUploadSaveData, SavesUploadSaveResponse, SavesGetSaveStatusResponse, SavesListProfilesResponse, SavesGetProfileRelicsData, SavesGetProfileRelicsResponse, UsersReadUsersData, UsersReadUsersResponse, UsersCreateUserData, UsersCreateUserResponse, UsersReadUserMeResponse, UsersDeleteUserMeResponse, UsersUpdateUserMeData, UsersUpdateUserMeResponse, UsersUpdatePasswordMeData, UsersUpdatePasswordMeResponse, UsersRegisterUserData, UsersRegisterUserResponse, UsersReadUserByIdData, UsersReadUserByIdResponse, UsersUpdateUserData, UsersUpdateUserResponse, UsersDeleteUserData, UsersDeleteUserResponse, UtilsTestEmailData, UtilsTestEmailResponse, UtilsHealthCheckResponse } from './types.gen';
+import type { BuildsListBuildsData, BuildsListBuildsResponse, BuildsCreateBuildData, BuildsCreateBuildResponse, BuildsListFeaturedBuildsData, BuildsListFeaturedBuildsResponse, BuildsGetBuildData, BuildsGetBuildResponse, BuildsUpdateBuildData, BuildsUpdateBuildResponse, BuildsDeleteBuildData, BuildsDeleteBuildResponse, BuildsToggleFeaturedData, BuildsToggleFeaturedResponse, BuildsCloneBuildData, BuildsCloneBuildResponse, GameGetEffectsResponse, GameGetFamiliesResponse, GameGetCharactersResponse, GameGetVesselsData, GameGetVesselsResponse, GameGetStackingCategoriesResponse, GameGetColorsResponse, LoginLoginAccessTokenData, LoginLoginAccessTokenResponse, LoginTestTokenResponse, LoginRecoverPasswordData, LoginRecoverPasswordResponse, LoginResetPasswordData, LoginResetPasswordResponse, LoginRecoverPasswordHtmlContentData, LoginRecoverPasswordHtmlContentResponse, OauthLoginGoogleResponse, OauthGoogleCallbackData, OauthGoogleCallbackResponse, OptimizeRunOptimizeData, OptimizeRunOptimizeResponse, OptimizeRunOptimizeStreamData, OptimizeRunOptimizeStreamResponse, OptimizeGetSnapshotResponse, OptimizeListBuildSummariesResponse, PrivateCreateUserData, PrivateCreateUserResponse, SavesUploadSaveData, SavesUploadSaveResponse, SavesGetSaveStatusResponse, SavesListProfilesResponse, SavesGetProfileRelicsData, SavesGetProfileRelicsResponse, UsersReadUsersData, UsersReadUsersResponse, UsersCreateUserData, UsersCreateUserResponse, UsersReadUserMeResponse, UsersDeleteUserMeResponse, UsersUpdateUserMeData, UsersUpdateUserMeResponse, UsersUpdatePasswordMeData, UsersUpdatePasswordMeResponse, UsersRegisterUserData, UsersRegisterUserResponse, UsersReadUserByIdData, UsersReadUserByIdResponse, UsersUpdateUserData, UsersUpdateUserResponse, UsersDeleteUserData, UsersDeleteUserResponse, UtilsTestEmailData, UtilsTestEmailResponse, UtilsHealthCheckResponse } from './types.gen';
 
 export class BuildsService {
     /**
@@ -460,39 +460,39 @@ export class OptimizeService {
     }
     
     /**
-     * List Build Changes
-     * Unacknowledged, interesting arrangement changes across the user's builds.
-     *
-     * Populated cheaply at save-upload time (``potentially_affected`` /
-     * ``broken_pin``) and refined to a precise status when the build is re-optimized.
-     * @returns BuildChange Successful Response
-     * @throws ApiError
-     */
-    public static listBuildChanges(): CancelablePromise<OptimizeListBuildChangesResponse> {
-        return __request(OpenAPI, {
-            method: 'GET',
-            url: '/api/v1/optimize/changes'
-        });
-    }
-    
-    /**
-     * Ack Build Change
-     * Mark a build's pending change(s) as reviewed (clears its badge).
+     * Get Snapshot
+     * Return cached optimization results if the snapshot is fresh.
+     * Returns null if stale or missing.
      * @param data The data for the request.
      * @param data.buildId
-     * @returns Message Successful Response
+     * @param data.profileId
+     * @returns SnapshotResponse or null Successful Response
      * @throws ApiError
      */
-    public static ackBuildChange(data: OptimizeAckBuildChangeData): CancelablePromise<OptimizeAckBuildChangeResponse> {
+    public static getSnapshot(data: { buildId: string; profileId: string }): CancelablePromise<OptimizeGetSnapshotResponse | null> {
         return __request(OpenAPI, {
-            method: 'POST',
-            url: '/api/v1/optimize/changes/{build_id}/ack',
-            path: {
-                build_id: data.buildId
+            method: 'GET',
+            url: '/api/v1/optimize/snapshot',
+            query: {
+                build_id: data.buildId,
+                profile_id: data.profileId
             },
             errors: {
                 422: 'Validation Error'
             }
+        });
+    }
+
+    /**
+     * List Build Summaries
+     * Return the most recent optimization status for each of the user's builds.
+     * @returns BuildSnapshotSummary[] Successful Response
+     * @throws ApiError
+     */
+    public static listBuildSummaries(): CancelablePromise<OptimizeListBuildSummariesResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/api/v1/optimize/summaries'
         });
     }
 }

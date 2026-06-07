@@ -1,16 +1,27 @@
 """Save file upload, profile discovery, and relic inventory endpoints."""
+import json
 import tempfile
 import uuid
 from collections import defaultdict
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, UploadFile
-from sqlmodel import col, select
+from fastapi.responses import StreamingResponse
+from sqlmodel import Session, col, select
 
-from app.api.deps import CurrentUser, GameDataDep, OptionalUser, SessionDep
+from app.api.deps import (
+    CurrentUser,
+    GameDataDep,
+    OptimizerPoolDep,
+    OptionalUser,
+    SessionDep,
+)
+from app.core.build_def import build_def_from_db
 from app.core.config import settings
-from app.core.game_data import get_items_json
+from app.core.db import engine
+from app.core.game_data import game_data_version, get_items_json
 from app.models import (
     Build,
     OptimizationSnapshot,
@@ -34,8 +45,25 @@ from nrplanner import (
     parse_relics,
     split_memory_dat,
 )
-from nrplanner.changes import multiset_diff, relevant_to_build, relic_fingerprint
-from nrplanner.models import BuildChange, BuildDefinition, RelicRef, WeightGroup
+from nrplanner.changes import (
+    build_signature,
+    diff_results,
+    multiset_diff,
+    relevant_to_build,
+    relic_fingerprint,
+    relics_signature,
+    serialize_top_layouts,
+)
+from nrplanner.models import (
+    BuildChange,
+    BuildDefinition,
+    OwnedRelic,
+    RelicRef,
+    VesselResult,
+    WeightGroup,
+)
+from nrplanner.optimizer import OPTIMIZER_VERSION, VesselOptimizer
+from nrplanner.scoring import BuildScorer
 
 router = APIRouter(prefix="/saves", tags=["saves"])
 
@@ -119,7 +147,15 @@ def _compute_relic_delta(
     return RelicDelta(added=len(added), removed=len(removed))
 
 
-def _flag_affected_snapshots(
+@dataclass
+class _AffectedBuild:
+    """A build whose optimal arrangement may have changed due to relic diff."""
+    build: Build
+    slot_index: int
+    broken_pins: list[RelicRef] = field(default_factory=list)
+
+
+def _identify_affected_builds(
     session: Any,
     ds: Any,
     owner_id: uuid.UUID,
@@ -128,13 +164,11 @@ def _flag_affected_snapshots(
     new_profiles: list[ParsedProfileData],
     db_builds: list[Build],
     handle_remap: dict[int, int],
-) -> list[BuildChange]:
-    """Cheaply flag builds whose stored arrangement may have changed.
+) -> list[_AffectedBuild]:
+    """Identify builds whose stored arrangement may have changed (read-only).
 
-    For each existing (build, slot) snapshot: diff that slot's relics, test
-    relevance to the build, and detect pinned relics that vanished from the save.
-    Affected snapshots are marked unreviewed with a coarse ``last_change``; the
-    precise before/after is computed later when the build is re-optimized.
+    Returns the affected (build, slot_index, broken_pins) without mutating any
+    snapshot state.  Callers decide whether to flag or re-optimize.
     """
     old_slot_of = {p.id: p.slot_index for p in old_profiles}
 
@@ -156,7 +190,7 @@ def _flag_affected_snapshots(
         select(OptimizationSnapshot).where(OptimizationSnapshot.owner_id == owner_id)
     ).all()
 
-    affected: list[BuildChange] = []
+    affected: list[_AffectedBuild] = []
     for snap in snaps:
         build = builds_by_id.get(snap.build_id)
         if build is None:
@@ -172,7 +206,7 @@ def _flag_affected_snapshots(
         broken: list[RelicRef] = []
         for handle in build.pinned_relics or []:
             if handle in handle_remap:
-                continue  # survived the re-upload (relic still present)
+                continue
             old_relic = old_by_handle.get(handle)
             if old_relic is None or old_slot_of.get(old_relic.profile_id) != snap.slot_index:
                 continue
@@ -181,22 +215,57 @@ def _flag_affected_snapshots(
         if relevant_added == 0 and relevant_removed == 0 and not broken:
             continue
 
+        affected.append(_AffectedBuild(
+            build=build, slot_index=snap.slot_index, broken_pins=broken,
+        ))
+
+    return affected
+
+
+def _flag_affected_snapshots(
+    session: Any,
+    ds: Any,
+    owner_id: uuid.UUID,
+    old_relics: list[Relic],
+    old_profiles: list[Profile],
+    new_profiles: list[ParsedProfileData],
+    db_builds: list[Build],
+    handle_remap: dict[int, int],
+) -> list[BuildChange]:
+    """Cheaply flag builds whose stored arrangement may have changed.
+
+    Thin wrapper around ``_identify_affected_builds`` that also marks snapshots
+    unreviewed.  Used by the non-streaming upload endpoint.
+    """
+    affected = _identify_affected_builds(
+        session, ds, owner_id, old_relics, old_profiles, new_profiles,
+        db_builds, handle_remap,
+    )
+    changes: list[BuildChange] = []
+    for ab in affected:
+        snap = session.exec(
+            select(OptimizationSnapshot).where(
+                OptimizationSnapshot.build_id == ab.build.id,
+                OptimizationSnapshot.slot_index == ab.slot_index,
+            )
+        ).first()
+        if snap is None:
+            continue
         change = BuildChange(
-            build_id=str(build.id),
-            build_name=build.name,
-            slot_index=snap.slot_index,
-            status="broken_pin" if broken else "potentially_affected",
-            relevant_added=relevant_added,
-            pinned_removed=broken,
+            build_id=str(ab.build.id),
+            build_name=ab.build.name,
+            slot_index=ab.slot_index,
+            status="broken_pin" if ab.broken_pins else "potentially_affected",
+            relevant_added=0,
+            pinned_removed=ab.broken_pins,
             cause="relics",
             reliable=False,
         )
         snap.last_change = change.model_dump(mode="json")
         snap.reviewed = False
         session.add(snap)
-        affected.append(change)
-
-    return affected
+        changes.append(change)
+    return changes
 
 
 _ALLOWED_EXTENSIONS = {".sl2", ".dat"}
@@ -430,6 +499,358 @@ async def upload_save(
         persisted=True,
         relic_delta=relic_delta,
         affected_builds=affected_builds,
+    )
+
+
+def _owned_from_parsed(relics: list[ParsedRelicData]) -> list[OwnedRelic]:
+    """Convert parsed relic data into OwnedRelic for the optimizer."""
+    return [
+        OwnedRelic(
+            ga_handle=r.ga_handle,
+            item_id=r.item_id,
+            real_id=r.real_id,
+            color=r.color,
+            effects=[r.effect_1, r.effect_2, r.effect_3],
+            curses=[r.curse_1, r.curse_2, r.curse_3],
+            is_deep=r.is_deep,
+            name=r.name,
+            tier=r.tier,
+        )
+        for r in relics
+    ]
+
+
+def _apply_snapshot_for_stream(
+    session: Session,
+    owner_id: uuid.UUID,
+    build: Build,
+    build_def: BuildDefinition,
+    owned_relics: list[OwnedRelic],
+    slot_index: int,
+    results: list[VesselResult],
+) -> BuildChange:
+    """Diff a fresh optimization against the stored snapshot, then upsert it."""
+    from app.models import get_datetime_utc
+
+    snap = session.exec(
+        select(OptimizationSnapshot).where(
+            OptimizationSnapshot.build_id == build.id,
+            OptimizationSnapshot.slot_index == slot_index,
+        )
+    ).first()
+
+    relics_hash = relics_signature(owned_relics)
+    build_hash = build_signature(build_def)
+    gdv = game_data_version()
+
+    change = diff_results(snap.top_layouts if snap else None, results)
+    change.build_id = str(build.id)
+    change.build_name = build.name
+    change.slot_index = slot_index
+
+    # Attribute cause
+    if snap is None:
+        change.cause = None
+    else:
+        relics_changed = snap.relics_hash != relics_hash
+        build_changed = snap.build_hash != build_hash
+        data_changed = (
+            snap.game_data_version != gdv or snap.optimizer_version != OPTIMIZER_VERSION
+        )
+        if relics_changed and build_changed:
+            change.cause = "mixed"
+        elif relics_changed:
+            change.cause = "relics"
+        elif build_changed:
+            change.cause = "build_edit"
+        elif data_changed:
+            change.cause = "game_data"
+        else:
+            change.cause = None
+
+    top_layouts = serialize_top_layouts(results)
+    best_score = max((r.total_score for r in results), default=0)
+    any_truncated = any(r.search_truncated for r in results)
+    change_json = change.model_dump(mode="json")
+
+    if snap is None:
+        snap = OptimizationSnapshot(
+            owner_id=owner_id,
+            build_id=build.id,
+            slot_index=slot_index,
+            relics_hash=relics_hash,
+            build_hash=build_hash,
+            game_data_version=gdv,
+            optimizer_version=OPTIMIZER_VERSION,
+            top_layouts=top_layouts,
+            best_score=best_score,
+            any_truncated=any_truncated,
+            last_change=change_json,
+            reviewed=True,
+        )
+    else:
+        snap.relics_hash = relics_hash
+        snap.build_hash = build_hash
+        snap.game_data_version = gdv
+        snap.optimizer_version = OPTIMIZER_VERSION
+        snap.top_layouts = top_layouts
+        snap.best_score = best_score
+        snap.any_truncated = any_truncated
+        snap.last_change = change_json
+        snap.reviewed = True
+        snap.updated_at = get_datetime_utc()
+    session.add(snap)
+    session.commit()
+    return change
+
+
+from nrplanner.constants import CHARACTER_NAMES
+
+_CHAR_NAME_TO_HERO_TYPE: dict[str, int] = {
+    name: idx for idx, name in enumerate(CHARACTER_NAMES, start=1)
+}
+
+
+@router.post("/upload/stream")
+async def upload_save_stream(
+    file: UploadFile,
+    ds: GameDataDep,
+    current_user: CurrentUser,
+    session: SessionDep,
+    executor: OptimizerPoolDep = None,
+) -> StreamingResponse:
+    """Upload a save and auto-optimize all affected builds, streaming progress.
+
+    Returns SSE events:
+      - upload_complete: save parsed and persisted
+      - optimize_start: beginning optimization of a build
+      - optimize_progress: per-vessel progress within a build
+      - optimize_done: build optimization finished with BuildChange
+      - complete: all builds processed
+    """
+    if file.filename is None or Path(file.filename).suffix.lower() not in _ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail="Upload a .sl2 (PC) or memory.dat (PS4) file.",
+        )
+
+    file_bytes = await file.read()
+    max_bytes = settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024
+    if len(file_bytes) > max_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large (max {settings.MAX_UPLOAD_SIZE_MB} MB).",
+        )
+    items_json = get_items_json()
+    platform, profiles = _parse_save_to_profiles(
+        file_bytes, file.filename, ds, items_json
+    )
+
+    # Compute remap and identify affected builds before persisting
+    old_relics = list(session.exec(
+        select(Relic).where(Relic.owner_id == current_user.id)
+    ).all())
+    handle_remap = _compute_handle_remap(old_relics, profiles)
+    affected: list[_AffectedBuild] = []
+    relic_delta = RelicDelta()
+
+    if old_relics:
+        db_builds = list(session.exec(
+            select(Build).where(Build.owner_id == current_user.id)
+        ).all())
+        for build in db_builds:
+            if not build.pinned_relics:
+                continue
+            new_pinned = [handle_remap[h] for h in build.pinned_relics if h in handle_remap]
+            if new_pinned != build.pinned_relics:
+                build.pinned_relics = new_pinned
+                session.add(build)
+        session.flush()
+
+        old_profiles = list(session.exec(
+            select(Profile).where(Profile.owner_id == current_user.id)
+        ).all())
+        relic_delta = _compute_relic_delta(old_relics, profiles)
+        affected = _identify_affected_builds(
+            session, ds, current_user.id, old_relics, old_profiles,
+            profiles, db_builds, handle_remap,
+        )
+
+    # Persist fresh data (same as non-streaming upload)
+    old_uploads = session.exec(
+        select(SaveUpload).where(SaveUpload.owner_id == current_user.id)
+    ).all()
+    for old in old_uploads:
+        session.delete(old)
+    session.flush()
+
+    save_upload = SaveUpload(
+        owner_id=current_user.id,
+        platform=platform,
+        profile_count=len(profiles),
+    )
+    session.add(save_upload)
+    session.flush()
+
+    # Map slot_index -> new Profile.id for snapshot lookup
+    slot_to_profile_id: dict[int, uuid.UUID] = {}
+    for prof_data in profiles:
+        profile = Profile(
+            owner_id=current_user.id,
+            save_upload_id=save_upload.id,
+            slot_index=prof_data.slot_index,
+            name=prof_data.name,
+        )
+        session.add(profile)
+        session.flush()
+        slot_to_profile_id[prof_data.slot_index] = profile.id
+
+        for r in prof_data.relics:
+            session.add(Relic(
+                owner_id=current_user.id,
+                profile_id=profile.id,
+                ga_handle=r.ga_handle,
+                item_id=r.item_id,
+                real_id=r.real_id,
+                color=r.color,
+                effect_1=r.effect_1,
+                effect_2=r.effect_2,
+                effect_3=r.effect_3,
+                curse_1=r.curse_1,
+                curse_2=r.curse_2,
+                curse_3=r.curse_3,
+                is_deep=r.is_deep,
+                name=r.name,
+                tier=r.tier,
+            ))
+
+        prof_data.id = profile.id
+
+    session.commit()
+
+    # Prepare data for the streaming generator (must not reference the
+    # request-scoped session after it's closed).
+    owner_id = current_user.id
+    upload_data = {
+        "platform": platform,
+        "profile_count": len(profiles),
+        "profiles": [p.model_dump(mode="json") for p in profiles],
+        "persisted": True,
+        "relic_delta": relic_delta.model_dump(mode="json"),
+        "save_upload_id": str(save_upload.id),
+    }
+
+    # Pre-compute relics per slot for optimization
+    relics_by_slot: dict[int, list[OwnedRelic]] = {}
+    for prof_data in profiles:
+        relics_by_slot[prof_data.slot_index] = _owned_from_parsed(prof_data.relics)
+
+    # Snapshot affected build info so the generator doesn't touch the session
+    affected_info = [
+        (ab.build.id, ab.build.name, ab.build.character, ab.slot_index, ab.broken_pins)
+        for ab in affected
+    ]
+    # We need BuildDefinitions for optimization — compute while session is alive
+    build_defs: dict[uuid.UUID, BuildDefinition] = {
+        ab.build.id: build_def_from_db(ab.build) for ab in affected
+    }
+
+    def _generate():
+        yield f"data: {json.dumps({'type': 'upload_complete', 'data': upload_data})}\n\n"
+
+        if not affected_info:
+            yield f"data: {json.dumps({'type': 'complete', 'changes': []})}\n\n"
+            return
+
+        all_changes: list[dict] = []
+        total = len(affected_info)
+
+        for idx, (build_id, build_name, character, slot_index, broken_pins) in enumerate(affected_info, 1):
+            yield f"data: {json.dumps({'type': 'optimize_start', 'build_id': str(build_id), 'build_name': build_name, 'index': idx, 'total': total})}\n\n"
+
+            owned_relics = relics_by_slot.get(slot_index, [])
+            build_def = build_defs[build_id]
+
+            # Check if relics haven't actually changed for this slot
+            new_relics_hash = relics_signature(owned_relics)
+            skip = False
+            try:
+                with Session(engine) as snap_session:
+                    snap = snap_session.exec(
+                        select(OptimizationSnapshot).where(
+                            OptimizationSnapshot.build_id == build_id,
+                            OptimizationSnapshot.slot_index == slot_index,
+                        )
+                    ).first()
+                    if snap and snap.relics_hash == new_relics_hash and snap.build_hash == build_signature(build_def):
+                        skip = True
+            except Exception:
+                pass
+
+            if skip:
+                change_data = BuildChange(
+                    build_id=str(build_id),
+                    build_name=build_name,
+                    slot_index=slot_index,
+                    status="unchanged",
+                    cause="relics",
+                    reliable=True,
+                ).model_dump(mode="json")
+                all_changes.append(change_data)
+                yield f"data: {json.dumps({'type': 'optimize_done', 'build_id': str(build_id), 'change': change_data})}\n\n"
+                continue
+
+            # Run optimization with streaming progress
+            try:
+                hero_type = _CHAR_NAME_TO_HERO_TYPE.get(character)
+                if hero_type is None:
+                    raise ValueError(f"Unknown character '{character}'")
+
+                inventory = RelicInventory.from_owned_relics(owned_relics)
+                scorer = BuildScorer(ds)
+                optimizer = VesselOptimizer(ds, scorer)
+
+                results: list[VesselResult] = []
+                for event in optimizer.optimize_vessels_streaming(
+                    build_def, inventory, hero_type,
+                    top_n=10, max_per_vessel=3,
+                    executor=executor,
+                ):
+                    if event["type"] == "progress":
+                        yield f"data: {json.dumps({'type': 'optimize_progress', 'build_id': str(build_id), 'vessel': event['vessel'], 'total': event['total'], 'name': event['name']})}\n\n"
+                    elif event["type"] == "result":
+                        results = event["data"]
+
+                # Persist snapshot
+                with Session(engine) as snap_session:
+                    # Re-load the build row in this session for FK integrity
+                    build_row = snap_session.get(Build, build_id)
+                    if build_row:
+                        change = _apply_snapshot_for_stream(
+                            snap_session, owner_id, build_row, build_def,
+                            owned_relics, slot_index, results,
+                        )
+                        if broken_pins:
+                            change.pinned_removed = broken_pins
+                        change_data = change.model_dump(mode="json")
+                    else:
+                        change_data = {"status": "error", "build_id": str(build_id)}
+            except Exception as exc:
+                change_data = {
+                    "status": "error",
+                    "build_id": str(build_id),
+                    "detail": str(exc),
+                }
+
+            all_changes.append(change_data)
+            yield f"data: {json.dumps({'type': 'optimize_done', 'build_id': str(build_id), 'change': change_data})}\n\n"
+
+        yield f"data: {json.dumps({'type': 'complete', 'changes': all_changes})}\n\n"
+
+    return StreamingResponse(
+        _generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 
