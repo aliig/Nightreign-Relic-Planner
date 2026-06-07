@@ -92,6 +92,38 @@ class OptimizeRequest(BaseModel):
     max_per_vessel: int = Field(default=3, ge=1, le=5)
 
 
+class LockedSlot(BaseModel):
+    """A relic frozen in its exact slot during a single-slot re-optimization."""
+    slot_index: int
+    ga_handle: int
+
+
+class SlotAlternativeRequest(BaseModel):
+    """Re-optimize a single vessel slot, freezing every other slot in place.
+
+    Powers the "strike a relic" UI: keep each relic in ``locked_slots`` in its
+    exact slot, exclude the struck relic(s), and re-fill only
+    ``struck_slot_index`` with the next-best relic.  Freezing positions (rather
+    than positionless pinning) guarantees the rest of the layout — and its
+    scores — stay put, so the total moves only as a function of the struck slot.
+    Same dual-mode inventory inputs as :class:`OptimizeRequest` (DB mode =
+    build_id + profile_id; inline mode = build + relics).  Persists nothing.
+    """
+    # --- DB mode (authenticated) ---
+    build_id: uuid.UUID | None = None
+    profile_id: uuid.UUID | None = None
+
+    # --- Inline mode (anonymous or authenticated) ---
+    build: BuildDefinition | None = None
+    relics: list[OwnedRelic] | None = None
+
+    # --- Strike params ---
+    vessel_id: int
+    struck_slot_index: int
+    locked_slots: list[LockedSlot] = Field(default_factory=list)
+    excluded_ga_handles: list[int] = Field(default_factory=list)
+
+
 # ---------------------------------------------------------------------------
 # Request resolution (shared by both endpoints)
 # ---------------------------------------------------------------------------
@@ -386,6 +418,57 @@ def run_optimize_stream(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@router.post("/slot-alternative", response_model=VesselResult | None)
+def optimize_slot_alternative(
+    req: SlotAlternativeRequest,
+    ds: GameDataDep,
+    current_user: OptionalUser,
+    session: SessionDep,
+) -> VesselResult | None:
+    """Re-optimize one vessel slot while every other slot stays frozen in place.
+
+    Freezes ``locked_slots`` (each relic in its exact slot), removes
+    ``excluded_ga_handles`` from the candidate pool, and re-fills only
+    ``struck_slot_index`` with the next-best relic, so the rest of the layout
+    (and its scores) never moves.  Returns ``null`` only when the whole vessel
+    comes back empty; the common "no replacement" case returns a vessel whose
+    struck slot relic is null.  Auth/ownership is enforced by ``_resolve``
+    exactly as for ``/optimize``; nothing is persisted (no snapshot).
+    """
+    base = OptimizeRequest(
+        build_id=req.build_id,
+        profile_id=req.profile_id,
+        build=req.build,
+        relics=req.relics,
+    )
+    build_def, owned_relics, _ctx = _resolve(base, current_user, session)
+
+    excluded = set(req.excluded_ga_handles)
+    # Freeze every other slot in its exact position. A struck/excluded relic is
+    # never treated as locked, and the struck slot itself is never locked.
+    locked = {
+        ls.slot_index: ls.ga_handle
+        for ls in req.locked_slots
+        if ls.ga_handle not in excluded and ls.slot_index != req.struck_slot_index
+    }
+    build_def = build_def.model_copy(update={"excluded_relics": list(excluded)})
+
+    vessel_data = ds.get_vessel_data(req.vessel_id)
+    if vessel_data is None:
+        raise HTTPException(status_code=404, detail="Vessel not found")
+    vessel_data["_id"] = req.vessel_id
+
+    inventory = RelicInventory.from_owned_relics(owned_relics)
+    optimizer = VesselOptimizer(ds, BuildScorer(ds))
+    results = optimizer.optimize_locked_slot(
+        build_def, inventory, vessel_data, locked, req.struck_slot_index, top_n=1)
+    if not results:
+        return None
+    # optimize_locked_slot leaves vessel_id for the caller to assign.
+    results[0].vessel_id = req.vessel_id
+    return results[0]
 
 
 @router.get("/changes", response_model=list[BuildChange])

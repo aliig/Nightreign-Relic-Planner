@@ -11,6 +11,7 @@ import { BuildsService, type UserPublic, UsersService } from "@/client"
 import AddUser from "@/components/Admin/AddUser"
 import { columns, type UserTableData } from "@/components/Admin/columns"
 import { DataTable } from "@/components/Common/DataTable"
+import { ExportDebugButton } from "@/components/Debug/ExportDebugButton"
 import PendingUsers from "@/components/Pending/PendingUsers"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -146,6 +147,25 @@ function FeaturedBuildsManagement() {
   )
 }
 
+function DebugTools() {
+  return (
+    <div className="space-y-4">
+      <div>
+        <h2 className="text-xl font-bold tracking-tight">Debug</h2>
+        <p className="text-muted-foreground">
+          Export your full app state (builds, inventory, snapshots) to a
+          gitignored JSON bundle for local troubleshooting. Replay it with{" "}
+          <code className="text-xs">
+            python -m nrplanner.debug_replay debug-exports/latest.json
+          </code>
+          .
+        </p>
+      </div>
+      <ExportDebugButton mode="full" label="Export debug bundle" />
+    </div>
+  )
+}
+
 function Admin() {
   return (
     <div className="flex flex-col gap-6">
@@ -161,6 +181,8 @@ function Admin() {
       <UsersTable />
       <Separator />
       <FeaturedBuildsManagement />
+      <Separator />
+      <DebugTools />
     </div>
   )
 }

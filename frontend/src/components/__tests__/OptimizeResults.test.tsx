@@ -1,0 +1,165 @@
+import "@testing-library/jest-dom"
+
+import { render, screen } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
+import { afterEach, describe, expect, it, vi } from "vitest"
+
+import type { VesselResult } from "@/client"
+import { VesselCard } from "@/components/OptimizeResults"
+
+type SlotAssignment = VesselResult["assignments"][number]
+type OwnedRelic = NonNullable<SlotAssignment["relic"]>
+
+const EMPTY = 4294967295
+
+function makeRelic(ga_handle: number, name: string, color = "Red"): OwnedRelic {
+  return {
+    ga_handle,
+    item_id: ga_handle,
+    real_id: ga_handle,
+    color,
+    effects: [100, EMPTY, EMPTY],
+    curses: [EMPTY, EMPTY, EMPTY],
+    is_deep: false,
+    name,
+    tier: "Delicate",
+    effect_count: 1,
+    curse_count: 0,
+    all_effects: [100],
+  }
+}
+
+function makeSlot(
+  slot_index: number,
+  relic: OwnedRelic | null,
+): SlotAssignment {
+  return {
+    slot_index,
+    slot_color: "Red",
+    is_deep: false,
+    relic,
+    score: relic ? 100 : 0,
+    breakdown: [],
+  }
+}
+
+function makeVessel(relics: (OwnedRelic | null)[]): VesselResult {
+  const assignments = relics.map((r, i) => makeSlot(i, r))
+  return {
+    vessel_id: 42,
+    vessel_name: "Test Vessel",
+    vessel_character: "Wylder",
+    unlock_flag: 0,
+    slot_colors: ["Red", "Red", "Red"],
+    assignments,
+    total_score: assignments.reduce((s, a) => s + a.score, 0),
+    meets_requirements: true,
+    missing_requirements: [],
+    search_truncated: false,
+  }
+}
+
+const ALPHA = makeRelic(1, "Relic Alpha")
+const BETA = makeRelic(2, "Relic Beta")
+const GAMMA = makeRelic(3, "Relic Gamma")
+const DELTA = makeRelic(9, "Relic Delta")
+
+const INVENTORY_SOURCE = { build_id: "b1", profile_id: "p1" }
+
+function mockFetch(result: VesselResult | null) {
+  const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => ({
+    ok: true,
+    json: async () => result,
+  }))
+  vi.stubGlobal("fetch", fetchMock)
+  return fetchMock
+}
+
+describe("VesselCard strike", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+  })
+
+  it("strikes a relic, sends the right pins/exclusions, and swaps the slot", async () => {
+    const fetchMock = mockFetch(makeVessel([ALPHA, DELTA, GAMMA]))
+    render(
+      <VesselCard
+        vessel={makeVessel([ALPHA, BETA, GAMMA])}
+        defaultExpanded
+        inventorySource={INVENTORY_SOURCE}
+      />,
+    )
+
+    expect(screen.getByText("Relic Beta")).toBeInTheDocument()
+    await userEvent.click(screen.getByLabelText(/Reject Relic Beta/i))
+
+    // The struck slot swaps to the backend's replacement.
+    expect(await screen.findByText("Relic Delta")).toBeInTheDocument()
+    expect(screen.queryByText("Relic Beta")).not.toBeInTheDocument()
+
+    // Locks every other slot in place (slot_index + relic); excludes the struck one.
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe("/api/v1/optimize/slot-alternative")
+    const body = JSON.parse(init.body as string)
+    expect(body).toMatchObject({
+      build_id: "b1",
+      profile_id: "p1",
+      vessel_id: 42,
+      struck_slot_index: 1,
+      locked_slots: [
+        { slot_index: 0, ga_handle: 1 },
+        { slot_index: 2, ga_handle: 3 },
+      ],
+      excluded_ga_handles: [2],
+    })
+  })
+
+  it("resets to the original arrangement", async () => {
+    mockFetch(makeVessel([ALPHA, DELTA, GAMMA]))
+    render(
+      <VesselCard
+        vessel={makeVessel([ALPHA, BETA, GAMMA])}
+        defaultExpanded
+        inventorySource={INVENTORY_SOURCE}
+      />,
+    )
+
+    await userEvent.click(screen.getByLabelText(/Reject Relic Beta/i))
+    expect(await screen.findByText("Relic Delta")).toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole("button", { name: /reset/i }))
+
+    expect(await screen.findByText("Relic Beta")).toBeInTheDocument()
+    expect(screen.queryByText("Relic Delta")).not.toBeInTheDocument()
+  })
+
+  it("keeps the relic and notes it when no alternative is found", async () => {
+    // Backend returns the struck slot empty (no replacement relic fits).
+    mockFetch(makeVessel([ALPHA, null, GAMMA]))
+    render(
+      <VesselCard
+        vessel={makeVessel([ALPHA, BETA, GAMMA])}
+        defaultExpanded
+        inventorySource={INVENTORY_SOURCE}
+      />,
+    )
+
+    await userEvent.click(screen.getByLabelText(/Reject Relic Beta/i))
+
+    expect(
+      await screen.findByText(/No other relic fits this slot/i),
+    ).toBeInTheDocument()
+    // Relic is kept, and its strike button is disabled.
+    expect(screen.getByText("Relic Beta")).toBeInTheDocument()
+    expect(screen.getByLabelText(/Reject Relic Beta/i)).toBeDisabled()
+  })
+
+  it("renders no strike controls without an inventorySource", () => {
+    render(
+      <VesselCard vessel={makeVessel([ALPHA, BETA, GAMMA])} defaultExpanded />,
+    )
+    expect(screen.queryByLabelText(/Reject /i)).not.toBeInTheDocument()
+  })
+})

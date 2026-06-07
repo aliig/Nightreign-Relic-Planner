@@ -92,18 +92,8 @@ class VesselOptimizer:
         desired_cw = self.scorer.get_desired_conflict_weights(build)
         desired_compat_effs = self.scorer.get_desired_compat_effects(build)
 
-        # Pre-resolve user-defined effect limits (effect_id -> name)
-        effect_limit_by_name: dict[str, int] | None = None
-        family_limit_map: dict[str, int] | None = None
-        if build.effect_limits:
-            effect_limit_by_name = {}
-            for eff_id, max_count in build.effect_limits.items():
-                name = self.data_source.get_effect_name(eff_id)
-                if name and name not in ("", "Empty"):
-                    effect_limit_by_name[name] = min(
-                        effect_limit_by_name.get(name, max_count), max_count)
-        if build.family_limits:
-            family_limit_map = dict(build.family_limits)
+        # Pre-resolve user-defined effect/family limits.
+        effect_limit_by_name, family_limit_map = self._prepare_limits(build)
 
         # Pre-assign pinned relics; returns (None, ...) if any can't fit this vessel.
         pinned_map, slot_owner = self._pre_assign_pinned(
@@ -112,6 +102,7 @@ class VesselOptimizer:
             return []  # vessel incompatible with pinned relics — exclude
 
         pinned_handles: set[int] = set(pinned_map.keys())
+        excluded_handles: set[int] = set(build.excluded_relics)
         free_slot_indices = [i for i in range(num_slots) if slot_owner[i] is None]
 
         candidates_per_free_slot = []
@@ -122,6 +113,7 @@ class VesselOptimizer:
                 r for r in candidates
                 if not self.scorer.has_excluded_effect(r, build, desired_compat_effs)
                 and r.ga_handle not in pinned_handles
+                and r.ga_handle not in excluded_handles
             ]
             # Pre-filter: relics with pre_score ≤ 0 have no desired effects
             # and context score ≤ pre_score (stacking only reduces), so the
@@ -212,6 +204,93 @@ class VesselOptimizer:
             ]
 
         return results
+
+    def _prepare_limits(
+        self, build: BuildDefinition,
+    ) -> tuple[dict[str, int] | None, dict[str, int] | None]:
+        """Resolve user-defined effect/family limits to name-keyed maps."""
+        effect_limit_by_name: dict[str, int] | None = None
+        family_limit_map: dict[str, int] | None = None
+        if build.effect_limits:
+            effect_limit_by_name = {}
+            for eff_id, max_count in build.effect_limits.items():
+                name = self.data_source.get_effect_name(eff_id)
+                if name and name not in ("", "Empty"):
+                    effect_limit_by_name[name] = min(
+                        effect_limit_by_name.get(name, max_count), max_count)
+        if build.family_limits:
+            family_limit_map = dict(build.family_limits)
+        return effect_limit_by_name, family_limit_map
+
+    def optimize_locked_slot(
+        self,
+        build: BuildDefinition,
+        inventory: RelicInventory,
+        vessel_data: dict,
+        locked: dict[int, int],
+        struck_slot_index: int,
+        top_n: int = 1,
+    ) -> list[VesselResult]:
+        """Re-fill ONE slot while every other slot stays frozen in place.
+
+        Unlike ``pinned_relics`` — which re-packs relics first-fit and can move
+        them into different slots — this keeps each locked relic in its exact
+        slot and only searches ``struck_slot_index``.  The returned arrangement
+        therefore differs from the input in that one slot only, so the total
+        score is a clean function of the struck relic and stays monotonic across
+        repeated strikes (each strike removes one option from a fixed layout).
+
+        ``locked`` maps slot_index -> ga_handle for the slots to freeze.
+        Candidates for the struck slot exclude the locked relics and
+        ``build.excluded_relics``.  The empty-slot option is included, so the
+        struck slot may come back empty when no relic improves the build.
+        Returns up to ``top_n`` VesselResults ranked by total score.
+        """
+        slot_colors = vessel_data["Colors"]
+        num_slots = 6 if build.include_deep else 3
+        desired_cw = self.scorer.get_desired_conflict_weights(build)
+        desired_compat = self.scorer.get_desired_compat_effects(build)
+        effect_limit_by_name, family_limit_map = self._prepare_limits(build)
+
+        by_handle = {r.ga_handle: r for r in inventory.relics}
+        base: list = [(None, 0)] * num_slots
+        locked_handles: set[int] = set()
+        for i in range(num_slots):
+            if i == struck_slot_index:
+                continue
+            relic = by_handle.get(locked.get(i)) if locked.get(i) is not None else None
+            if relic is not None:
+                base[i] = (relic, 0)
+                locked_handles.add(relic.ga_handle)
+
+        excluded = set(build.excluded_relics)
+        is_deep = struck_slot_index >= 3
+        candidates = [
+            r for r in inventory.get_candidates(slot_colors[struck_slot_index], is_deep)
+            if r.ga_handle not in locked_handles
+            and r.ga_handle not in excluded
+            and not self.scorer.has_excluded_effect(r, build, desired_compat)
+        ]
+
+        results: list[VesselResult] = []
+        seen: set[tuple] = set()
+        # `None` = leave the struck slot empty (always a valid fallback).
+        for cand in [None, *candidates]:
+            assignment = list(base)
+            assignment[struck_slot_index] = (cand, 0)
+            if all(relic is None for relic, _ in assignment):
+                continue
+            vr = self._build_vessel_result(
+                assignment, num_slots, slot_colors, vessel_data, build,
+                desired_cw, desired_compat, effect_limit_by_name, family_limit_map)
+            fp = vr.layout_fingerprint()
+            if fp in seen:
+                continue
+            seen.add(fp)
+            results.append(vr)
+
+        results.sort(key=lambda r: -r.total_score)
+        return results[:top_n]
 
     def optimize_vessels_streaming(
         self,

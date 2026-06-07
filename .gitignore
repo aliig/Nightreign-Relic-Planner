@@ -11,6 +11,9 @@ editor_config.json
 *_debug.txt
 preset_debug.txt
 
+# Debug state exports (local troubleshooting bundles — never commit)
+debug-exports/
+
 # Python cache
 __pycache__/
 *.pyc

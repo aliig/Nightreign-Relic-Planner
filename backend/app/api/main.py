@@ -1,6 +1,17 @@
 from fastapi import APIRouter
 
-from app.api.routes import builds, game, login, oauth, optimize, private, saves, users, utils
+from app.api.routes import (
+    builds,
+    debug,
+    game,
+    login,
+    oauth,
+    optimize,
+    private,
+    saves,
+    users,
+    utils,
+)
 from app.core.config import settings
 
 api_router = APIRouter()
@@ -16,3 +27,4 @@ api_router.include_router(optimize.router)
 
 if settings.ENVIRONMENT == "local":
     api_router.include_router(private.router)
+    api_router.include_router(debug.router)

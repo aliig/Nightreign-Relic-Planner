@@ -3,6 +3,7 @@ import { createFileRoute, Link, useParams } from "@tanstack/react-router"
 import { Suspense, useEffect, useMemo, useRef, useState } from "react"
 import type { BuildChange, VesselResult } from "@/client"
 import { BuildsService, GameService, SavesService } from "@/client"
+import { ExportDebugButton } from "@/components/Debug/ExportDebugButton"
 import {
   cacheKey,
   ChangeBanner,
@@ -143,6 +144,12 @@ function AuthOptimizeForm({ buildId }: { buildId: string }) {
         <Button onClick={handleOptimize} disabled={!profileId || isPending}>
           {isPending ? "Optimizing…" : "Optimize"}
         </Button>
+        <ExportDebugButton
+          mode="view"
+          buildId={buildId}
+          profileId={profileId}
+          results={results}
+        />
       </div>
 
       {isPending && (
@@ -190,6 +197,7 @@ function AuthOptimizeForm({ buildId }: { buildId: string }) {
               pinnedHandles={pinnedHandles}
               effectMap={effectMap}
               enteredFingerprints={index === 0 ? enteredKeys(change) : undefined}
+              inventorySource={{ build_id: buildId, profile_id: profileId }}
             />
           ))}
         </div>
@@ -257,6 +265,45 @@ function AnonOptimizeForm({ buildId }: { buildId: string }) {
     anonMeta?.uploaded_at,
   )
 
+  // ParsedRelicData uses flat effect_1/2/3 fields; OwnedRelic expects arrays.
+  // Lifted to a memo so the full optimize and per-slot strikes share identical
+  // inventory inputs.
+  const relics = useMemo(
+    () =>
+      (profile?.relics ?? []).map((r: any) => ({
+        ga_handle: r.ga_handle,
+        item_id: r.item_id,
+        real_id: r.real_id,
+        color: r.color,
+        effects: [r.effect_1, r.effect_2, r.effect_3],
+        curses: [r.curse_1, r.curse_2, r.curse_3],
+        is_deep: r.is_deep,
+        name: r.name,
+        tier: r.tier,
+      })),
+    [profile],
+  )
+
+  const inlineBuild = useMemo(
+    () =>
+      build
+        ? {
+            id: build.id,
+            name: build.name,
+            character: build.character,
+            groups: build.groups,
+            required_effects: [],
+            required_families: [],
+            excluded_effects: build.excluded_effects,
+            excluded_families: build.excluded_families,
+            include_deep: build.include_deep,
+            curse_max: build.curse_max,
+            pinned_relics: build.pinned_relics ?? [],
+          }
+        : null,
+    [build],
+  )
+
   const [results, setResults] = useState<VesselResult[]>(
     () => resultCache.get(key) ?? [],
   )
@@ -273,20 +320,7 @@ function AnonOptimizeForm({ buildId }: { buildId: string }) {
   }, [key])
 
   const handleOptimize = async () => {
-    if (!build || !profile) return
-
-    // ParsedRelicData uses flat effect_1/2/3 fields; OwnedRelic expects arrays
-    const relics = profile.relics.map((r: any) => ({
-      ga_handle: r.ga_handle,
-      item_id: r.item_id,
-      real_id: r.real_id,
-      color: r.color,
-      effects: [r.effect_1, r.effect_2, r.effect_3],
-      curses: [r.curse_1, r.curse_2, r.curse_3],
-      is_deep: r.is_deep,
-      name: r.name,
-      tier: r.tier,
-    }))
+    if (!build || !profile || !inlineBuild) return
 
     setIsPending(true)
     setProgress(null)
@@ -294,22 +328,7 @@ function AnonOptimizeForm({ buildId }: { buildId: string }) {
     setChange(null)
     try {
       const data = await runOptimizeStream(
-        {
-          build: {
-            id: build.id,
-            name: build.name,
-            character: build.character,
-            groups: build.groups,
-            required_effects: [],
-            required_families: [],
-            excluded_effects: build.excluded_effects,
-            excluded_families: build.excluded_families,
-            include_deep: build.include_deep,
-            curse_max: build.curse_max,
-            pinned_relics: build.pinned_relics ?? [],
-          },
-          relics,
-        },
+        { build: inlineBuild, relics },
         setProgress,
         setChange,
       )
@@ -428,6 +447,9 @@ function AnonOptimizeForm({ buildId }: { buildId: string }) {
               pinnedHandles={pinnedHandles}
               effectMap={effectMap}
               enteredFingerprints={index === 0 ? enteredKeys(change) : undefined}
+              inventorySource={
+                inlineBuild ? { build: inlineBuild, relics } : undefined
+              }
             />
           ))}
         </div>

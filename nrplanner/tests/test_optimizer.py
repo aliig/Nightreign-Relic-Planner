@@ -213,6 +213,171 @@ class TestPinnedRelics:
         assert len(results_no_pins) == len(results_empty_pins)
 
 
+class TestExcludedRelics:
+    """build.excluded_relics drops specific ga_handles from candidate pools.
+
+    Powers the "strike a relic" feature: pin every other slot, exclude the
+    struck relic, and re-optimize the single free slot for the next-best pick.
+    Uses a synthetic all-White (wildcard) vessel so the test does not depend on
+    real vessel colour layouts.
+    """
+
+    # Three White (wildcard) standard slots; deep slots unused (include_deep=False).
+    _VESSEL = {
+        "Name": "Synthetic Test Vessel", "Character": "Wylder", "unlockFlag": 0,
+        "_id": 999999,
+        "Colors": ("White", "White", "White", "White", "White", "White"),
+    }
+
+    def _build(self, eff: int, *, pinned=None, excluded=None) -> BuildDefinition:
+        return BuildDefinition(
+            id="excl-test", name="Exclude Test", character="Wylder",
+            include_deep=False, curse_max=1,
+            groups=[WeightGroup(weight=100, effects=[eff])],
+            pinned_relics=pinned or [],
+            excluded_relics=excluded or [],
+        )
+
+    def test_excluded_relic_never_assigned(
+        self, optimizer: VesselOptimizer, all_effects: list[dict]
+    ) -> None:
+        eff = all_effects[0]["id"]
+        h_keep, h_drop = 0xC3000001, 0xC3000002
+        inventory = RelicInventory.from_owned_relics([
+            _make_relic([eff, EMPTY, EMPTY], color="Red", ga_handle=h_keep),
+            _make_relic([eff, EMPTY, EMPTY], color="Red", ga_handle=h_drop),
+        ])
+
+        # Baseline: with two White slots both relics get placed.
+        base = optimizer.optimize(self._build(eff), inventory, self._VESSEL, top_n=1)
+        assert base, "baseline optimize returned nothing"
+        base_handles = {a.relic.ga_handle for a in base[0].assignments if a.relic}
+        assert h_drop in base_handles, "drop relic should normally be assignable"
+
+        # Excluding it removes it from every slot; the sibling still appears.
+        excl = optimizer.optimize(
+            self._build(eff, excluded=[h_drop]), inventory, self._VESSEL, top_n=1)
+        assert excl, "exclude optimize returned nothing"
+        excl_handles = {a.relic.ga_handle for a in excl[0].assignments if a.relic}
+        assert h_drop not in excl_handles, "excluded relic must not be assigned"
+        assert h_keep in excl_handles, "non-excluded sibling should still be used"
+
+    def test_pin_all_but_one_finds_next_for_free_slot(
+        self, optimizer: VesselOptimizer, all_effects: list[dict]
+    ) -> None:
+        """Pin two slots + exclude one candidate → the free slot takes the next-best."""
+        eff = all_effects[0]["id"]
+        h1, h2, h3, h4 = 0xC3000011, 0xC3000012, 0xC3000013, 0xC3000014
+        inventory = RelicInventory.from_owned_relics([
+            _make_relic([eff, EMPTY, EMPTY], color="Red", ga_handle=h)
+            for h in (h1, h2, h3, h4)
+        ])
+        build = self._build(eff, pinned=[h1, h2], excluded=[h3])
+
+        results = optimizer.optimize(build, inventory, self._VESSEL, top_n=1)
+        assert results, "optimize returned nothing"
+        handles = {a.relic.ga_handle for a in results[0].assignments if a.relic}
+        assert {h1, h2}.issubset(handles), "pinned relics must stay assigned"
+        assert h3 not in handles, "excluded candidate must not be assigned"
+        assert h4 in handles, "the free slot should take the next-best candidate"
+
+    def test_excluding_only_candidate_leaves_free_slot_empty(
+        self, optimizer: VesselOptimizer, all_effects: list[dict]
+    ) -> None:
+        """With every candidate for the free slot excluded, pins remain and the
+        free slot is empty (the optimizer still returns the pinned arrangement)."""
+        eff = all_effects[0]["id"]
+        h1, h2, h3 = 0xC3000021, 0xC3000022, 0xC3000023
+        inventory = RelicInventory.from_owned_relics([
+            _make_relic([eff, EMPTY, EMPTY], color="Red", ga_handle=h)
+            for h in (h1, h2, h3)
+        ])
+        # Pin two, exclude the only remaining candidate.
+        build = self._build(eff, pinned=[h1, h2], excluded=[h3])
+        results = optimizer.optimize(build, inventory, self._VESSEL, top_n=1)
+        assert results, "pinned relics should still yield a result"
+        handles = {a.relic.ga_handle for a in results[0].assignments if a.relic}
+        assert handles == {h1, h2}, "only the pinned relics should remain"
+        assert any(a.relic is None for a in results[0].assignments), "free slot empty"
+
+
+class TestOptimizeLockedSlot:
+    """optimize_locked_slot re-fills ONE slot with the others frozen in place.
+
+    This is the strike-a-relic path. Unlike positionless pinning, it must keep
+    every locked relic in its exact slot, which guarantees a monotonic total
+    across repeated strikes (regression for the slot-reshuffle bug where the
+    total could jump because pinned relics were re-packed into other slots).
+    """
+
+    _VESSEL = {
+        "Name": "Synthetic Test Vessel", "Character": "Wylder", "unlockFlag": 0,
+        "_id": 999999,
+        "Colors": ("White", "White", "White", "White", "White", "White"),
+    }
+    # Distinct real stacking effects so several slots are worth filling.
+    _E = [7012300, 7000902, 6001400, 7001402]
+    _H = [0xD0000001, 0xD0000002, 0xD0000003, 0xD0000004]
+
+    def _build(self, excluded=None) -> BuildDefinition:
+        return BuildDefinition(
+            id="lock-test", name="Lock Test", character="Wylder",
+            include_deep=False, curse_max=1,
+            groups=[WeightGroup(weight=100, effects=self._E)],
+            excluded_relics=excluded or [],
+        )
+
+    def _inventory(self) -> RelicInventory:
+        return RelicInventory.from_owned_relics([
+            _make_relic([self._E[i], EMPTY, EMPTY], color="Red", ga_handle=self._H[i])
+            for i in range(4)
+        ])
+
+    def test_locked_slots_keep_exact_position(
+        self, optimizer: VesselOptimizer
+    ) -> None:
+        """The bug: striking slot 0 used to repack the other relics into
+        different slots. Now slots 1 and 2 must stay exactly put."""
+        inv = self._inventory()
+        locked = {1: self._H[1], 2: self._H[2]}  # freeze handle2@slot1, handle3@slot2
+        res = optimizer.optimize_locked_slot(
+            self._build(excluded=[self._H[0]]), inv, self._VESSEL,
+            locked, struck_slot_index=0, top_n=1)
+        assert res
+        by_slot = {a.slot_index: (a.relic.ga_handle if a.relic else None)
+                   for a in res[0].assignments}
+        assert by_slot[1] == self._H[1], "slot 1 must stay exactly put"
+        assert by_slot[2] == self._H[2], "slot 2 must stay exactly put"
+        assert by_slot[0] == self._H[3], "struck slot takes the remaining relic"
+
+    def test_sequential_strikes_total_monotonic(
+        self, optimizer: VesselOptimizer
+    ) -> None:
+        inv = self._inventory()
+        locked = {1: self._H[1], 2: self._H[2]}
+        excluded = [self._H[0]]
+        prev_total: int | None = None
+        for _ in range(3):
+            res = optimizer.optimize_locked_slot(
+                self._build(excluded=list(excluded)), inv, self._VESSEL,
+                locked, struck_slot_index=0, top_n=1)
+            assert res
+            r = res[0]
+            by_slot = {a.slot_index: (a.relic.ga_handle if a.relic else None)
+                       for a in r.assignments}
+            assert by_slot[1] == self._H[1] and by_slot[2] == self._H[2], (
+                "locked slots must never move across strikes")
+            if prev_total is not None:
+                assert r.total_score <= prev_total, (
+                    f"total must not increase across strikes: "
+                    f"{prev_total} -> {r.total_score}")
+            prev_total = r.total_score
+            current = by_slot[0]
+            if current is None:
+                break
+            excluded.append(current)
+
+
 class TestGreedyMyopiaWithLimits:
     """Regression: the exhaustive solver must run even for large candidate pools.
 

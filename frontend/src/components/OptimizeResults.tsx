@@ -2,20 +2,25 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronUp,
+  Loader2,
   Pin,
+  RotateCcw,
   Sparkles,
   TrendingDown,
   TrendingUp,
   Trophy,
+  X,
   XCircle,
 } from "lucide-react"
-import { useState } from "react"
+import { useEffect, useState } from "react"
 
 import type { BuildChange, VesselResult } from "@/client"
 import { COLOR_HEX, RelicNameCell } from "@/components/RelicDisplay"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Separator } from "@/components/ui/separator"
+import useCustomToast from "@/hooks/useCustomToast"
 
 // --- Types ---
 
@@ -134,16 +139,69 @@ export async function runOptimizeStream(
   throw new Error("Stream ended without a result")
 }
 
+// --- Single-slot re-optimization ("strike a relic") ---
+
+/** How the optimizer should source the relic inventory for a re-optimize:
+ *  DB mode (authenticated build + profile) or inline mode (anonymous). */
+export type InventorySource =
+  | { build_id: string; profile_id: string }
+  | { build: Record<string, unknown>; relics: unknown[] }
+
+/** Re-optimize a single vessel slot, keeping every other slot frozen in its
+ *  exact position and excluding the struck relic(s). Returns the updated vessel,
+ *  or null when no arrangement exists at all (the more common "no replacement"
+ *  case returns a vessel whose struck slot relic is null). */
+export async function fetchSlotAlternative(params: {
+  inventorySource: InventorySource
+  vessel_id: number
+  struck_slot_index: number
+  locked_slots: Array<{ slot_index: number; ga_handle: number }>
+  excluded_ga_handles: number[]
+}): Promise<VesselResult | null> {
+  const { inventorySource, ...strike } = params
+  const token = localStorage.getItem("access_token")
+  const headers: HeadersInit = { "Content-Type": "application/json" }
+  if (token)
+    (headers as Record<string, string>).Authorization = `Bearer ${token}`
+
+  const response = await fetch("/api/v1/optimize/slot-alternative", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ ...inventorySource, ...strike }),
+  })
+
+  if (!response.ok) {
+    const err = await response
+      .json()
+      .catch(() => ({ detail: "Failed to find an alternative" }))
+    throw new Error(err.detail ?? "Failed to find an alternative")
+  }
+
+  return (await response.json()) as VesselResult | null
+}
+
 // --- Components ---
 
 export function SlotCard({
   slot,
   isPinned = false,
   isNew = false,
+  onStrike,
+  isStriking = false,
+  busy = false,
+  noAlternative = false,
 }: {
   slot: SlotAssignment
   isPinned?: boolean
   isNew?: boolean
+  /** When provided, renders an X to reject this relic and re-optimize the slot. */
+  onStrike?: () => void
+  /** This slot's re-optimization is in flight (shows a spinner). */
+  isStriking?: boolean
+  /** Any slot in this vessel is re-optimizing (disables striking everywhere). */
+  busy?: boolean
+  /** No replacement relic fits this slot — keep the relic, disable striking. */
+  noAlternative?: boolean
 }) {
   const relic = slot.relic
   const effects =
@@ -186,8 +244,29 @@ export function SlotCard({
           <span className="text-xs font-mono font-semibold">
             {slot.score} pts
           </span>
+          {onStrike && relic && (
+            <button
+              type="button"
+              onClick={onStrike}
+              disabled={busy || noAlternative}
+              aria-label={`Reject ${relic.name} and find the next-best for this slot`}
+              title="Reject this relic; find the next-best for this slot"
+              className="hover:opacity-70 disabled:opacity-40 shrink-0"
+            >
+              {isStriking ? (
+                <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />
+              ) : (
+                <X className="h-3 w-3 text-muted-foreground" />
+              )}
+            </button>
+          )}
         </div>
       </div>
+      {noAlternative && (
+        <p className="text-[10px] italic text-muted-foreground">
+          No other relic fits this slot
+        </p>
+      )}
       {relic ? (
         <>
           <RelicNameCell
@@ -256,6 +335,7 @@ export function VesselCard({
   pinnedHandles = new Set(),
   effectMap = new Map(),
   enteredFingerprints,
+  inventorySource,
 }: {
   vessel: VesselResult
   defaultExpanded?: boolean
@@ -263,8 +343,77 @@ export function VesselCard({
   pinnedHandles?: Set<number>
   effectMap?: Map<number, string>
   enteredFingerprints?: Set<string>
+  /** When provided, enables the per-relic "strike" (X) controls. Omit to render
+   *  a plain, read-only result card. */
+  inventorySource?: InventorySource
 }) {
+  const { showErrorToast } = useCustomToast()
   const [expanded, setExpanded] = useState(defaultExpanded)
+  // Temporary, client-only strike state. Never persisted; reset whenever a fresh
+  // optimization replaces the `vessel` prop (see effect below).
+  const [workingVessel, setWorkingVessel] = useState<VesselResult>(vessel)
+  const [excluded, setExcluded] = useState<Set<number>>(() => new Set())
+  const [strikingSlot, setStrikingSlot] = useState<number | null>(null)
+  const [noAltSlots, setNoAltSlots] = useState<Set<number>>(() => new Set())
+
+  useEffect(() => {
+    setWorkingVessel(vessel)
+    setExcluded(new Set())
+    setStrikingSlot(null)
+    setNoAltSlots(new Set())
+  }, [vessel])
+
+  const isModified = workingVessel !== vessel
+  const canStrike = inventorySource !== undefined
+
+  const handleStrike = async (slotIndex: number) => {
+    if (!inventorySource || strikingSlot !== null) return
+    const struck = workingVessel.assignments[slotIndex]?.relic
+    if (!struck) return
+    const struckHandle = (struck as any).ga_handle as number
+    // Freeze every other slot in its exact position (slot_index + relic), so the
+    // backend re-fills only the struck slot and the rest of the layout holds.
+    const locked = workingVessel.assignments
+      .filter((a, i) => i !== slotIndex && a.relic)
+      .map((a) => ({
+        slot_index: a.slot_index,
+        ga_handle: (a.relic as any).ga_handle as number,
+      }))
+    const nextExcluded = new Set(excluded).add(struckHandle)
+
+    setStrikingSlot(slotIndex)
+    try {
+      const result = await fetchSlotAlternative({
+        inventorySource,
+        vessel_id: workingVessel.vessel_id,
+        struck_slot_index: slotIndex,
+        locked_slots: locked,
+        excluded_ga_handles: [...nextExcluded],
+      })
+      const replacement = result?.assignments[slotIndex]?.relic ?? null
+      if (result && replacement) {
+        setWorkingVessel(result)
+        setExcluded(nextExcluded)
+      } else {
+        // No relic can fill this slot once the struck one is gone — keep the
+        // current arrangement, note it, and disable this slot's X. The relic
+        // stays valid, so it is NOT added to the excluded set.
+        setNoAltSlots((s) => new Set(s).add(slotIndex))
+      }
+    } catch (err) {
+      showErrorToast(
+        err instanceof Error ? err.message : "Failed to find an alternative",
+      )
+    } finally {
+      setStrikingSlot(null)
+    }
+  }
+
+  const resetVessel = () => {
+    setWorkingVessel(vessel)
+    setExcluded(new Set())
+    setNoAltSlots(new Set())
+  }
 
   return (
     <Card
@@ -281,15 +430,36 @@ export function VesselCard({
         <div className="flex items-center justify-between flex-wrap gap-2">
           <div className="flex items-center gap-2">
             {highlighted && <Trophy className="h-4 w-4 text-gold shrink-0" />}
-            <CardTitle className="text-base">{vessel.vessel_name}</CardTitle>
+            <CardTitle className="text-base">
+              {workingVessel.vessel_name}
+            </CardTitle>
+            {isModified && (
+              <Badge variant="outline" className="text-[10px] px-1.5 py-0">
+                edited
+              </Badge>
+            )}
           </div>
           <div className="flex items-center gap-2">
-            {vessel.meets_requirements ? (
+            {isModified && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 px-2"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  resetVessel()
+                }}
+              >
+                <RotateCcw className="h-3.5 w-3.5 mr-1" />
+                Reset
+              </Button>
+            )}
+            {workingVessel.meets_requirements ? (
               <CheckCircle2 className="h-4 w-4 text-green-500" />
             ) : (
               <XCircle className="h-4 w-4 text-destructive" />
             )}
-            <Badge variant="secondary">{vessel.total_score} pts</Badge>
+            <Badge variant="secondary">{workingVessel.total_score} pts</Badge>
             {expanded ? (
               <ChevronUp className="h-4 w-4 text-muted-foreground" />
             ) : (
@@ -298,14 +468,14 @@ export function VesselCard({
           </div>
         </div>
         <p className="text-xs text-muted-foreground">
-          {vessel.vessel_character}
+          {workingVessel.vessel_character}
         </p>
       </CardHeader>
       {expanded && (
         <CardContent className="pt-0">
           <Separator className="mb-3" />
           <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-            {vessel.assignments.map((slot) => (
+            {workingVessel.assignments.map((slot) => (
               <SlotCard
                 key={slot.slot_index}
                 slot={slot}
@@ -315,16 +485,23 @@ export function VesselCard({
                 }
                 isNew={
                   slot.relic != null &&
-                  (enteredFingerprints?.has(relicKey(slot.relic as any)) ?? false)
+                  (enteredFingerprints?.has(relicKey(slot.relic as any)) ??
+                    false)
                 }
+                onStrike={
+                  canStrike ? () => handleStrike(slot.slot_index) : undefined
+                }
+                isStriking={strikingSlot === slot.slot_index}
+                busy={strikingSlot !== null}
+                noAlternative={noAltSlots.has(slot.slot_index)}
               />
             ))}
           </div>
-          {!vessel.meets_requirements &&
-            (vessel.missing_requirements?.length ?? 0) > 0 && (
+          {!workingVessel.meets_requirements &&
+            (workingVessel.missing_requirements?.length ?? 0) > 0 && (
               <p className="text-xs text-destructive mt-3">
                 Missing required effects:{" "}
-                {(vessel.missing_requirements ?? [])
+                {(workingVessel.missing_requirements ?? [])
                   .map((m) =>
                     typeof m === "number"
                       ? (effectMap.get(m) ?? `Effect ${m}`)
@@ -354,7 +531,8 @@ export function ChangeBanner({ change }: { change?: BuildChange | null }) {
 
   if (change.status === "improved") {
     Icon = TrendingUp
-    tone = "border-green-500/40 bg-green-500/10 text-green-700 dark:text-green-400"
+    tone =
+      "border-green-500/40 bg-green-500/10 text-green-700 dark:text-green-400"
     text = `Your best arrangement improved by ${delta} pts since your last save.`
   } else if (change.status === "degraded") {
     Icon = TrendingDown
@@ -372,7 +550,9 @@ export function ChangeBanner({ change }: { change?: BuildChange | null }) {
   }
 
   return (
-    <div className={`flex items-center gap-2 rounded-md border px-3 py-2 text-sm ${tone}`}>
+    <div
+      className={`flex items-center gap-2 rounded-md border px-3 py-2 text-sm ${tone}`}
+    >
       <Icon className="h-4 w-4 shrink-0" />
       <span>{text}</span>
       {change.reliable === false && (

@@ -167,3 +167,135 @@ class TestDbMode:
             },
         )
         assert response.status_code == 401
+
+
+_SLOT_BUILD = {
+    "id": "slot-alt-test",
+    "name": "Slot Alt Build",
+    "character": "Wylder",
+    "groups": [],
+    "required_effects": [100],
+    "required_families": [],
+    "excluded_effects": [],
+    "excluded_families": [],
+    "include_deep": False,
+    "curse_max": 1,
+}
+
+
+def _color_relics() -> list[dict]:
+    """4 relics per colour, all carrying required effect 100.
+
+    Four-per-colour guarantees that after pinning the other (≤2) standard slots
+    and excluding one relic, a same-colour alternative still remains for the
+    struck slot — so the strike always produces a swap regardless of the chosen
+    vessel's colour layout."""
+    relics: list[dict] = []
+    h = 0xC0010000
+    for color in ("Red", "Blue", "Yellow", "Green", "White"):
+        for _ in range(4):
+            relics.append({
+                "ga_handle": h,
+                "item_id": 100 + 2147483648,
+                "real_id": 100,
+                "color": color,
+                "effects": [100, EMPTY, EMPTY],
+                "curses": [EMPTY, EMPTY, EMPTY],
+                "is_deep": False,
+                "name": "Test Relic",
+                "tier": "Delicate",
+            })
+            h += 1
+    return relics
+
+
+@pytest.mark.usefixtures("override_game_data")
+class TestSlotAlternative:
+    """POST /optimize/slot-alternative — re-optimize one slot, others pinned."""
+
+    def _top_result(self, client: TestClient) -> dict:
+        resp = client.post(
+            "/api/v1/optimize/",
+            json={"build": _SLOT_BUILD, "relics": _color_relics(), "top_n": 50},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data, "expected at least one vessel result to strike against"
+        return data[0]
+
+    def test_strike_swaps_struck_slot_and_keeps_others(self, client: TestClient) -> None:
+        top = self._top_result(client)
+        vessel_id = top["vessel_id"]
+        assignments = top["assignments"]
+        struck_idx = next(i for i, a in enumerate(assignments) if a["relic"])
+        struck_handle = assignments[struck_idx]["relic"]["ga_handle"]
+        locked = [
+            {"slot_index": a["slot_index"], "ga_handle": a["relic"]["ga_handle"]}
+            for i, a in enumerate(assignments)
+            if i != struck_idx and a["relic"]
+        ]
+
+        resp = client.post(
+            "/api/v1/optimize/slot-alternative",
+            json={
+                "build": _SLOT_BUILD,
+                "relics": _color_relics(),
+                "vessel_id": vessel_id,
+                "struck_slot_index": struck_idx,
+                "locked_slots": locked,
+                "excluded_ga_handles": [struck_handle],
+            },
+        )
+        assert resp.status_code == 200
+        result = resp.json()
+        assert result is not None, "a same-colour alternative should exist"
+        assert result["vessel_id"] == vessel_id
+
+        # The struck slot changed to a different relic.
+        new_struck = result["assignments"][struck_idx]["relic"]
+        assert new_struck is not None, "struck slot should get a replacement"
+        assert new_struck["ga_handle"] != struck_handle
+
+        # Every locked slot kept its EXACT relic in its EXACT position (the bug
+        # fix: no positionless repacking).
+        new_by_slot = {a["slot_index"]: a["relic"] for a in result["assignments"]}
+        for ls in locked:
+            kept = new_by_slot[ls["slot_index"]]
+            assert kept is not None and kept["ga_handle"] == ls["ga_handle"], (
+                f"slot {ls['slot_index']} must keep relic {ls['ga_handle']}, "
+                f"got {kept}"
+            )
+
+        # The struck relic appears nowhere in the result.
+        all_handles = {
+            a["relic"]["ga_handle"] for a in result["assignments"] if a["relic"]
+        }
+        assert struck_handle not in all_handles, "struck relic must be excluded"
+
+    def test_unknown_vessel_returns_404(self, client: TestClient) -> None:
+        resp = client.post(
+            "/api/v1/optimize/slot-alternative",
+            json={
+                "build": _SLOT_BUILD,
+                "relics": [],
+                "vessel_id": 999_999_999,
+                "struck_slot_index": 0,
+                "locked_slots": [],
+                "excluded_ga_handles": [],
+            },
+        )
+        assert resp.status_code == 404
+
+    def test_db_mode_requires_auth(self, client: TestClient) -> None:
+        import uuid
+
+        resp = client.post(
+            "/api/v1/optimize/slot-alternative",
+            json={
+                "build_id": str(uuid.uuid4()),
+                "profile_id": str(uuid.uuid4()),
+                "vessel_id": 1,
+                "struck_slot_index": 0,
+            },
+        )
+        assert resp.status_code == 401
