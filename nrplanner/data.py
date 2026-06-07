@@ -107,6 +107,50 @@ class SourceDataHandler:
         self.character_names: list[str] = list(CHARACTER_NAMES)
 
         self._load_text(language)
+        self._build_effect_lookup_caches()
+
+    # ------------------------------------------------------------------
+    # Fast lookup caches (hot-path optimization)
+    # ------------------------------------------------------------------
+
+    def _build_effect_lookup_caches(self) -> None:
+        """Pre-compute dict caches replacing pandas .loc in hot-path methods.
+
+        Built once during __init__; the dicts are effectively immutable
+        thereafter.  Eliminates ~30x-slower pandas row scans from
+        score_relic_in_context and VesselState.place inner loops.
+        """
+        params = self.effect_params
+
+        self._text_id_cache: dict[int, int] = {
+            int(k): int(v)
+            for k, v in params["attachTextId"].items()
+        }
+        self._conflict_id_cache: dict[int, int] = {
+            int(k): int(v)
+            for k, v in params["compatibilityId"].items()
+        }
+        self._exclusivity_id_cache: dict[int, int] = {
+            int(k): int(v)
+            for k, v in params["exclusivityId"].items()
+        }
+
+        fmg_lookup: dict[int, str] = {}
+        if self.effect_name is not None:
+            for _, row in self.effect_name.iterrows():
+                text = str(row["text"]).strip()
+                if text != "%null%":
+                    fmg_lookup[int(row["id"])] = text
+
+        self._name_cache_map: dict[int, str] = {}
+        for eff_id in params.index:
+            name = None
+            text_id = self._text_id_cache.get(int(eff_id), -1)
+            if text_id != -1:
+                name = fmg_lookup.get(text_id)
+            if not name:
+                name = fmg_lookup.get(int(eff_id))
+            self._name_cache_map[int(eff_id)] = name or f"Effect {eff_id}"
 
     # ------------------------------------------------------------------
     # Text / language
@@ -167,9 +211,11 @@ class SourceDataHandler:
         """Reload text for a new language. Returns True on success."""
         try:
             self._load_text(language)
+            self._build_effect_lookup_caches()
             return True
         except (FileNotFoundError, KeyError):
             self._load_text()
+            self._build_effect_lookup_caches()
             return False
 
     def get_support_languages(self) -> dict[str, str]:
@@ -307,57 +353,33 @@ class SourceDataHandler:
     def get_effect_name(self, effect_id: int) -> str:
         if effect_id in (-1, 0, 4294967295):
             return "Empty"
-        try:
-            # Prefer attachTextId → FMG (matches game engine display logic).
-            # The effect_id and FMG text-id namespaces overlap, so a direct
-            # FMG hit on effect_id may be the *text label* of a different effect
-            # (e.g. effect 6001400 has attachTextId=7001403 "+3", but the FMG
-            # also has id=6001400 = "+4" which is the label for effect 6001401).
-            if effect_id in self.effect_params.index:
-                text_id = int(self.effect_params.loc[effect_id, "attachTextId"])
-                if text_id != -1:
-                    row = self.effect_name[self.effect_name["id"] == text_id]
-                    if not row.empty:
-                        text = str(row["text"].values[0]).strip()
-                        if text != "%null%":
-                            return text
-            # Fallback: direct FMG lookup by effect_id
+        cached = self._name_cache_map.get(effect_id)
+        if cached is not None:
+            return cached
+        if self.effect_name is not None:
             row = self.effect_name[self.effect_name["id"] == effect_id]
             if not row.empty:
                 text = str(row["text"].values[0]).strip()
                 if text != "%null%":
                     return text
-        except Exception:
-            pass
         return f"Effect {effect_id}"
 
     def get_effect_text_id(self, effect_id: int) -> int:
         """Return attachTextId (canonical text ID) for an effect, or -1."""
-        try:
-            if effect_id in (-1, 0, 4294967295):
-                return -1
-            if effect_id in self.effect_params.index:
-                return int(self.effect_params.loc[effect_id, "attachTextId"])
-        except (KeyError, ValueError):
-            pass
-        return -1
+        if effect_id in (-1, 0, 4294967295):
+            return -1
+        return self._text_id_cache.get(effect_id, -1)
 
     def get_effect_conflict_id(self, effect_id: int) -> int:
-        try:
-            if effect_id in (-1, 4294967295):
-                return -1
-            return int(self.effect_params.loc[effect_id, "compatibilityId"])
-        except KeyError:
+        if effect_id in (-1, 4294967295):
             return -1
+        return self._conflict_id_cache.get(effect_id, -1)
 
     def get_effect_exclusivity_id(self, effect_id: int) -> int:
         """Return exclusivityId for an effect, or -1."""
-        try:
-            if effect_id in (-1, 4294967295):
-                return -1
-            return int(self.effect_params.loc[effect_id, "exclusivityId"])
-        except KeyError:
+        if effect_id in (-1, 4294967295):
             return -1
+        return self._exclusivity_id_cache.get(effect_id, -1)
 
     def get_sort_id(self, effect_id: int) -> int:
         try:
