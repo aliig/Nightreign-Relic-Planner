@@ -62,6 +62,7 @@ def create_build(
     if build_in.groups is not None:
         kwargs["groups"] = build_in.groups
     build = Build(**kwargs)
+    build.build_hash = build_signature(build_def_from_db(build))
     session.add(build)
     session.commit()
     session.refresh(build)
@@ -154,6 +155,7 @@ def update_build(
     # never surfaced as a "since your last save" point change (and any pending
     # review badge for it clears).  A pure rename leaves the signature unchanged.
     new_sig = build_signature(build_def_from_db(build))
+    build.build_hash = new_sig
     for snap in session.exec(
         select(OptimizationSnapshot).where(OptimizationSnapshot.build_id == build.id)
     ).all():

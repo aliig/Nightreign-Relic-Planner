@@ -121,6 +121,7 @@ class Profile(SQLModel, table=True):
     )
     slot_index: int
     name: str = Field(max_length=100)
+    relics_hash: str | None = Field(default=None, max_length=64)
 
     save_upload: Optional["SaveUpload"] = Relationship(back_populates="profiles")
     relics: list["Relic"] = Relationship(
@@ -244,6 +245,7 @@ class Build(SQLModel, table=True):
         sa_column=Column(JSON, nullable=False, server_default="{}"),
     )
     is_featured: bool = Field(default=False, index=True)
+    build_hash: str | None = Field(default=None, max_length=64)
     created_at: datetime | None = Field(
         default_factory=get_datetime_utc,
         sa_type=DateTime(timezone=True),  # type: ignore

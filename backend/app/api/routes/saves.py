@@ -52,6 +52,7 @@ from nrplanner.changes import (
     relevant_to_build,
     relic_fingerprint,
     relics_signature,
+    relics_signature_from_fingerprints,
     serialize_top_layouts,
 )
 from nrplanner.models import (
@@ -458,11 +459,20 @@ async def upload_save(
     session.flush()  # get the ID before creating children
 
     for prof_data in profiles:
+        fps = [
+            relic_fingerprint(
+                r.real_id,
+                [r.effect_1, r.effect_2, r.effect_3],
+                [r.curse_1, r.curse_2, r.curse_3],
+            )
+            for r in prof_data.relics
+        ]
         profile = Profile(
             owner_id=current_user.id,
             save_upload_id=save_upload.id,
             slot_index=prof_data.slot_index,
             name=prof_data.name,
+            relics_hash=relics_signature_from_fingerprints(fps),
         )
         session.add(profile)
         session.flush()

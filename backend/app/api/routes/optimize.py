@@ -483,13 +483,13 @@ def get_snapshot(
     profile_id: uuid.UUID,
     current_user: CurrentUser,
     session: SessionDep,
-    ds: GameDataDep,
 ) -> SnapshotResponse | None:
     """Return cached optimization results if the snapshot is fresh.
 
     A snapshot is fresh when its relics_hash and build_hash match the current
-    live inputs.  Returns null if stale or missing — the frontend should then
-    trigger a fresh optimization.
+    live inputs (cached on the Profile and Build rows at write time).
+    Returns null if stale or missing — the frontend should then trigger a
+    fresh optimization.
     """
     db_build = session.get(Build, build_id)
     if not db_build or db_build.owner_id != current_user.id:
@@ -508,29 +508,7 @@ def get_snapshot(
     if snap is None:
         return None
 
-    build_def = build_def_from_db(db_build)
-    current_build_hash = build_signature(build_def)
-
-    db_relics = session.exec(
-        select(Relic).where(Relic.profile_id == profile_id)
-    ).all()
-    owned_relics = [
-        OwnedRelic(
-            ga_handle=r.ga_handle,
-            item_id=r.item_id,
-            real_id=r.real_id,
-            color=r.color,
-            effects=[r.effect_1, r.effect_2, r.effect_3],
-            curses=[r.curse_1, r.curse_2, r.curse_3],
-            is_deep=r.is_deep,
-            name=r.name,
-            tier=r.tier,
-        )
-        for r in db_relics
-    ]
-    current_relics_hash = relics_signature(owned_relics)
-
-    if snap.relics_hash != current_relics_hash or snap.build_hash != current_build_hash:
+    if snap.relics_hash != profile.relics_hash or snap.build_hash != db_build.build_hash:
         return None
 
     # Snapshot is fresh — deserialize results
