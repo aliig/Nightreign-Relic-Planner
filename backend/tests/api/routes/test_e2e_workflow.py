@@ -53,29 +53,34 @@ def _upload_relics_to_inline_format(
 
 @pytest.mark.usefixtures("override_game_data")
 class TestE2EWorkflow:
-    """Full workflow: upload -> game data -> create build -> update build -> optimize (DB + inline)."""
+    """Full workflow: upload -> game data -> create build -> update build -> optimize (DB + inline).
 
-    # Mutable class-level state shared across ordered test methods.
+    All steps run inside ONE test function: the conftest db fixture wraps
+    each test in a rolled-back transaction, so DB state (uploaded profiles,
+    created builds) cannot survive between separate test functions.
+    """
+
+    # Mutable class-level state shared across the ordered steps.
     _state: dict[str, Any] = {}
 
-    @pytest.fixture(autouse=True, scope="class")
-    def cleanup(
+    def test_full_workflow(
         self, client: TestClient, superuser_token_headers: dict[str, str]
-    ) -> Any:
-        """Delete created build after all tests in this class finish."""
-        yield
-        build_id = self.__class__._state.get("build_id")
-        if build_id:
-            client.delete(
-                f"/api/v1/builds/{build_id}",
-                headers=superuser_token_headers,
-            )
+    ) -> None:
+        self.__class__._state = {}
+        self._step_01_upload_save(client, superuser_token_headers)
+        self._step_02_fetch_game_data(client)
+        self._step_03_create_build(client, superuser_token_headers)
+        self._step_04_update_build_groups(client, superuser_token_headers)
+        self._step_05a_optimize_db_mode(client, superuser_token_headers)
+        self._step_05b_optimize_inline_mode(client)
+        self._step_06_results_consistent()
+        self._step_07_get_relics_matches_upload(client, superuser_token_headers)
 
     # ---------------------------------------------------------------
     # Step 1: Upload save (authenticated)
     # ---------------------------------------------------------------
 
-    def test_01_upload_save(
+    def _step_01_upload_save(
         self, client: TestClient, superuser_token_headers: dict[str, str]
     ) -> None:
         """Upload the real .sl2 as authenticated user; verify persistence."""
@@ -126,7 +131,7 @@ class TestE2EWorkflow:
     # Step 2: Fetch game data (effects for build tier config)
     # ---------------------------------------------------------------
 
-    def test_02_fetch_game_data(self, client: TestClient) -> None:
+    def _step_02_fetch_game_data(self, client: TestClient) -> None:
         """GET /game/effects and /game/characters; pick real IDs for the build."""
         state = self.__class__._state
 
@@ -180,7 +185,7 @@ class TestE2EWorkflow:
     # Step 3: Create build (authenticated)
     # ---------------------------------------------------------------
 
-    def test_03_create_build(
+    def _step_03_create_build(
         self, client: TestClient, superuser_token_headers: dict[str, str]
     ) -> None:
         """POST /builds/ with a valid class name from game data."""
@@ -200,7 +205,9 @@ class TestE2EWorkflow:
         assert build["character"] == class_name
         assert "id" in build
         assert isinstance(build["groups"], list)
-        assert len(build["groups"]) == 4
+        # The backend no longer seeds default groups — the frontend is the
+        # single source of truth for them (commit e60bc92).
+        assert len(build["groups"]) == 0
         assert build["required_effects"] == []
         assert build["required_families"] == []
         assert build["excluded_effects"] == []
@@ -216,7 +223,7 @@ class TestE2EWorkflow:
     # Step 4: Update build with group configuration
     # ---------------------------------------------------------------
 
-    def test_04_update_build_groups(
+    def _step_04_update_build_groups(
         self, client: TestClient, superuser_token_headers: dict[str, str]
     ) -> None:
         """PUT /builds/{id} to set preferred effects in a weight group from real game data."""
@@ -243,7 +250,7 @@ class TestE2EWorkflow:
     # Step 5a: Optimize — DB mode (authenticated)
     # ---------------------------------------------------------------
 
-    def test_05a_optimize_db_mode(
+    def _step_05a_optimize_db_mode(
         self, client: TestClient, superuser_token_headers: dict[str, str]
     ) -> None:
         """POST /optimize/ with build_id + profile_id (DB mode)."""
@@ -292,7 +299,7 @@ class TestE2EWorkflow:
     # Step 5b: Optimize — Inline mode (anonymous)
     # ---------------------------------------------------------------
 
-    def test_05b_optimize_inline_mode(self, client: TestClient) -> None:
+    def _step_05b_optimize_inline_mode(self, client: TestClient) -> None:
         """POST /optimize/ with full build + relics inline (no auth)."""
         state = self.__class__._state
         build_data = state["build_data"]
@@ -311,7 +318,14 @@ class TestE2EWorkflow:
             "excluded_families": build_data.get("excluded_families", []),
             "include_deep": build_data["include_deep"],
             "curse_max": build_data["curse_max"],
+            "default_curse_weight": build_data.get("default_curse_weight", 0),
             "pinned_relics": build_data.get("pinned_relics", []),
+            # Must mirror the DB build exactly or step 6's DB-vs-inline score
+            # equality is comparing different builds.
+            "excluded_stacking_categories": build_data.get(
+                "excluded_stacking_categories", []),
+            "effect_limits": build_data.get("effect_limits", {}),
+            "family_limits": build_data.get("family_limits", {}),
         }
 
         response = client.post(
@@ -343,7 +357,7 @@ class TestE2EWorkflow:
     # Step 6: Cross-validate DB mode vs inline mode results
     # ---------------------------------------------------------------
 
-    def test_06_results_consistent(self) -> None:
+    def _step_06_results_consistent(self) -> None:
         """Both optimization paths should produce identical results given the same inputs."""
         state = self.__class__._state
         db_results = state.get("db_mode_results")
@@ -381,7 +395,7 @@ class TestE2EWorkflow:
     # Step 7: Verify persisted relics via GET endpoint
     # ---------------------------------------------------------------
 
-    def test_07_get_relics_matches_upload(
+    def _step_07_get_relics_matches_upload(
         self, client: TestClient, superuser_token_headers: dict[str, str]
     ) -> None:
         """GET /saves/profiles/{id}/relics returns the same relics as upload."""

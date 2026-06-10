@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlmodel import Session, select
 
 FIXTURE_PATH = Path(__file__).parent.parent.parent / "fixtures" / "NR0000.sl2"
 
@@ -35,16 +36,16 @@ def test_upload_real_sl2_anonymous(client: TestClient) -> None:
     data = response.json()
 
     assert data["platform"] == "PC"
-    assert data["character_count"] >= 1
+    assert data["profile_count"] >= 1
     assert data["persisted"] is False  # anonymous upload
-    assert len(data["characters"]) >= 1
+    assert len(data["profiles"]) >= 1
 
     valid_colors = {"Red", "Blue", "Yellow", "Green", "White"}
-    for char in data["characters"]:
-        assert isinstance(char["name"], str)
-        assert char["name"] != ""
-        assert isinstance(char["relics"], list)
-        for relic in char["relics"]:
+    for prof in data["profiles"]:
+        assert isinstance(prof["name"], str)
+        assert prof["name"] != ""
+        assert isinstance(prof["relics"], list)
+        for relic in prof["relics"]:
             assert relic["color"] in valid_colors, f"Unexpected color: {relic['color']}"
             assert isinstance(relic["effect_1"], int)
             assert isinstance(relic["effect_2"], int)
@@ -71,3 +72,42 @@ def test_upload_real_sl2_authenticated(
     data = response.json()
     assert data["persisted"] is True
     assert data["save_upload_id"] is not None
+
+
+@pytest.mark.skipif(
+    not FIXTURE_PATH.exists(),
+    reason="Real save fixture not present",
+)
+@pytest.mark.usefixtures("override_game_data")
+def test_stream_upload_sets_profile_relics_hash(
+    client: TestClient, superuser_token_headers: dict[str, str], db: Session
+) -> None:
+    """The streaming upload must cache relics_hash on each Profile exactly
+    like the non-streaming path — GET /optimize/snapshot freshness compares
+    against it, so a missing hash forces a re-optimize on every view."""
+    from app.core.config import settings
+    from app.models import Profile, User
+
+    with FIXTURE_PATH.open("rb") as f:
+        response = client.post(
+            "/api/v1/saves/upload/stream",
+            files={"file": ("NR0000.sl2", f, "application/octet-stream")},
+            headers=superuser_token_headers,
+        )
+
+    assert response.status_code == 200, response.text
+    assert "upload_complete" in response.text
+
+    user = db.exec(
+        select(User).where(User.email == settings.FIRST_SUPERUSER)
+    ).first()
+    assert user is not None
+    profiles = db.exec(
+        select(Profile).where(Profile.owner_id == user.id)
+    ).all()
+    assert profiles, "streaming upload should persist profiles"
+    for profile in profiles:
+        assert profile.relics_hash, (
+            f"profile slot {profile.slot_index} has no relics_hash — "
+            "snapshot freshness will never hit for streaming uploads"
+        )
