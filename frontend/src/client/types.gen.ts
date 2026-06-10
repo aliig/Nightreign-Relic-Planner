@@ -13,6 +13,10 @@ export type Body_saves_upload_save = {
     file: (Blob | File);
 };
 
+export type Body_saves_upload_save_stream = {
+    file: (Blob | File);
+};
+
 /**
  * How a build's optimal arrangement changed between two optimization inputs.
  *
@@ -64,6 +68,7 @@ export type BuildDefinition = {
     curse_max?: number;
     default_curse_weight?: number;
     pinned_relics?: Array<(number)>;
+    excluded_relics?: Array<(number)>;
     excluded_stacking_categories?: Array<(number)>;
     effect_limits?: {
         [key: string]: (number);
@@ -101,6 +106,17 @@ export type BuildPublic = {
     updated_at?: (string | null);
 };
 
+/**
+ * Lightweight summary of a build's most recent optimization change.
+ */
+export type BuildSnapshotSummary = {
+    build_id: string;
+    status?: (string | null);
+    delta?: number;
+    best_score?: number;
+    computed_at?: (string | null);
+};
+
 export type BuildsPublic = {
     data: Array<BuildPublic>;
     count: number;
@@ -128,6 +144,18 @@ export type BuildUpdate = {
     [key: string]: (number);
 } | null);
 };
+
+export type DebugExportRequest = {
+    mode?: 'view' | 'full';
+    build_id?: (string | null);
+    profile_id?: (string | null);
+    results?: (Array<{
+    [key: string]: unknown;
+}> | null);
+    note?: (string | null);
+};
+
+export type mode = 'view' | 'full';
 
 export type FeaturedBuildPublic = {
     id: string;
@@ -162,6 +190,14 @@ export type FeaturedBuildsPublic = {
 
 export type HTTPValidationError = {
     detail?: Array<ValidationError>;
+};
+
+/**
+ * A relic frozen in its exact slot during a single-slot re-optimization.
+ */
+export type LockedSlot = {
+    slot_index: number;
+    ga_handle: number;
 };
 
 export type Message = {
@@ -315,6 +351,28 @@ export type SaveStatusPublic = {
 };
 
 /**
+ * Re-optimize a single vessel slot, freezing every other slot in place.
+ *
+ * Powers the "strike a relic" UI: keep each relic in ``locked_slots`` in its
+ * exact slot, exclude the struck relic(s), and re-fill only
+ * ``struck_slot_index`` with the next-best relic.  Freezing positions (rather
+ * than positionless pinning) guarantees the rest of the layout — and its
+ * scores — stay put, so the total moves only as a function of the struck slot.
+ * Same dual-mode inventory inputs as :class:`OptimizeRequest` (DB mode =
+ * build_id + profile_id; inline mode = build + relics).  Persists nothing.
+ */
+export type SlotAlternativeRequest = {
+    build_id?: (string | null);
+    profile_id?: (string | null);
+    build?: (BuildDefinition | null);
+    relics?: (Array<OwnedRelic_Input> | null);
+    vessel_id: number;
+    struck_slot_index: number;
+    locked_slots?: Array<LockedSlot>;
+    excluded_ga_handles?: Array<(number)>;
+};
+
+/**
  * A relic assigned to one vessel slot.
  */
 export type SlotAssignment = {
@@ -326,6 +384,15 @@ export type SlotAssignment = {
     breakdown: Array<{
         [key: string]: unknown;
     }>;
+};
+
+/**
+ * Cached optimization results from a fresh snapshot.
+ */
+export type SnapshotResponse = {
+    results: Array<VesselResult>;
+    last_change?: (BuildChange | null);
+    computed_at?: (string | null);
 };
 
 export type Token = {
@@ -475,6 +542,14 @@ export type BuildsCloneBuildData = {
 
 export type BuildsCloneBuildResponse = (BuildPublic);
 
+export type DebugExportDebugStateData = {
+    requestBody: DebugExportRequest;
+};
+
+export type DebugExportDebugStateResponse = ({
+    [key: string]: unknown;
+});
+
 export type GameGetEffectsResponse = (Array<{
     [key: string]: unknown;
 }>);
@@ -551,21 +626,20 @@ export type OptimizeRunOptimizeStreamData = {
 
 export type OptimizeRunOptimizeStreamResponse = (unknown);
 
-export type OptimizeGetSnapshotResponse = {
-    results: Array<VesselResult>;
-    last_change: BuildChange | null;
-    computed_at: string | null;
+export type OptimizeOptimizeSlotAlternativeData = {
+    requestBody: SlotAlternativeRequest;
 };
 
-export type BuildSnapshotSummary = {
-    build_id: string;
-    status: string | null;
-    delta: number;
-    best_score: number;
-    computed_at: string | null;
+export type OptimizeOptimizeSlotAlternativeResponse = ((VesselResult | null));
+
+export type OptimizeGetSnapshotData = {
+    buildId: string;
+    profileId: string;
 };
 
-export type OptimizeListBuildSummariesResponse = Array<BuildSnapshotSummary>;
+export type OptimizeGetSnapshotResponse = ((SnapshotResponse | null));
+
+export type OptimizeListBuildSummariesResponse = (Array<BuildSnapshotSummary>);
 
 export type PrivateCreateUserData = {
     requestBody: PrivateUserCreate;
@@ -578,6 +652,12 @@ export type SavesUploadSaveData = {
 };
 
 export type SavesUploadSaveResponse = (UploadResponse);
+
+export type SavesUploadSaveStreamData = {
+    formData: Body_saves_upload_save_stream;
+};
+
+export type SavesUploadSaveStreamResponse = (unknown);
 
 export type SavesGetSaveStatusResponse = ((SaveStatusPublic | null));
 

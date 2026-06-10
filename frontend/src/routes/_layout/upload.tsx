@@ -117,9 +117,7 @@ async function runUploadStream(
   })
 
   if (!response.ok) {
-    const err = await response
-      .json()
-      .catch(() => ({ detail: "Upload failed" }))
+    const err = await response.json().catch(() => ({ detail: "Upload failed" }))
     throw new Error(err.detail ?? "Upload failed")
   }
 
@@ -277,10 +275,7 @@ function UploadPage() {
           platform: data.platform,
           uploaded_at: new Date().toISOString(),
         })
-        sessionStorage.setItem(
-          "parsedProfiles",
-          JSON.stringify(data.profiles),
-        )
+        sessionStorage.setItem("parsedProfiles", JSON.stringify(data.profiles))
         if (data.profiles.length > 0) {
           sessionStorage.setItem(
             "selectedProfile",

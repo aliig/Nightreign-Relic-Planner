@@ -485,7 +485,8 @@ function AnonInventory() {
     }
   })()
 
-  const defaultSlot = defaultProfile?.slot_index ?? allProfiles[0]?.slot_index ?? null
+  const defaultSlot =
+    defaultProfile?.slot_index ?? allProfiles[0]?.slot_index ?? null
   const [selectedSlot, setSelectedSlot] = useState<number | null>(defaultSlot)
 
   const [search, setSearch] = useState("")

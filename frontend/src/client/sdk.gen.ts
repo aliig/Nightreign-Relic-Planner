@@ -3,7 +3,7 @@
 import type { CancelablePromise } from './core/CancelablePromise';
 import { OpenAPI } from './core/OpenAPI';
 import { request as __request } from './core/request';
-import type { BuildsListBuildsData, BuildsListBuildsResponse, BuildsCreateBuildData, BuildsCreateBuildResponse, BuildsListFeaturedBuildsData, BuildsListFeaturedBuildsResponse, BuildsGetBuildData, BuildsGetBuildResponse, BuildsUpdateBuildData, BuildsUpdateBuildResponse, BuildsDeleteBuildData, BuildsDeleteBuildResponse, BuildsToggleFeaturedData, BuildsToggleFeaturedResponse, BuildsCloneBuildData, BuildsCloneBuildResponse, GameGetEffectsResponse, GameGetFamiliesResponse, GameGetCharactersResponse, GameGetVesselsData, GameGetVesselsResponse, GameGetStackingCategoriesResponse, GameGetColorsResponse, LoginLoginAccessTokenData, LoginLoginAccessTokenResponse, LoginTestTokenResponse, LoginRecoverPasswordData, LoginRecoverPasswordResponse, LoginResetPasswordData, LoginResetPasswordResponse, LoginRecoverPasswordHtmlContentData, LoginRecoverPasswordHtmlContentResponse, OauthLoginGoogleResponse, OauthGoogleCallbackData, OauthGoogleCallbackResponse, OptimizeRunOptimizeData, OptimizeRunOptimizeResponse, OptimizeRunOptimizeStreamData, OptimizeRunOptimizeStreamResponse, OptimizeGetSnapshotResponse, OptimizeListBuildSummariesResponse, PrivateCreateUserData, PrivateCreateUserResponse, SavesUploadSaveData, SavesUploadSaveResponse, SavesGetSaveStatusResponse, SavesListProfilesResponse, SavesGetProfileRelicsData, SavesGetProfileRelicsResponse, UsersReadUsersData, UsersReadUsersResponse, UsersCreateUserData, UsersCreateUserResponse, UsersReadUserMeResponse, UsersDeleteUserMeResponse, UsersUpdateUserMeData, UsersUpdateUserMeResponse, UsersUpdatePasswordMeData, UsersUpdatePasswordMeResponse, UsersRegisterUserData, UsersRegisterUserResponse, UsersReadUserByIdData, UsersReadUserByIdResponse, UsersUpdateUserData, UsersUpdateUserResponse, UsersDeleteUserData, UsersDeleteUserResponse, UtilsTestEmailData, UtilsTestEmailResponse, UtilsHealthCheckResponse } from './types.gen';
+import type { BuildsListBuildsData, BuildsListBuildsResponse, BuildsCreateBuildData, BuildsCreateBuildResponse, BuildsListFeaturedBuildsData, BuildsListFeaturedBuildsResponse, BuildsGetBuildData, BuildsGetBuildResponse, BuildsUpdateBuildData, BuildsUpdateBuildResponse, BuildsDeleteBuildData, BuildsDeleteBuildResponse, BuildsToggleFeaturedData, BuildsToggleFeaturedResponse, BuildsCloneBuildData, BuildsCloneBuildResponse, DebugExportDebugStateData, DebugExportDebugStateResponse, GameGetEffectsResponse, GameGetFamiliesResponse, GameGetCharactersResponse, GameGetVesselsData, GameGetVesselsResponse, GameGetStackingCategoriesResponse, GameGetColorsResponse, LoginLoginAccessTokenData, LoginLoginAccessTokenResponse, LoginTestTokenResponse, LoginRecoverPasswordData, LoginRecoverPasswordResponse, LoginResetPasswordData, LoginResetPasswordResponse, LoginRecoverPasswordHtmlContentData, LoginRecoverPasswordHtmlContentResponse, OauthLoginGoogleResponse, OauthGoogleCallbackData, OauthGoogleCallbackResponse, OptimizeRunOptimizeData, OptimizeRunOptimizeResponse, OptimizeRunOptimizeStreamData, OptimizeRunOptimizeStreamResponse, OptimizeOptimizeSlotAlternativeData, OptimizeOptimizeSlotAlternativeResponse, OptimizeGetSnapshotData, OptimizeGetSnapshotResponse, OptimizeListBuildSummariesResponse, PrivateCreateUserData, PrivateCreateUserResponse, SavesUploadSaveData, SavesUploadSaveResponse, SavesUploadSaveStreamData, SavesUploadSaveStreamResponse, SavesGetSaveStatusResponse, SavesListProfilesResponse, SavesGetProfileRelicsData, SavesGetProfileRelicsResponse, UsersReadUsersData, UsersReadUsersResponse, UsersCreateUserData, UsersCreateUserResponse, UsersReadUserMeResponse, UsersDeleteUserMeResponse, UsersUpdateUserMeData, UsersUpdateUserMeResponse, UsersUpdatePasswordMeData, UsersUpdatePasswordMeResponse, UsersRegisterUserData, UsersRegisterUserResponse, UsersReadUserByIdData, UsersReadUserByIdResponse, UsersUpdateUserData, UsersUpdateUserResponse, UsersDeleteUserData, UsersDeleteUserResponse, UtilsTestEmailData, UtilsTestEmailResponse, UtilsHealthCheckResponse } from './types.gen';
 
 export class BuildsService {
     /**
@@ -174,6 +174,29 @@ export class BuildsService {
             path: {
                 build_id: data.buildId
             },
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+}
+
+export class DebugService {
+    /**
+     * Export Debug State
+     * Bundle the caller's builds, inventory, snapshots, and current scenario to
+     * a gitignored JSON file (and return it for download).  Local + superuser only.
+     * @param data The data for the request.
+     * @param data.requestBody
+     * @returns unknown Successful Response
+     * @throws ApiError
+     */
+    public static exportDebugState(data: DebugExportDebugStateData): CancelablePromise<DebugExportDebugStateResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/api/v1/debug/export',
+            body: data.requestBody,
+            mediaType: 'application/json',
             errors: {
                 422: 'Validation Error'
             }
@@ -460,16 +483,48 @@ export class OptimizeService {
     }
     
     /**
+     * Optimize Slot Alternative
+     * Re-optimize one vessel slot while every other slot stays frozen in place.
+     *
+     * Freezes ``locked_slots`` (each relic in its exact slot), removes
+     * ``excluded_ga_handles`` from the candidate pool, and re-fills only
+     * ``struck_slot_index`` with the next-best relic, so the rest of the layout
+     * (and its scores) never moves.  Returns ``null`` only when the whole vessel
+     * comes back empty; the common "no replacement" case returns a vessel whose
+     * struck slot relic is null.  Auth/ownership is enforced by ``_resolve``
+     * exactly as for ``/optimize``; nothing is persisted (no snapshot).
+     * @param data The data for the request.
+     * @param data.requestBody
+     * @returns unknown Successful Response
+     * @throws ApiError
+     */
+    public static optimizeSlotAlternative(data: OptimizeOptimizeSlotAlternativeData): CancelablePromise<OptimizeOptimizeSlotAlternativeResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/api/v1/optimize/slot-alternative',
+            body: data.requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+    
+    /**
      * Get Snapshot
      * Return cached optimization results if the snapshot is fresh.
-     * Returns null if stale or missing.
+     *
+     * A snapshot is fresh when its relics_hash and build_hash match the current
+     * live inputs (cached on the Profile and Build rows at write time).
+     * Returns null if stale or missing — the frontend should then trigger a
+     * fresh optimization.
      * @param data The data for the request.
      * @param data.buildId
      * @param data.profileId
-     * @returns SnapshotResponse or null Successful Response
+     * @returns unknown Successful Response
      * @throws ApiError
      */
-    public static getSnapshot(data: { buildId: string; profileId: string }): CancelablePromise<OptimizeGetSnapshotResponse | null> {
+    public static getSnapshot(data: OptimizeGetSnapshotData): CancelablePromise<OptimizeGetSnapshotResponse> {
         return __request(OpenAPI, {
             method: 'GET',
             url: '/api/v1/optimize/snapshot',
@@ -482,11 +537,15 @@ export class OptimizeService {
             }
         });
     }
-
+    
     /**
      * List Build Summaries
      * Return the most recent optimization status for each of the user's builds.
-     * @returns BuildSnapshotSummary[] Successful Response
+     *
+     * Used by the builds list to show subtle score change indicators without
+     * requiring a full snapshot load.  Only returns builds that have at least
+     * one snapshot; builds that have never been optimized are omitted.
+     * @returns BuildSnapshotSummary Successful Response
      * @throws ApiError
      */
     public static listBuildSummaries(): CancelablePromise<OptimizeListBuildSummariesResponse> {
@@ -535,6 +594,33 @@ export class SavesService {
         return __request(OpenAPI, {
             method: 'POST',
             url: '/api/v1/saves/upload',
+            formData: data.formData,
+            mediaType: 'multipart/form-data',
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+    
+    /**
+     * Upload Save Stream
+     * Upload a save and auto-optimize all affected builds, streaming progress.
+     *
+     * Returns SSE events:
+     * - upload_complete: save parsed and persisted
+     * - optimize_start: beginning optimization of a build
+     * - optimize_progress: per-vessel progress within a build
+     * - optimize_done: build optimization finished with BuildChange
+     * - complete: all builds processed
+     * @param data The data for the request.
+     * @param data.formData
+     * @returns unknown Successful Response
+     * @throws ApiError
+     */
+    public static uploadSaveStream(data: SavesUploadSaveStreamData): CancelablePromise<SavesUploadSaveStreamResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/api/v1/saves/upload/stream',
             formData: data.formData,
             mediaType: 'multipart/form-data',
             errors: {

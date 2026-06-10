@@ -14,7 +14,13 @@ import {
 } from "lucide-react"
 import { useEffect, useState } from "react"
 
-import type { BuildChange, VesselResult } from "@/client"
+import {
+  ApiError,
+  type BuildChange,
+  OptimizeService,
+  type SlotAlternativeRequest,
+  type VesselResult,
+} from "@/client"
 import { COLOR_HEX, RelicNameCell } from "@/components/RelicDisplay"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -159,25 +165,18 @@ export async function fetchSlotAlternative(params: {
   excluded_ga_handles: number[]
 }): Promise<VesselResult | null> {
   const { inventorySource, ...strike } = params
-  const token = localStorage.getItem("access_token")
-  const headers: HeadersInit = { "Content-Type": "application/json" }
-  if (token)
-    (headers as Record<string, string>).Authorization = `Bearer ${token}`
-
-  const response = await fetch("/api/v1/optimize/slot-alternative", {
-    method: "POST",
-    headers,
-    body: JSON.stringify({ ...inventorySource, ...strike }),
-  })
-
-  if (!response.ok) {
-    const err = await response
-      .json()
-      .catch(() => ({ detail: "Failed to find an alternative" }))
-    throw new Error(err.detail ?? "Failed to find an alternative")
+  try {
+    const result = await OptimizeService.optimizeSlotAlternative({
+      requestBody: { ...inventorySource, ...strike } as SlotAlternativeRequest,
+    })
+    return (result ?? null) as VesselResult | null
+  } catch (err) {
+    if (err instanceof ApiError) {
+      const detail = (err.body as { detail?: string } | null)?.detail
+      throw new Error(detail ?? "Failed to find an alternative")
+    }
+    throw err
   }
-
-  return (await response.json()) as VesselResult | null
 }
 
 // --- Components ---

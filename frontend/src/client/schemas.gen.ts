@@ -70,6 +70,19 @@ export const Body_saves_upload_saveSchema = {
     title: 'Body_saves-upload_save'
 } as const;
 
+export const Body_saves_upload_save_streamSchema = {
+    properties: {
+        file: {
+            type: 'string',
+            format: 'binary',
+            title: 'File'
+        }
+    },
+    type: 'object',
+    required: ['file'],
+    title: 'Body_saves-upload_save_stream'
+} as const;
+
 export const BuildChangeSchema = {
     properties: {
         build_id: {
@@ -280,6 +293,13 @@ export const BuildDefinitionSchema = {
             type: 'array',
             title: 'Pinned Relics'
         },
+        excluded_relics: {
+            items: {
+                type: 'integer'
+            },
+            type: 'array',
+            title: 'Excluded Relics'
+        },
         excluded_stacking_categories: {
             items: {
                 type: 'integer'
@@ -436,6 +456,51 @@ export const BuildPublicSchema = {
     type: 'object',
     required: ['id', 'owner_id', 'name', 'character', 'include_deep', 'curse_max', 'default_curse_weight', 'is_featured'],
     title: 'BuildPublic'
+} as const;
+
+export const BuildSnapshotSummarySchema = {
+    properties: {
+        build_id: {
+            type: 'string',
+            title: 'Build Id'
+        },
+        status: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Status'
+        },
+        delta: {
+            type: 'integer',
+            title: 'Delta',
+            default: 0
+        },
+        best_score: {
+            type: 'integer',
+            title: 'Best Score',
+            default: 0
+        },
+        computed_at: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Computed At'
+        }
+    },
+    type: 'object',
+    required: ['build_id'],
+    title: 'BuildSnapshotSummary',
+    description: "Lightweight summary of a build's most recent optimization change."
 } as const;
 
 export const BuildUpdateSchema = {
@@ -650,6 +715,69 @@ export const BuildsPublicSchema = {
     title: 'BuildsPublic'
 } as const;
 
+export const DebugExportRequestSchema = {
+    properties: {
+        mode: {
+            type: 'string',
+            enum: ['view', 'full'],
+            title: 'Mode',
+            default: 'full'
+        },
+        build_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Build Id'
+        },
+        profile_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Profile Id'
+        },
+        results: {
+            anyOf: [
+                {
+                    items: {
+                        additionalProperties: true,
+                        type: 'object'
+                    },
+                    type: 'array'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Results'
+        },
+        note: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Note'
+        }
+    },
+    type: 'object',
+    title: 'DebugExportRequest'
+} as const;
+
 export const FeaturedBuildPublicSchema = {
     properties: {
         id: {
@@ -801,6 +929,23 @@ export const HTTPValidationErrorSchema = {
     },
     type: 'object',
     title: 'HTTPValidationError'
+} as const;
+
+export const LockedSlotSchema = {
+    properties: {
+        slot_index: {
+            type: 'integer',
+            title: 'Slot Index'
+        },
+        ga_handle: {
+            type: 'integer',
+            title: 'Ga Handle'
+        }
+    },
+    type: 'object',
+    required: ['slot_index', 'ga_handle'],
+    title: 'LockedSlot',
+    description: 'A relic frozen in its exact slot during a single-slot re-optimization.'
 } as const;
 
 export const MessageSchema = {
@@ -1377,6 +1522,93 @@ export const SaveStatusPublicSchema = {
     description: "Lightweight status of the user's most recent save upload."
 } as const;
 
+export const SlotAlternativeRequestSchema = {
+    properties: {
+        build_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Build Id'
+        },
+        profile_id: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'uuid'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Profile Id'
+        },
+        build: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/BuildDefinition'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        relics: {
+            anyOf: [
+                {
+                    items: {
+                        '$ref': '#/components/schemas/OwnedRelic-Input'
+                    },
+                    type: 'array'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Relics'
+        },
+        vessel_id: {
+            type: 'integer',
+            title: 'Vessel Id'
+        },
+        struck_slot_index: {
+            type: 'integer',
+            title: 'Struck Slot Index'
+        },
+        locked_slots: {
+            items: {
+                '$ref': '#/components/schemas/LockedSlot'
+            },
+            type: 'array',
+            title: 'Locked Slots'
+        },
+        excluded_ga_handles: {
+            items: {
+                type: 'integer'
+            },
+            type: 'array',
+            title: 'Excluded Ga Handles'
+        }
+    },
+    type: 'object',
+    required: ['vessel_id', 'struck_slot_index'],
+    title: 'SlotAlternativeRequest',
+    description: `Re-optimize a single vessel slot, freezing every other slot in place.
+
+Powers the "strike a relic" UI: keep each relic in \`\`locked_slots\`\` in its
+exact slot, exclude the struck relic(s), and re-fill only
+\`\`struck_slot_index\`\` with the next-best relic.  Freezing positions (rather
+than positionless pinning) guarantees the rest of the layout — and its
+scores — stay put, so the total moves only as a function of the struck slot.
+Same dual-mode inventory inputs as :class:\`OptimizeRequest\` (DB mode =
+build_id + profile_id; inline mode = build + relics).  Persists nothing.`
+} as const;
+
 export const SlotAssignmentSchema = {
     properties: {
         slot_index: {
@@ -1418,6 +1650,43 @@ export const SlotAssignmentSchema = {
     required: ['slot_index', 'slot_color', 'is_deep', 'score', 'breakdown'],
     title: 'SlotAssignment',
     description: 'A relic assigned to one vessel slot.'
+} as const;
+
+export const SnapshotResponseSchema = {
+    properties: {
+        results: {
+            items: {
+                '$ref': '#/components/schemas/VesselResult'
+            },
+            type: 'array',
+            title: 'Results'
+        },
+        last_change: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/BuildChange'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        computed_at: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Computed At'
+        }
+    },
+    type: 'object',
+    required: ['results'],
+    title: 'SnapshotResponse',
+    description: 'Cached optimization results from a fresh snapshot.'
 } as const;
 
 export const TokenSchema = {

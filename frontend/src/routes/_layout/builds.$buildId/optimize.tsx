@@ -1,12 +1,21 @@
-import { useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query"
+import {
+  useQuery,
+  useQueryClient,
+  useSuspenseQuery,
+} from "@tanstack/react-query"
 import { createFileRoute, Link, useParams } from "@tanstack/react-router"
 import { Suspense, useEffect, useMemo, useRef, useState } from "react"
 import type { BuildChange, VesselResult } from "@/client"
-import { BuildsService, GameService, OptimizeService, SavesService } from "@/client"
+import {
+  BuildsService,
+  GameService,
+  OptimizeService,
+  SavesService,
+} from "@/client"
 import { ExportDebugButton } from "@/components/Debug/ExportDebugButton"
 import {
-  cacheKey,
   ChangeBanner,
+  cacheKey,
   enteredKeys,
   type OptimizeProgress,
   resultCache,
@@ -60,7 +69,7 @@ function AuthOptimizeForm({ buildId }: { buildId: string }) {
     [effectsData],
   )
 
-  const selectedBuild = buildRaw as any
+  const selectedBuild = buildRaw
   const profiles = profilesData?.data ?? []
 
   const [profileId, setProfileId] = useState(profiles[0]?.id ?? "")
@@ -86,8 +95,7 @@ function AuthOptimizeForm({ buildId }: { buildId: string }) {
   // Load cached snapshot from server if fresh
   const { data: snapshot, isLoading: snapshotLoading } = useQuery({
     queryKey: ["snapshot", buildId, profileId],
-    queryFn: () =>
-      OptimizeService.getSnapshot({ buildId, profileId }),
+    queryFn: () => OptimizeService.getSnapshot({ buildId, profileId }),
     enabled: !!profileId && !resultCache.has(key),
     staleTime: Infinity,
   })
@@ -122,7 +130,9 @@ function AuthOptimizeForm({ buildId }: { buildId: string }) {
       )
       setResults(data)
       resultCache.set(key, data)
-      queryClient.invalidateQueries({ queryKey: ["snapshot", buildId, profileId] })
+      queryClient.invalidateQueries({
+        queryKey: ["snapshot", buildId, profileId],
+      })
     } catch (err) {
       showErrorToast(err instanceof Error ? err.message : "Optimization failed")
     } finally {
@@ -145,7 +155,14 @@ function AuthOptimizeForm({ buildId }: { buildId: string }) {
       autoOptimizeRef.current = true
       handleOptimize()
     }
-  }, [snapshotLoading, snapshot]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [
+    snapshotLoading,
+    snapshot,
+    handleOptimize,
+    key,
+    profileId,
+    profiles.length,
+  ]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="space-y-6">
@@ -228,7 +245,9 @@ function AuthOptimizeForm({ buildId }: { buildId: string }) {
               highlighted={index === 0}
               pinnedHandles={pinnedHandles}
               effectMap={effectMap}
-              enteredFingerprints={index === 0 ? enteredKeys(change) : undefined}
+              enteredFingerprints={
+                index === 0 ? enteredKeys(change) : undefined
+              }
               inventorySource={{ build_id: buildId, profile_id: profileId }}
             />
           ))}
@@ -266,9 +285,7 @@ function AnonOptimizeForm({ buildId }: { buildId: string }) {
 
   const defaultSlot = (() => {
     try {
-      const p = JSON.parse(
-        sessionStorage.getItem("selectedProfile") ?? "null",
-      )
+      const p = JSON.parse(sessionStorage.getItem("selectedProfile") ?? "null")
       return p?.slot_index ?? allProfiles[0]?.slot_index ?? null
     } catch {
       return allProfiles[0]?.slot_index ?? null
@@ -277,7 +294,9 @@ function AnonOptimizeForm({ buildId }: { buildId: string }) {
 
   const [selectedSlot, setSelectedSlot] = useState<number | null>(defaultSlot)
   const profile =
-    allProfiles.find((p) => p.slot_index === selectedSlot) ?? allProfiles[0] ?? null
+    allProfiles.find((p) => p.slot_index === selectedSlot) ??
+    allProfiles[0] ??
+    null
 
   const handleProfileChange = (slotStr: string) => {
     const slot = Number(slotStr)
@@ -377,11 +396,17 @@ function AnonOptimizeForm({ buildId }: { buildId: string }) {
 
   // Auto-optimize when there's only one profile and no cached results
   useEffect(() => {
-    if (allProfiles.length === 1 && build && profile && !resultCache.has(key) && !autoOptimizeRef.current) {
+    if (
+      allProfiles.length === 1 &&
+      build &&
+      profile &&
+      !resultCache.has(key) &&
+      !autoOptimizeRef.current
+    ) {
       autoOptimizeRef.current = true
       handleOptimize()
     }
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [allProfiles.length, build, handleOptimize, key, profile]) // eslint-disable-line react-hooks/exhaustive-deps
 
   if (allProfiles.length === 0) {
     return (
@@ -478,7 +503,9 @@ function AnonOptimizeForm({ buildId }: { buildId: string }) {
               highlighted={index === 0}
               pinnedHandles={pinnedHandles}
               effectMap={effectMap}
-              enteredFingerprints={index === 0 ? enteredKeys(change) : undefined}
+              enteredFingerprints={
+                index === 0 ? enteredKeys(change) : undefined
+              }
               inventorySource={
                 inlineBuild ? { build: inlineBuild, relics } : undefined
               }

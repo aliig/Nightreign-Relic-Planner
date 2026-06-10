@@ -28,6 +28,7 @@ import {
 
 import {
   BuildsService,
+  type BuildUpdate,
   GameService,
   type ParsedRelicData,
   SavesService,
@@ -70,9 +71,9 @@ import {
   useLocalBuilds,
   type WeightGroup,
 } from "@/hooks/useLocalBuilds"
+import { CHARACTER_NAMES } from "@/lib/constants"
 import { cn } from "@/lib/utils"
 import { handleError } from "@/utils"
-import { CHARACTER_NAMES } from "@/lib/constants"
 
 export const Route = createFileRoute("/_layout/builds/$buildId/edit")({
   component: BuildEditorPage,
@@ -139,7 +140,6 @@ const COLOR_HEX: Record<string, string> = {
   Green: "#44BB44",
   White: "#AAAAAA",
 }
-
 
 const EXCLUDED_COLOR = "#CC4444"
 
@@ -793,7 +793,14 @@ function BuildEditorUI({
         onExcludedEffectsChange(newExcluded)
       }
     },
-    [groups, excludedEffects, onGroupsChange, onExcludedEffectsChange],
+    [
+      groups,
+      excludedEffects,
+      onGroupsChange,
+      onExcludedEffectsChange,
+      effectLimits,
+      onEffectLimitsChange,
+    ],
   )
 
   // Move family to a zone (removing it from all other zones first)
@@ -824,7 +831,14 @@ function BuildEditorUI({
         onExcludedFamiliesChange(newExcluded)
       }
     },
-    [groups, excludedFamilies, onGroupsChange, onExcludedFamiliesChange],
+    [
+      groups,
+      excludedFamilies,
+      onGroupsChange,
+      onExcludedFamiliesChange,
+      familyLimits,
+      onFamilyLimitsChange,
+    ],
   )
 
   function handleDragStart(event: DragStartEvent) {
@@ -934,7 +948,9 @@ function BuildEditorUI({
                 type="number"
                 max={0}
                 value={defaultCurseWeight}
-                onChange={(e) => onDefaultCurseWeightChange(Number(e.target.value))}
+                onChange={(e) =>
+                  onDefaultCurseWeightChange(Number(e.target.value))
+                }
                 className="w-16"
               />
             </div>
@@ -1151,7 +1167,8 @@ function BuildEditorUI({
                                 limit={familyLimits[familyName]}
                                 onLimitChange={(newLimit) => {
                                   const next = { ...familyLimits }
-                                  if (newLimit === undefined) delete next[familyName]
+                                  if (newLimit === undefined)
+                                    delete next[familyName]
                                   else next[familyName] = newLimit
                                   onFamilyLimitsChange(next)
                                 }}
@@ -1440,12 +1457,11 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
   const families = (familiesData ?? []) as FamilyMeta[]
   const stackingCategories = (stackingCategoriesData ??
     []) as StackingCategory[]
-  // Cast to new schema type (SDK will be regenerated separately)
+  // Bridge the generated BuildPublic (loosely-typed JSON fields) to the
+  // editor's concrete WeightGroup/limit types.
   const build = buildRaw as unknown as BuildApiData
 
-  const [character, setCharacter] = useState<string>(
-    (buildRaw as any).character,
-  )
+  const [character, setCharacter] = useState<string>(build.character)
   const [groups, setGroups] = useState<WeightGroup[]>(
     () => build.groups ?? DEFAULT_GROUPS.map((g) => ({ ...g })),
   )
@@ -1476,7 +1492,7 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
     () => build.family_limits ?? {},
   )
 
-  const nameRef = useRef((buildRaw as any).name as string)
+  const nameRef = useRef(build.name)
   const characterRef = useRef(character)
   const groupsRef = useRef(groups)
   const excludedEffectsRef = useRef(excludedEffects)
@@ -1521,8 +1537,7 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
         if (pinnedSet.size === 0) break
         const relicsResponse = await queryClient.fetchQuery({
           queryKey: ["relics", prof.id],
-          queryFn: () =>
-            SavesService.getProfileRelics({ profileId: prof.id }),
+          queryFn: () => SavesService.getProfileRelics({ profileId: prof.id }),
           staleTime: 5 * 60 * 1000,
         })
         for (const r of relicsResponse?.data ?? []) {
@@ -1545,7 +1560,7 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
   }, [build.pinned_relics, queryClient]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    setCharacter((buildRaw as any).character)
+    setCharacter(build.character)
     setGroups(build.groups ?? DEFAULT_GROUPS.map((g) => ({ ...g })))
     setExcludedEffects(build.excluded_effects ?? [])
     setExcludedFamilies(build.excluded_families ?? [])
@@ -1556,7 +1571,7 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
     setExcludedStackingCategories(build.excluded_stacking_categories ?? [])
     setEffectLimits(build.effect_limits ?? {})
     setFamilyLimits(build.family_limits ?? {})
-  }, [build]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [build, build.character]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const saveMutation = useMutation({
     mutationFn: () =>
@@ -1577,9 +1592,17 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
           pinned_relics: pinnedRelicsRef.current,
           effect_limits: effectLimitsRef.current,
           family_limits: familyLimitsRef.current,
-        } as any, // SDK will be regenerated with new schema
+          // Cast bridges Record<number, ...> state to the generated
+          // Record<string, ...> JSON type — same wire format.
+        } as unknown as BuildUpdate,
       }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["builds"] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["builds"] })
+      // Scoring-relevant edits change build_hash server-side and delete the
+      // stored snapshot; without this the Infinity-stale snapshot query keeps
+      // showing pre-edit optimization results.
+      queryClient.invalidateQueries({ queryKey: ["snapshot", buildId] })
+    },
     onError: handleError.bind(showErrorToast),
   })
 
@@ -1603,7 +1626,7 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
 
   return (
     <BuildEditorUI
-      name={(buildRaw as any).name}
+      name={build.name}
       character={character}
       groups={groups}
       excludedEffects={excludedEffects}
@@ -1822,7 +1845,7 @@ function LocalBuildEditorContent({ buildId }: { buildId: string }) {
     saveTimerRef.current = setTimeout(() => {
       updateRef.current(buildId, buildLocalSavePatch())
     }, 400)
-  }, [buildId])
+  }, [buildId, buildLocalSavePatch])
 
   if (!build) {
     return (

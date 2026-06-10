@@ -4,7 +4,7 @@ import { render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
-import type { VesselResult } from "@/client"
+import { OptimizeService, type VesselResult } from "@/client"
 import { VesselCard } from "@/components/OptimizeResults"
 
 type SlotAssignment = VesselResult["assignments"][number]
@@ -66,23 +66,21 @@ const DELTA = makeRelic(9, "Relic Delta")
 
 const INVENTORY_SOURCE = { build_id: "b1", profile_id: "p1" }
 
-function mockFetch(result: VesselResult | null) {
-  const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => ({
-    ok: true,
-    json: async () => result,
-  }))
-  vi.stubGlobal("fetch", fetchMock)
-  return fetchMock
+function mockStrike(result: VesselResult | null) {
+  // The strike flow goes through the generated SDK, so mock at that seam
+  // rather than stubbing global fetch.
+  return vi
+    .spyOn(OptimizeService, "optimizeSlotAlternative")
+    .mockResolvedValue(result as never)
 }
 
 describe("VesselCard strike", () => {
   afterEach(() => {
-    vi.unstubAllGlobals()
     vi.restoreAllMocks()
   })
 
   it("strikes a relic, sends the right pins/exclusions, and swaps the slot", async () => {
-    const fetchMock = mockFetch(makeVessel([ALPHA, DELTA, GAMMA]))
+    const strikeMock = mockStrike(makeVessel([ALPHA, DELTA, GAMMA]))
     render(
       <VesselCard
         vessel={makeVessel([ALPHA, BETA, GAMMA])}
@@ -99,25 +97,24 @@ describe("VesselCard strike", () => {
     expect(screen.queryByText("Relic Beta")).not.toBeInTheDocument()
 
     // Locks every other slot in place (slot_index + relic); excludes the struck one.
-    expect(fetchMock).toHaveBeenCalledTimes(1)
-    const [url, init] = fetchMock.mock.calls[0]
-    expect(url).toBe("/api/v1/optimize/slot-alternative")
-    const body = JSON.parse(init.body as string)
-    expect(body).toMatchObject({
-      build_id: "b1",
-      profile_id: "p1",
-      vessel_id: 42,
-      struck_slot_index: 1,
-      locked_slots: [
-        { slot_index: 0, ga_handle: 1 },
-        { slot_index: 2, ga_handle: 3 },
-      ],
-      excluded_ga_handles: [2],
+    expect(strikeMock).toHaveBeenCalledTimes(1)
+    expect(strikeMock).toHaveBeenCalledWith({
+      requestBody: expect.objectContaining({
+        build_id: "b1",
+        profile_id: "p1",
+        vessel_id: 42,
+        struck_slot_index: 1,
+        locked_slots: [
+          { slot_index: 0, ga_handle: 1 },
+          { slot_index: 2, ga_handle: 3 },
+        ],
+        excluded_ga_handles: [2],
+      }),
     })
   })
 
   it("resets to the original arrangement", async () => {
-    mockFetch(makeVessel([ALPHA, DELTA, GAMMA]))
+    mockStrike(makeVessel([ALPHA, DELTA, GAMMA]))
     render(
       <VesselCard
         vessel={makeVessel([ALPHA, BETA, GAMMA])}
@@ -137,7 +134,7 @@ describe("VesselCard strike", () => {
 
   it("keeps the relic and notes it when no alternative is found", async () => {
     // Backend returns the struck slot empty (no replacement relic fits).
-    mockFetch(makeVessel([ALPHA, null, GAMMA]))
+    mockStrike(makeVessel([ALPHA, null, GAMMA]))
     render(
       <VesselCard
         vessel={makeVessel([ALPHA, BETA, GAMMA])}

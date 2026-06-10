@@ -33,12 +33,7 @@ import {
   OptimizeService,
 } from "@/client"
 import { Button } from "@/components/ui/button"
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import {
   Dialog,
   DialogContent,
@@ -247,14 +242,21 @@ function BuildCard({
             onBlur={commitRename}
             className="text-base font-semibold bg-transparent border-b border-transparent hover:border-muted-foreground/30 focus:border-primary focus:outline-none focus:ring-0 py-0.5 min-w-0 flex-1 truncate transition-colors"
           />
-          {summary?.status === "improved" && summary.delta > 0 && (
-            <span className="shrink-0 inline-flex items-center gap-0.5 text-green-600 text-xs font-medium" title={`Score improved by ${summary.delta} pts`}>
+          {summary?.status === "improved" && (summary.delta ?? 0) > 0 && (
+            <span
+              className="shrink-0 inline-flex items-center gap-0.5 text-green-600 text-xs font-medium"
+              title={`Score improved by ${summary.delta} pts`}
+            >
               <ArrowUp className="h-3 w-3" />+{summary.delta}
             </span>
           )}
-          {summary?.status === "degraded" && summary.delta < 0 && (
-            <span className="shrink-0 inline-flex items-center gap-0.5 text-red-500 text-xs font-medium" title={`Score decreased by ${Math.abs(summary.delta)} pts`}>
-              <ArrowDown className="h-3 w-3" />{summary.delta}
+          {summary?.status === "degraded" && (summary.delta ?? 0) < 0 && (
+            <span
+              className="shrink-0 inline-flex items-center gap-0.5 text-red-500 text-xs font-medium"
+              title={`Score decreased by ${Math.abs(summary.delta ?? 0)} pts`}
+            >
+              <ArrowDown className="h-3 w-3" />
+              {summary.delta}
             </span>
           )}
           <div className="flex items-center gap-1 shrink-0">
@@ -311,7 +313,9 @@ function BuildCard({
                 <DropdownMenuSeparator />
                 {onToggleFeatured && (
                   <DropdownMenuItem onClick={() => onToggleFeatured(build.id)}>
-                    <Star className={`mr-2 h-4 w-4 ${build.is_featured ? "fill-current text-gold" : "text-muted-foreground"}`} />
+                    <Star
+                      className={`mr-2 h-4 w-4 ${build.is_featured ? "fill-current text-gold" : "text-muted-foreground"}`}
+                    />
                     {build.is_featured ? "Unfeature" : "Feature"}
                   </DropdownMenuItem>
                 )}
@@ -338,7 +342,9 @@ function BuildCard({
         <div className="flex-1 flex flex-col items-center justify-center">
           {effectCount > 0 ? (
             <>
-              <span className="text-3xl font-bold text-primary">{effectCount}</span>
+              <span className="text-3xl font-bold text-primary">
+                {effectCount}
+              </span>
               <span className="text-[10px] text-muted-foreground uppercase tracking-wider font-semibold">
                 Prioritized Effect{effectCount !== 1 ? "s" : ""}
               </span>
@@ -372,7 +378,9 @@ function BuildCard({
             </SelectContent>
           </Select>
           {build.updated_at && (
-            <span>Updated {new Date(build.updated_at).toLocaleDateString()}</span>
+            <span>
+              Updated {new Date(build.updated_at).toLocaleDateString()}
+            </span>
           )}
         </div>
       </Card>
@@ -459,7 +467,9 @@ function FeaturedBuildCard({
       <CardContent className="flex-1 flex flex-col justify-center py-4">
         {effectCount > 0 ? (
           <div className="flex flex-col items-center gap-1 text-center">
-            <span className="text-3xl font-bold text-primary">{effectCount}</span>
+            <span className="text-3xl font-bold text-primary">
+              {effectCount}
+            </span>
             <span className="text-[10px] text-muted-foreground uppercase tracking-wider font-semibold">
               Prioritized Effect{effectCount !== 1 ? "s" : ""}
             </span>
@@ -472,9 +482,7 @@ function FeaturedBuildCard({
       </CardContent>
       <div className="mt-auto px-6 pb-4 pt-0 flex items-center justify-between text-xs text-muted-foreground">
         <span className="font-medium">{build.character}</span>
-        {build.owner_name && (
-          <span>by {build.owner_name}</span>
-        )}
+        {build.owner_name && <span>by {build.owner_name}</span>}
       </div>
     </Card>
   )
@@ -592,6 +600,7 @@ function AuthBuildList() {
     mutationFn: (buildId: string) => BuildsService.deleteBuild({ buildId }),
     onSuccess: (_data, buildId) => {
       queryClient.invalidateQueries({ queryKey: ["builds"] })
+      queryClient.removeQueries({ queryKey: ["snapshot", buildId] })
       const name = data.data?.find((b) => b.id === buildId)?.name ?? "Build"
       showSuccessToast(`"${name}" deleted.`)
     },
@@ -613,7 +622,11 @@ function AuthBuildList() {
       buildId: string
       character: string
     }) => BuildsService.updateBuild({ buildId, requestBody: { character } }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["builds"] }),
+    onSuccess: (_data, { buildId }) => {
+      queryClient.invalidateQueries({ queryKey: ["builds"] })
+      // Character is part of build_hash — the server dropped the snapshot.
+      queryClient.invalidateQueries({ queryKey: ["snapshot", buildId] })
+    },
     onError: handleError.bind(showErrorToast),
   })
 
