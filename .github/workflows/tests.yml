@@ -43,6 +43,13 @@ jobs:
       - name: Backend migrations
         working-directory: backend
         run: uv run alembic upgrade head
+      - name: Seed initial data
+        # Creates the first superuser in the real DB. Module-scoped test
+        # fixtures (superuser_token_headers) authenticate BEFORE the
+        # function-scoped transactional db override exists, so the login
+        # hits the raw database — locally the dev DB is already seeded.
+        working-directory: backend
+        run: uv run python app/initial_data.py
       - name: Backend unit tests
         working-directory: backend
         run: uv run pytest tests -q -m "not integration"

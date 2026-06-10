@@ -49,10 +49,11 @@ def test_use_access_token(
 def test_recovery_password(
     client: TestClient, normal_user_token_headers: dict[str, str]
 ) -> None:
-    with (
-        patch("app.core.config.settings.SMTP_HOST", "smtp.example.com"),
-        patch("app.core.config.settings.SMTP_USER", "admin@example.com"),
-    ):
+    # Mock at the route's import site: the real send_email asserts SMTP env
+    # config (absent in CI) and would otherwise attempt an actual SMTP send.
+    with patch(
+        "app.api.routes.login.send_email", return_value=None
+    ) as send_email_mock:
         email = "test@example.com"
         r = client.post(
             f"{settings.API_V1_STR}/password-recovery/{email}",
@@ -62,6 +63,7 @@ def test_recovery_password(
         assert r.json() == {
             "message": "If that email is registered, we sent a password recovery link"
         }
+        send_email_mock.assert_called_once()
 
 
 def test_recovery_password_user_not_exits(
