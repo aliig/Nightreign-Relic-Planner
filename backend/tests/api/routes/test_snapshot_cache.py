@@ -1,0 +1,219 @@
+"""Tests for the optimization snapshot cache plumbing.
+
+The GET /optimize/snapshot freshness contract: a snapshot is served only
+when its relics_hash/build_hash match the hashes cached on the live Profile
+and Build rows.  These tests pin the plumbing that keeps the contract
+honest: build_hash on clone, hash parity between the seeding and snapshot
+paths, invalidation on build edit, and missing-hash staleness.
+"""
+import uuid
+
+import pytest
+from fastapi.testclient import TestClient
+from sqlmodel import Session, select
+
+from app.core.config import settings
+from app.models import Build, Profile, Relic, SaveUpload, User
+from nrplanner.changes import relics_signature
+from nrplanner.constants import EMPTY_EFFECT
+from nrplanner.models import OwnedRelic
+
+EMPTY = EMPTY_EFFECT
+
+
+def _test_user(db: Session) -> User:
+    user = db.exec(
+        select(User).where(User.email == settings.EMAIL_TEST_USER)
+    ).first()
+    assert user is not None
+    return user
+
+
+def _seed_profile_with_relics(
+    db: Session, owner_id: uuid.UUID, *, with_hash: bool
+) -> Profile:
+    """SaveUpload + Profile + 3 relic rows for the given owner.
+
+    With ``with_hash=True`` the profile gets the same relics_hash the upload
+    endpoints compute, so a subsequent DB-mode optimize produces a snapshot
+    that must compare fresh against it.
+    """
+    save = SaveUpload(owner_id=owner_id, platform="PC", profile_count=1)
+    db.add(save)
+    db.flush()
+
+    owned = [
+        OwnedRelic(
+            ga_handle=0xC0020000 + i,
+            item_id=100 + 2147483648,
+            real_id=100,
+            color=color,
+            effects=[100, EMPTY, EMPTY],
+            curses=[EMPTY, EMPTY, EMPTY],
+            is_deep=False,
+            name="Seeded Relic",
+            tier="Delicate",
+        )
+        for i, color in enumerate(("Red", "Blue", "Green"))
+    ]
+    profile = Profile(
+        owner_id=owner_id,
+        save_upload_id=save.id,
+        slot_index=0,
+        name="Seeded Hero",
+        relics_hash=relics_signature(owned) if with_hash else None,
+    )
+    db.add(profile)
+    db.flush()
+    for r in owned:
+        db.add(Relic(
+            owner_id=owner_id,
+            profile_id=profile.id,
+            ga_handle=r.ga_handle,
+            item_id=r.item_id,
+            real_id=r.real_id,
+            color=r.color,
+            effect_1=r.effects[0],
+            effect_2=r.effects[1],
+            effect_3=r.effects[2],
+            curse_1=r.curses[0],
+            curse_2=r.curses[1],
+            curse_3=r.curses[2],
+            is_deep=r.is_deep,
+            name=r.name,
+            tier=r.tier,
+        ))
+    db.commit()
+    return profile
+
+
+def _create_build(client: TestClient, headers: dict[str, str]) -> dict:
+    resp = client.post(
+        "/api/v1/builds/",
+        headers=headers,
+        json={
+            "name": "Snapshot Cache Build",
+            "character": "Wylder",
+            "groups": [{"weight": 10, "effects": [100], "families": []}],
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    return resp.json()
+
+
+@pytest.mark.usefixtures("override_game_data")
+class TestSnapshotCache:
+    def test_clone_sets_build_hash(
+        self,
+        client: TestClient,
+        normal_user_token_headers: dict[str, str],
+        db: Session,
+    ) -> None:
+        """Clones must carry a build_hash, or GET /optimize/snapshot can
+        never report fresh for them (every view re-optimizes)."""
+        created = _create_build(client, normal_user_token_headers)
+
+        resp = client.post(
+            f"/api/v1/builds/{created['id']}/clone",
+            headers=normal_user_token_headers,
+        )
+        assert resp.status_code == 200, resp.text
+        clone_id = resp.json()["id"]
+
+        source_row = db.get(Build, uuid.UUID(created["id"]))
+        clone_row = db.get(Build, uuid.UUID(clone_id))
+        assert clone_row is not None and source_row is not None
+        assert clone_row.build_hash is not None
+        # Same scoring-relevant content -> same signature as the source.
+        assert clone_row.build_hash == source_row.build_hash
+
+    def test_snapshot_fresh_after_optimize_then_stale_after_edit(
+        self,
+        client: TestClient,
+        normal_user_token_headers: dict[str, str],
+        db: Session,
+    ) -> None:
+        """DB-mode optimize -> fresh snapshot; scoring-relevant build edit
+        -> stale.  Catches hash-computation drift between the seeding path
+        (relics_signature) and the snapshot path."""
+        user = _test_user(db)
+        profile = _seed_profile_with_relics(db, user.id, with_hash=True)
+        build = _create_build(client, normal_user_token_headers)
+
+        run = client.post(
+            "/api/v1/optimize/",
+            headers=normal_user_token_headers,
+            json={
+                "build_id": build["id"],
+                "profile_id": str(profile.id),
+                "top_n": 5,
+            },
+        )
+        assert run.status_code == 200, run.text
+
+        params = {"build_id": build["id"], "profile_id": str(profile.id)}
+        snap = client.get(
+            "/api/v1/optimize/snapshot",
+            params=params,
+            headers=normal_user_token_headers,
+        )
+        assert snap.status_code == 200, snap.text
+        body = snap.json()
+        assert body is not None, (
+            "snapshot must be fresh immediately after a DB-mode optimize — "
+            "relics_hash/build_hash parity is broken"
+        )
+        assert body["results"], "fresh snapshot should contain results"
+
+        # Editing a scoring-relevant field changes build_hash and deletes
+        # the now-incomparable snapshot -> stale (null).
+        upd = client.put(
+            f"/api/v1/builds/{build['id']}",
+            headers=normal_user_token_headers,
+            json={"groups": [{"weight": 7, "effects": [100], "families": []}]},
+        )
+        assert upd.status_code == 200, upd.text
+
+        snap_after = client.get(
+            "/api/v1/optimize/snapshot",
+            params=params,
+            headers=normal_user_token_headers,
+        )
+        assert snap_after.status_code == 200
+        assert snap_after.json() is None, (
+            "snapshot must be stale after the build's scoring fields change"
+        )
+
+    def test_snapshot_stale_when_profile_hash_missing(
+        self,
+        client: TestClient,
+        normal_user_token_headers: dict[str, str],
+        db: Session,
+    ) -> None:
+        """A profile without relics_hash (legacy rows / hashless write
+        paths) must never satisfy the freshness check."""
+        user = _test_user(db)
+        profile = _seed_profile_with_relics(db, user.id, with_hash=False)
+        build = _create_build(client, normal_user_token_headers)
+
+        run = client.post(
+            "/api/v1/optimize/",
+            headers=normal_user_token_headers,
+            json={
+                "build_id": build["id"],
+                "profile_id": str(profile.id),
+                "top_n": 5,
+            },
+        )
+        assert run.status_code == 200, run.text
+
+        snap = client.get(
+            "/api/v1/optimize/snapshot",
+            params={"build_id": build["id"], "profile_id": str(profile.id)},
+            headers=normal_user_token_headers,
+        )
+        assert snap.status_code == 200
+        assert snap.json() is None, (
+            "a snapshot must not be served when the profile carries no "
+            "relics_hash to compare against"
+        )

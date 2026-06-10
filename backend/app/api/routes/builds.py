@@ -218,6 +218,7 @@ def clone_build(
         family_limits=dict(source.family_limits or {}),
         is_featured=False,
     )
+    clone.build_hash = build_signature(build_def_from_db(clone))
     session.add(clone)
     session.commit()
     session.refresh(clone)

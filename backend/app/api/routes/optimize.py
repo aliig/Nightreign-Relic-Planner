@@ -290,6 +290,7 @@ def _apply_snapshot(
     change.cause = _attribute_cause(snap, relics_hash, build_hash, gdv)
 
     top_layouts = serialize_top_layouts(results)
+    full_results = [r.model_dump(mode="json") for r in results]
     best_score = max((r.total_score for r in results), default=0)
     any_truncated = any(r.search_truncated for r in results)
     change_json = change.model_dump(mode="json")
@@ -304,6 +305,7 @@ def _apply_snapshot(
             game_data_version=gdv,
             optimizer_version=OPTIMIZER_VERSION,
             top_layouts=top_layouts,
+            full_results=full_results,
             best_score=best_score,
             any_truncated=any_truncated,
             last_change=change_json,
@@ -315,6 +317,7 @@ def _apply_snapshot(
         snap.game_data_version = gdv
         snap.optimizer_version = OPTIMIZER_VERSION
         snap.top_layouts = top_layouts
+        snap.full_results = full_results
         snap.best_score = best_score
         snap.any_truncated = any_truncated
         snap.last_change = change_json
@@ -508,11 +511,23 @@ def get_snapshot(
     if snap is None:
         return None
 
-    if snap.relics_hash != profile.relics_hash or snap.build_hash != db_build.build_hash:
+    # Treat missing hashes as stale — None == None must never count as fresh
+    # (legacy rows predating hash caching, or builds/profiles written by a
+    # path that skipped hash computation).
+    if (
+        snap.relics_hash is None
+        or snap.build_hash is None
+        or snap.relics_hash != profile.relics_hash
+        or snap.build_hash != db_build.build_hash
+    ):
         return None
 
-    # Snapshot is fresh — deserialize results
-    results = [VesselResult(**layout) for layout in snap.top_layouts]
+    # Snapshot is fresh — serve the stored full results.  top_layouts is the
+    # compact diff baseline and cannot reconstruct VesselResults; legacy rows
+    # without full_results are treated as stale (one re-optimize refills).
+    if not snap.full_results:
+        return None
+    results = [VesselResult(**layout) for layout in snap.full_results]
     last_change = BuildChange(**snap.last_change) if snap.last_change else None
 
     return SnapshotResponse(

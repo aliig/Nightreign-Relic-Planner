@@ -83,7 +83,7 @@ class SaveUpload(SQLModel, table=True):
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     owner_id: uuid.UUID = Field(
-        foreign_key="user.id", nullable=False, ondelete="CASCADE"
+        foreign_key="user.id", nullable=False, ondelete="CASCADE", index=True
     )
     platform: str = Field(max_length=10)  # "PC" | "PS4"
     uploaded_at: datetime | None = Field(
@@ -114,10 +114,10 @@ class Profile(SQLModel, table=True):
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     owner_id: uuid.UUID = Field(
-        foreign_key="user.id", nullable=False, ondelete="CASCADE"
+        foreign_key="user.id", nullable=False, ondelete="CASCADE", index=True
     )
     save_upload_id: uuid.UUID = Field(
-        foreign_key="save_upload.id", nullable=False, ondelete="CASCADE"
+        foreign_key="save_upload.id", nullable=False, ondelete="CASCADE", index=True
     )
     slot_index: int
     name: str = Field(max_length=100)
@@ -148,10 +148,10 @@ class ProfilesPublic(SQLModel):
 class Relic(SQLModel, table=True):
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     owner_id: uuid.UUID = Field(
-        foreign_key="user.id", nullable=False, ondelete="CASCADE"
+        foreign_key="user.id", nullable=False, ondelete="CASCADE", index=True
     )
     profile_id: uuid.UUID = Field(
-        foreign_key="profile.id", nullable=False, ondelete="CASCADE"
+        foreign_key="profile.id", nullable=False, ondelete="CASCADE", index=True
     )
     # BigInteger for values that may exceed int32 (e.g., 0xC000xxxx handles, 0xFFFFFFFF EMPTY)
     ga_handle: int = Field(sa_column=Column(BigInteger(), nullable=False))
@@ -201,7 +201,7 @@ class RelicsPublic(SQLModel):
 class Build(SQLModel, table=True):
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     owner_id: uuid.UUID = Field(
-        foreign_key="user.id", nullable=False, ondelete="CASCADE"
+        foreign_key="user.id", nullable=False, ondelete="CASCADE", index=True
     )
     name: str = Field(max_length=255)
     character: str = Field(max_length=50)
@@ -358,7 +358,7 @@ class OptimizationSnapshot(SQLModel, table=True):
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     owner_id: uuid.UUID = Field(
-        foreign_key="user.id", nullable=False, ondelete="CASCADE"
+        foreign_key="user.id", nullable=False, ondelete="CASCADE", index=True
     )
     build_id: uuid.UUID = Field(
         foreign_key="build.id", nullable=False, ondelete="CASCADE"
@@ -372,7 +372,15 @@ class OptimizationSnapshot(SQLModel, table=True):
     optimizer_version: int
 
     # --- result + cached change summary ---
+    # Compact, handle-free layouts used as the DIFF BASELINE (diff_results
+    # consumes this shape). Not enough to render results.
     top_layouts: list = Field(
+        default_factory=list,
+        sa_column=Column(JSON, nullable=False, server_default="[]"),
+    )
+    # Complete VesselResult dumps served back by GET /optimize/snapshot.
+    # Empty for legacy rows -> treated as stale (forces one re-optimize).
+    full_results: list = Field(
         default_factory=list,
         sa_column=Column(JSON, nullable=False, server_default="[]"),
     )

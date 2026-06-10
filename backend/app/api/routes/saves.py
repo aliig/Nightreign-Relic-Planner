@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
 from sqlmodel import Session, col, select
 
@@ -394,8 +395,9 @@ async def upload_save(
             detail=f"File too large (max {settings.MAX_UPLOAD_SIZE_MB} MB).",
         )
     items_json = get_items_json()
-    platform, profiles = _parse_save_to_profiles(
-        file_bytes, file.filename, ds, items_json
+    # CPU-bound (AES decrypt + binary parse) — keep it off the event loop.
+    platform, profiles = await run_in_threadpool(
+        _parse_save_to_profiles, file_bytes, file.filename, ds, items_json
     )
 
     if current_user is None:
@@ -579,6 +581,7 @@ def _apply_snapshot_for_stream(
             change.cause = None
 
     top_layouts = serialize_top_layouts(results)
+    full_results = [r.model_dump(mode="json") for r in results]
     best_score = max((r.total_score for r in results), default=0)
     any_truncated = any(r.search_truncated for r in results)
     change_json = change.model_dump(mode="json")
@@ -593,6 +596,7 @@ def _apply_snapshot_for_stream(
             game_data_version=gdv,
             optimizer_version=OPTIMIZER_VERSION,
             top_layouts=top_layouts,
+            full_results=full_results,
             best_score=best_score,
             any_truncated=any_truncated,
             last_change=change_json,
@@ -604,6 +608,7 @@ def _apply_snapshot_for_stream(
         snap.game_data_version = gdv
         snap.optimizer_version = OPTIMIZER_VERSION
         snap.top_layouts = top_layouts
+        snap.full_results = full_results
         snap.best_score = best_score
         snap.any_truncated = any_truncated
         snap.last_change = change_json
@@ -652,8 +657,9 @@ async def upload_save_stream(
             detail=f"File too large (max {settings.MAX_UPLOAD_SIZE_MB} MB).",
         )
     items_json = get_items_json()
-    platform, profiles = _parse_save_to_profiles(
-        file_bytes, file.filename, ds, items_json
+    # CPU-bound (AES decrypt + binary parse) — keep it off the event loop.
+    platform, profiles = await run_in_threadpool(
+        _parse_save_to_profiles, file_bytes, file.filename, ds, items_json
     )
 
     # Compute remap and identify affected builds before persisting
@@ -705,11 +711,20 @@ async def upload_save_stream(
     # Map slot_index -> new Profile.id for snapshot lookup
     slot_to_profile_id: dict[int, uuid.UUID] = {}
     for prof_data in profiles:
+        fps = [
+            relic_fingerprint(
+                r.real_id,
+                [r.effect_1, r.effect_2, r.effect_3],
+                [r.curse_1, r.curse_2, r.curse_3],
+            )
+            for r in prof_data.relics
+        ]
         profile = Profile(
             owner_id=current_user.id,
             save_upload_id=save_upload.id,
             slot_index=prof_data.slot_index,
             name=prof_data.name,
+            relics_hash=relics_signature_from_fingerprints(fps),
         )
         session.add(profile)
         session.flush()
