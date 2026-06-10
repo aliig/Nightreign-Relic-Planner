@@ -14,23 +14,70 @@ class BuildScorer:
 
     def __init__(self, data_source: SourceDataHandler):
         self.data_source = data_source
+        # Per-build memo caches, bound/reset by _ensure_build_cache
+        self._cached_build: BuildDefinition | None = None
+        self._cached_sig: tuple | None = None
         self._name_cache: dict[str, tuple[str, int]] = {}
-        self._name_cache_key: object = None
+        self._resolve_memo: dict[int, tuple[str | None, int]] = {}
+        self._protected_memo: dict[int, bool] = {}
+        self._excl_cats: frozenset[int] = frozenset()
+        self._excl_names: set[str] = set()
+        self._desired_cw: dict[int, int] | None = None
+        self._desired_compat: dict[int, set[int]] | None = None
 
     # ------------------------------------------------------------------
-    # Category / weight resolution
+    # Per-build cache management
     # ------------------------------------------------------------------
 
-    def _get_name_cache(self, build: BuildDefinition) -> dict[str, tuple[str, int]]:
-        """display_name -> (category, weight) cache for name-based effect matching.
+    @staticmethod
+    def _scoring_sig(build: BuildDefinition) -> tuple:
+        """Structural signature of every field scoring resolution reads."""
+        return (
+            tuple(build.required_effects),
+            tuple(build.required_families),
+            tuple(build.excluded_effects),
+            tuple(build.excluded_families),
+            tuple((g.weight, tuple(g.effects), tuple(g.families))
+                  for g in build.groups),
+            tuple(build.excluded_stacking_categories),
+            tuple(sorted(build.effect_limits.items())),
+            tuple(sorted(build.family_limits.items())),
+            build.default_curse_weight,
+            build.curse_max,
+        )
 
-        Required for alias resolution: many game effects share the same
-        display name but have completely different IDs and text_ids.
+    def _ensure_build_cache(self, build: BuildDefinition) -> None:
+        """Bind the scorer's memo caches to *build*.
+
+        Identity fast path (`is`) for the per-node hot loop; when identity
+        changes, an equal structural signature rebinds without invalidating
+        (worker processes unpickle a fresh-but-identical build per task).
+        Holding a strong reference to the bound build means an identity hit
+        can never be a recycled address.  Assumes builds are not mutated in
+        place mid-optimization (API/UI flows always construct fresh
+        BuildDefinitions).
         """
-        cache_key = (id(build.required_effects), id(build.excluded_effects),
-                     tuple(id(g) for g in build.groups))
-        if self._name_cache_key == cache_key:
-            return self._name_cache
+        if build is self._cached_build:
+            return
+        sig = self._scoring_sig(build)
+        if sig == self._cached_sig:
+            self._cached_build = build
+            return
+        self._cached_build = build
+        self._cached_sig = sig
+        self._resolve_memo = {}
+        self._protected_memo = {}
+        self._excl_cats = frozenset(build.excluded_stacking_categories)
+        self._excl_names = {
+            name for name in (
+                self.data_source.get_effect_name(eid)
+                for eid in build.excluded_effects
+            )
+            if name not in ("", "Empty", None)
+        }
+        self._desired_cw = None
+        self._desired_compat = None
+
         cache: dict[str, tuple[str, int]] = {}
         for eid in build.required_effects:
             name = self.data_source.get_effect_name(eid)
@@ -46,8 +93,19 @@ class BuildScorer:
                 if name and name != "Empty" and not name.startswith("Effect "):
                     cache.setdefault(name, ("group", g.weight))
         self._name_cache = cache
-        self._name_cache_key = cache_key
-        return cache
+
+    # ------------------------------------------------------------------
+    # Category / weight resolution
+    # ------------------------------------------------------------------
+
+    def _get_name_cache(self, build: BuildDefinition) -> dict[str, tuple[str, int]]:
+        """display_name -> (category, weight) cache for name-based effect matching.
+
+        Required for alias resolution: many game effects share the same
+        display name but have completely different IDs and text_ids.
+        """
+        self._ensure_build_cache(build)
+        return self._name_cache
 
     def _resolve_category_and_weight(self, eff_id: int,
                                       build: BuildDefinition) -> tuple[str | None, int]:
@@ -55,11 +113,18 @@ class BuildScorer:
 
         Category is "required", "excluded", "group", or None (unassigned).
         Falls back through: direct ID -> text_id -> name -> family.
+        Memoized per build — resolution is pure given (build, eff_id), and
+        the solver asks for the same few hundred effects millions of times.
 
         Name-based matching is required for alias resolution — many game
         effects share a display name but have different IDs and text_ids.
         Family matching (via ``g.families``) adds magnitude weighting.
         """
+        self._ensure_build_cache(build)
+        hit = self._resolve_memo.get(eff_id)
+        if hit is not None:
+            return hit
+
         result = build.get_weight_for_effect(eff_id)
         if not result:
             text_id = self.data_source.get_effect_text_id(eff_id)
@@ -67,28 +132,42 @@ class BuildScorer:
                 result = build.get_weight_for_effect(text_id)
         if not result:
             name = self.data_source.get_effect_name(eff_id)
-            result = self._get_name_cache(build).get(name)
-        if result:
-            return result
-
-        family = self.data_source.get_effect_family(eff_id)
-        if family:
-            fresult = build.get_weight_for_family(family)
-            if fresult:
-                cat, base_w = fresult
-                if cat == "excluded":
-                    return cat, 0
-                # All families get magnitude weighting (positive and negative)
-                weight = self.data_source.get_family_magnitude_weight(eff_id, base_w)
-                return cat, weight
-        return None, 0
+            result = self._name_cache.get(name)
+        if not result:
+            family = self.data_source.get_effect_family(eff_id)
+            if family:
+                fresult = build.get_weight_for_family(family)
+                if fresult:
+                    cat, base_w = fresult
+                    if cat == "excluded":
+                        result = (cat, 0)
+                    else:
+                        # All families get magnitude weighting (positive and negative)
+                        result = (cat, self.data_source.get_family_magnitude_weight(
+                            eff_id, base_w))
+        if not result:
+            result = (None, 0)
+        self._resolve_memo[eff_id] = result
+        return result
 
     # ------------------------------------------------------------------
     # Exclusion check
     # ------------------------------------------------------------------
 
     def _is_effect_protected(self, eff_id: int, build: BuildDefinition) -> bool:
-        """True if effect is explicitly in required/weight groups (overrides category exclusion)."""
+        """True if effect is explicitly in required/weight groups (overrides category exclusion).
+
+        Memoized per build (pure given build and eff_id).
+        """
+        self._ensure_build_cache(build)
+        hit = self._protected_memo.get(eff_id)
+        if hit is not None:
+            return hit
+        value = self._compute_protected(eff_id, build)
+        self._protected_memo[eff_id] = value
+        return value
+
+    def _compute_protected(self, eff_id: int, build: BuildDefinition) -> bool:
         result = build.get_weight_for_effect(eff_id)
         if result and result[0] != "excluded":
             return True
@@ -101,7 +180,7 @@ class BuildScorer:
         # name fallback
         name = self.data_source.get_effect_name(eff_id)
         if name:
-            result = self._get_name_cache(build).get(name)
+            result = self._name_cache.get(name)
             if result and result[0] != "excluded":
                 return True
         # family fallback
@@ -131,11 +210,8 @@ class BuildScorer:
         excl_categories = set(build.excluded_stacking_categories)
         if not excl_ids and not excl_families and not excl_categories:
             return False
-        excl_names = {
-            self.data_source.get_effect_name(eid)
-            for eid in excl_ids
-            if self.data_source.get_effect_name(eid) not in ("", "Empty", None)
-        }
+        self._ensure_build_cache(build)
+        excl_names = self._excl_names
         _desired = desired_compat_effects or {}
         for eff in relic.all_effects:
             if eff in excl_ids:
@@ -189,16 +265,20 @@ class BuildScorer:
 
         Only populated for categories in build.excluded_stacking_categories.
         Used to determine if a competing effect would block a desired one.
+        Cached per build (pure function of the build).
         """
+        self._ensure_build_cache(build)
+        if self._desired_compat is not None:
+            return self._desired_compat
         result: dict[int, set[int]] = {}
-        excl_cats = set(build.excluded_stacking_categories)
-        if not excl_cats:
-            return result
-        for eff_id in self._all_build_effect_ids(build):
-            compat = self.data_source.get_effect_conflict_id(eff_id)
-            if compat != -1 and compat in excl_cats:
-                if self._is_effect_protected(eff_id, build):
-                    result.setdefault(compat, set()).add(eff_id)
+        excl_cats = self._excl_cats
+        if excl_cats:
+            for eff_id in self._all_build_effect_ids(build):
+                compat = self.data_source.get_effect_conflict_id(eff_id)
+                if compat != -1 and compat in excl_cats:
+                    if self._is_effect_protected(eff_id, build):
+                        result.setdefault(compat, set()).add(eff_id)
+        self._desired_compat = result
         return result
 
     def has_orphaned_excl_category_effects(
@@ -301,7 +381,8 @@ class BuildScorer:
         compat = self.data_source.get_effect_conflict_id(eff_id)
         if compat == -1:
             return False
-        if compat not in set(build.excluded_stacking_categories):
+        self._ensure_build_cache(build)
+        if compat not in self._excl_cats:
             return False
         if compat not in dce:
             return False  # no desired effect → handled by pre-filter
@@ -367,7 +448,11 @@ class BuildScorer:
 
         Used by the optimizer to penalize relics whose no_stack effects
         block a desired effect sharing the same compatibilityId group.
+        Cached per build (pure function of the build).
         """
+        self._ensure_build_cache(build)
+        if self._desired_cw is not None:
+            return self._desired_cw
         result: dict[int, int] = {}
         for eff_id in build.required_effects:
             compat = self.data_source.get_effect_conflict_id(eff_id)
@@ -380,6 +465,7 @@ class BuildScorer:
                 compat = self.data_source.get_effect_conflict_id(eff_id)
                 if compat not in (-1, 100, 900):
                     result[compat] = max(result.get(compat, 0), g.weight)
+        self._desired_cw = result
         return result
 
     def _effect_stacking_score(self, eff_id: int, category: str, weight: int,
