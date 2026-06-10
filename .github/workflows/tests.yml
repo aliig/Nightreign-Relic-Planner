@@ -1,0 +1,68 @@
+name: Tests
+
+on:
+  push:
+    branches: [main, webapp]
+  pull_request:
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: app
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PROJECT_NAME: Nightreign Relic Planner
+      ENVIRONMENT: local
+      SECRET_KEY: ci-only-secret-key-not-for-production
+      POSTGRES_SERVER: localhost
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: app
+      FIRST_SUPERUSER: admin@example.com
+      FIRST_SUPERUSER_PASSWORD: ci-only-password
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Sync workspace
+        run: uv sync --all-groups
+      - name: nrplanner tests
+        # Tests needing the real save fixture skip themselves when absent.
+        run: uv run pytest nrplanner/tests -q
+      - name: Backend migrations
+        working-directory: backend
+        run: uv run alembic upgrade head
+      - name: Backend unit tests
+        working-directory: backend
+        run: uv run pytest tests -q -m "not integration"
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - name: Install dependencies
+        run: bun install
+      - name: Typecheck
+        run: bun x tsc -p tsconfig.build.json --noEmit
+      - name: Unit tests
+        run: bun run test:unit
+      - name: Lint (biome)
+        # Pre-existing a11y findings make this informational for now;
+        # flip to blocking once they're fixed.
+        continue-on-error: true
+        run: bun x biome ci .
