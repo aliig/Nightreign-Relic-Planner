@@ -34,4 +34,5 @@ include = ["nrplanner*"]
 testpaths = ["nrplanner/tests"]
 markers = [
     "integration: real external data or filesystem required",
+    "slow: long-running exhaustive searches (brute-force oracles, benchmarks)",
 ]
