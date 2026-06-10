@@ -332,6 +332,36 @@ class BuildScorer:
                 score += build.default_curse_weight
         return score
 
+    def positive_pre_score(self, relic: OwnedRelic, build: BuildDefinition) -> int:
+        """Upper bound on score_relic_in_context for ANY vessel state.
+
+        Sums only positive contributions: every effect scores at most
+        max(0, resolved_weight) regardless of stacking state (stack -> w;
+        unique/no_stack -> w, 0 or a negative penalty; limit reached -> 0;
+        excluded-category -> 0 or a negative penalty; curse excess -> < 0).
+        Unlike the net pre-score this is admissible as a pruning bound and a
+        candidate filter even when negative weights are in play — a
+        negatively-weighted duplicate dedups to 0 in context, so a net<=0
+        relic can still belong to the optimum.
+        """
+        score = 0
+        for eff in relic.effects:
+            if eff in (EMPTY_EFFECT, 0):
+                continue
+            cat, weight = self._resolve_category_and_weight(eff, build)
+            if cat is not None and cat != "excluded" and weight > 0:
+                score += weight
+        for curse in relic.curses:
+            if curse in (EMPTY_EFFECT, 0):
+                continue
+            cat, weight = self._resolve_category_and_weight(curse, build)
+            if cat is not None and cat != "excluded":
+                if weight > 0:
+                    score += weight
+            elif cat is None and build.default_curse_weight > 0:
+                score += build.default_curse_weight
+        return score
+
     def get_desired_conflict_weights(self, build: BuildDefinition) -> dict[int, int]:
         """Map compatibilityId -> max weight of desired effects in that group.
 

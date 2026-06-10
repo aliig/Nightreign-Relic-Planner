@@ -8,10 +8,13 @@ optimum for any vessel.  The brute force is built to be a sound oracle:
   its *net* pre-score (e.g. a negatively-weighted duplicate dedups to 0), so
   net-based bounds and filters are NOT admissible once negative weights or
   curse weights are in play.
-- A relic with context score <= 0 is only skipped when it cannot unlock a
-  desired excluded-category effect for a later placement.  Placing the
-  desired effect flips later same-category competitors from -penalty to 0 —
-  the one mechanism by which adding a relic can RAISE other relics' scores.
+- A relic with context score <= 0 is only skipped when it can neither (a)
+  unlock a desired excluded-category effect for a later placement (placing
+  the desired effect flips later same-category competitors from -penalty to
+  0), nor (b) pre-pay a shared negative effect (a later copy of a
+  negatively-weighted no_stack/unique effect dedups to 0 against it).
+  These are the only two mechanisms by which adding a relic can RAISE other
+  relics' scores.
 - Leaves that violate the excluded-stacking-category validity rule (an
   undesired competitor placed left of, or without, the desired effect) are
   rejected, mirroring the optimizer's post-hoc filter.
@@ -247,6 +250,51 @@ def _desired_compat_unlocks(ds: SourceDataHandler, relic: OwnedRelic,
     return frozenset(unlocks)
 
 
+def _shared_negative_keys(
+    ds: SourceDataHandler,
+    scorer: BuildScorer,
+    build: BuildDefinition,
+    candidates_per_slot: list[list[tuple[int, int, OwnedRelic]]],
+) -> dict[int, frozenset[int]]:
+    """ga_handle -> negative dedupable effect keys shared with another candidate.
+
+    A negatively-weighted no_stack/unique effect dedups to 0 when a copy is
+    already placed, so a relic carrying one can pay the penalty once and make
+    a later copy free — the second mechanism by which placing a relic can
+    raise other relics' scores.  Keys are canonical (text_id when present).
+    """
+    per_relic: dict[int, set[int]] = {}
+    key_counts: Counter = Counter()
+    for cands in candidates_per_slot:
+        for _, _, r in cands:
+            if r.ga_handle in per_relic:
+                continue
+            keys: set[int] = set()
+            for eff, is_curse in (
+                [(e, False) for e in r.effects] + [(c, True) for c in r.curses]
+            ):
+                if eff in (EMPTY_EFFECT, 0):
+                    continue
+                cat, w = scorer._resolve_category_and_weight(eff, build)
+                negative = (
+                    (cat is not None and cat != "excluded" and w < 0)
+                    or (cat is None and is_curse and build.default_curse_weight < 0)
+                )
+                if not negative:
+                    continue
+                if ds.get_effect_stacking_type(eff) == "stack":
+                    continue  # stacking effects never dedup
+                text_id = ds.get_effect_text_id(eff)
+                keys.add(text_id if text_id != -1 else eff)
+            per_relic[r.ga_handle] = keys
+            key_counts.update(keys)
+    return {
+        handle: frozenset(k for k in keys if key_counts[k] >= 2)
+        for handle, keys in per_relic.items()
+        if any(key_counts[k] >= 2 for k in keys)
+    }
+
+
 def _brute_force_vessel(
     ds: SourceDataHandler,
     scorer: BuildScorer,
@@ -298,6 +346,7 @@ def _brute_force_vessel(
                 unlocks = _desired_compat_unlocks(ds, r, desired_compat)
                 if unlocks:
                     unlock_map[r.ga_handle] = unlocks
+    dedup_map = _shared_negative_keys(ds, scorer, build, candidates_per_slot)
 
     best_score = 0  # the empty layout is always available
     best_assignment: list[OwnedRelic | None] = [None] * num_slots
@@ -342,10 +391,13 @@ def _brute_force_vessel(
 
             ctx = scorer.score_relic_in_context(relic, build, state)
             if ctx <= 0:
-                # Sound skip ONLY if this relic cannot place a desired
-                # excluded-category effect that is still missing.
-                unlocks = unlock_map.get(relic.ga_handle)
-                if not unlocks or unlocks <= state.desired_compat_placed:
+                # Sound skip ONLY if this relic can neither place a desired
+                # excluded-category effect that is still missing, nor pre-pay
+                # a shared negative effect for a later duplicate.
+                unlocks = unlock_map.get(relic.ga_handle, frozenset())
+                dedups = dedup_map.get(relic.ga_handle, frozenset())
+                if (unlocks <= state.desired_compat_placed
+                        and dedups <= state.effect_ids):
                     continue
             if score + ctx + remaining <= best_score:
                 pruned += 1
@@ -433,6 +485,67 @@ def real_inventory(ds: SourceDataHandler) -> RelicInventory:
         data = char_path.read_bytes()
         raw_relics, _ = parse_relics(data)
     return RelicInventory(raw_relics, items_json, ds)
+
+
+class TestSyntheticSoundness:
+    """Constructed inventories that fail when the solver filters or skips
+    candidates by NET pre-score (no real save fixture required)."""
+
+    def test_negative_duplicate_dedup_is_found(self, ds: SourceDataHandler) -> None:
+        """Two relics share a penalized no_stack effect; the optimum places
+        both (the second copy dedups to 0).  Each relic alone nets -2, so a
+        net-based candidate filter or an unconditional ctx<=0 skip misses
+        the 8-point optimum entirely."""
+        no_stack_x = next(
+            e["id"] for e in ds.get_all_effects_list()
+            if ds.get_effect_stacking_type(e["id"]) == "no_stack"
+            and ds.get_effect_conflict_id(e["id"]) == -1
+            and ds.get_effect_family(e["id"]) is None
+        )
+        build = BuildDefinition(
+            id="synthetic-negative",
+            name="synthetic (negative dedup)",
+            character="Guardian",
+            groups=[
+                WeightGroup(weight=10, effects=[
+                    _GUARDIAN_CHAR_SKILL, _GUARDIAN_STR_DEX]),
+                WeightGroup(weight=-12, effects=[no_stack_x]),
+            ],
+            include_deep=False,
+            curse_max=5,
+        )
+        empty = EMPTY_EFFECT
+        r1 = OwnedRelic(
+            ga_handle=101, item_id=0, real_id=0, color="Red",
+            effects=[_GUARDIAN_CHAR_SKILL, no_stack_x, empty],
+            curses=[empty, empty, empty],
+            is_deep=False, name="R1", tier="Polished",
+        )
+        r2 = OwnedRelic(
+            ga_handle=102, item_id=0, real_id=0, color="Red",
+            effects=[_GUARDIAN_STR_DEX, no_stack_x, empty],
+            curses=[empty, empty, empty],
+            is_deep=False, name="R2", tier="Polished",
+        )
+        inventory = RelicInventory.from_owned_relics([r1, r2])
+        vessel_data = {
+            "Name": "Synthetic Vessel", "Character": "All",
+            "Colors": ("Red", "Red", "Red", "Red", "Red", "Red"),
+            "unlockFlag": 0, "_id": 9999,
+        }
+        scorer = BuildScorer(ds)
+        optimizer = VesselOptimizer(ds, scorer)
+
+        results = optimizer.optimize(build, inventory, vessel_data, top_n=3)
+
+        assert results, "optimizer returned no layouts at all"
+        best = results[0]
+        placed = sorted(
+            a.relic.ga_handle for a in best.assignments if a.relic is not None)
+        assert best.total_score == 8 and placed == [101, 102], (
+            f"expected both relics for 8 pts (10 - 12 + 10, duplicate penalty "
+            f"dedups to 0); got score={best.total_score}, placed={placed}"
+        )
 
 
 @pytest.mark.slow

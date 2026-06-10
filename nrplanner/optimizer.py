@@ -4,6 +4,7 @@ from __future__ import annotations
 import time
 from concurrent.futures import Future, ProcessPoolExecutor, as_completed
 
+from nrplanner.constants import EMPTY_EFFECT
 from nrplanner.data import SourceDataHandler
 from nrplanner.models import (
     BuildDefinition, OwnedRelic, RelicInventory,
@@ -21,7 +22,9 @@ DEFAULT_BACKTRACK_DEADLINE_SECS = 10.0
 # Bump whenever a change to the solver/scoring could alter optimization results.
 # Recorded in OptimizationSnapshot provenance so old snapshots are known to be
 # incomparable after an algorithm change (forces a fresh diff baseline).
-OPTIMIZER_VERSION = 1
+# v2: positive-sum candidate filter/bounds + dedup/unlock-aware ctx<=0 skip —
+#     the solver can now find optima that include net-negative relics.
+OPTIMIZER_VERSION = 2
 
 # ---------------------------------------------------------------------------
 # Worker-process globals (set once per worker by init_optimizer_worker)
@@ -115,15 +118,23 @@ class VesselOptimizer:
                 and r.ga_handle not in pinned_handles
                 and r.ga_handle not in excluded_handles
             ]
-            # Pre-filter: relics with pre_score ≤ 0 have no desired effects
-            # and context score ≤ pre_score (stacking only reduces), so the
-            # solver would skip them anyway.  Removing them here shrinks the
-            # candidate pool and lets the backtracking solver run on builds
-            # that would otherwise fall back to the less-optimal greedy path.
-            scored = [(self.scorer.score_relic(r, build), r) for r in candidates]
-            scored = [(s, r) for s, r in scored if s > 0]
+            # Pre-filter on the POSITIVE pre-score (sum of positive weights):
+            # an effect contributes at most max(0, weight) in any context, so
+            # pos <= 0 relics can never help and are safe to drop.  The net
+            # pre-score is NOT a sound filter — a negatively-weighted
+            # duplicate dedups to 0 in context, so a net<=0 relic can still
+            # belong to the optimum.  Candidates are ordered by net score
+            # (finds good solutions early => aggressive pruning); the stored
+            # value is the positive bound, which is what pruning must use.
+            scored = []
+            for r in candidates:
+                pos = self.scorer.positive_pre_score(r, build)
+                if pos <= 0:
+                    continue
+                net = self.scorer.score_relic(r, build)
+                scored.append((net, pos, r))
             scored.sort(key=lambda x: x[0], reverse=True)
-            candidates_per_free_slot.append(scored)
+            candidates_per_free_slot.append([(pos, r) for _net, pos, r in scored])
 
         num_free = len(free_slot_indices)
 
@@ -148,11 +159,18 @@ class VesselOptimizer:
             # disabled optimal search for large inventories.)
             greedy_best = max(
                 (sum(s for _, s in a) for a in raw_free), default=0)
+            ctx_helpers = self._ctx_helper_map(
+                candidates_per_free_slot, build, desired_compat_effs)
+            # Leaf-level excluded-category validation needs absolute slot
+            # order; with pinned slots the free-slot indices no longer align,
+            # so the post-hoc filter alone handles those (rare) builds.
+            validate_leaves = bool(desired_compat_effs) and not pinned_handles
             bt_results, search_truncated = self._backtrack_solve(
                 candidates_per_free_slot, num_free, build, top_n, desired_cw,
                 desired_compat_effs, initial_threshold=greedy_best - 1,
                 effect_limit_by_name=effect_limit_by_name,
-                family_limit_map=family_limit_map, deadline_secs=deadline_secs)
+                family_limit_map=family_limit_map, deadline_secs=deadline_secs,
+                ctx_helpers=ctx_helpers, validate_leaves=validate_leaves)
             if bt_results:
                 # Merge and deduplicate by relic set
                 seen: set[frozenset] = set()
@@ -595,12 +613,24 @@ class VesselOptimizer:
                          effect_limit_by_name: dict[str, int] | None = None,
                          family_limit_map: dict[str, int] | None = None,
                          deadline_secs: float = DEFAULT_BACKTRACK_DEADLINE_SECS,
+                         ctx_helpers: dict[int, tuple[frozenset[int], frozenset[int]]] | None = None,
+                         validate_leaves: bool = False,
                          ) -> tuple[list[list], bool]:
         top: list[tuple[int, list]] = []
         seen: set[frozenset] = set()
         min_threshold = initial_threshold
         deadline = time.time() + deadline_secs
         truncated = False
+
+        # Admissible remaining-score bound: best POSITIVE pre-score per slot,
+        # as suffix sums.  (Candidates are net-ordered, so the per-slot max
+        # must be computed explicitly rather than taken from the list head.)
+        max_pos_per_slot = [
+            max((p for p, _ in c), default=0) for c in candidates_per_slot
+        ]
+        suffix_pos = [0] * (num_slots + 1)
+        for s in range(num_slots - 1, -1, -1):
+            suffix_pos[s] = suffix_pos[s + 1] + max_pos_per_slot[s]
 
         state = VesselState(
             self.data_source,
@@ -621,6 +651,16 @@ class VesselOptimizer:
                 if score > min_threshold or len(top) < top_n:
                     key = frozenset(used)
                     if key not in seen:
+                        # Reject layouts that orphan or priority-block a
+                        # desired excluded-category effect — keeping them out
+                        # of `top` stops invalid layouts from inflating the
+                        # pruning threshold past valid optima.
+                        if validate_leaves and self.scorer.has_orphaned_excl_category_effects(
+                            [set(r.all_effects) if r is not None else set()
+                             for r, _ in current],
+                            build, desired_compat_effs,
+                        ):
+                            return
                         seen.add(key)
                         top.append((score, list(current)))
                         top.sort(key=lambda x: x[0], reverse=True)
@@ -631,22 +671,30 @@ class VesselOptimizer:
                         min_threshold = top[-1][0] if len(top) == top_n else -1
                 return
 
-            # Try candidates first (sorted by pre_score desc) so that
+            # Try candidates first (sorted by net pre-score desc) so that
             # high-scoring solutions are found early, establishing
             # aggressive min_threshold for pruning.
-            remaining_max = sum(
-                candidates_per_slot[s][0][0] if candidates_per_slot[s] else 0
-                for s in range(slot_idx + 1, num_slots)
-            )
-            for pre_score, relic in candidates_per_slot[slot_idx]:
+            remaining_max = suffix_pos[slot_idx + 1]
+            for pos_bound, relic in candidates_per_slot[slot_idx]:
                 if relic.ga_handle in used:
                     continue
-                if score + pre_score + remaining_max <= min_threshold:
-                    continue  # upper-bound prune
+                if score + pos_bound + remaining_max <= min_threshold:
+                    continue  # admissible upper-bound prune
 
                 ctx_score = self.scorer.score_relic_in_context(relic, build, state)
                 if ctx_score <= 0:
-                    continue  # empty slot is at least as good
+                    # An empty slot is at least as good UNLESS this relic can
+                    # still raise later relics' scores: by placing a desired
+                    # excluded-category effect (flips later competitors from
+                    # -penalty to 0), or by pre-paying a shared negative
+                    # effect whose later copy dedups to 0.
+                    helper = ctx_helpers.get(relic.ga_handle) if ctx_helpers else None
+                    if helper is None:
+                        continue
+                    unlocks, dedups = helper
+                    if (unlocks <= state.desired_compat_placed
+                            and dedups <= state.effect_ids):
+                        continue
                 if score + ctx_score + remaining_max <= min_threshold:
                     continue  # actual-score prune
 
@@ -666,6 +714,91 @@ class VesselOptimizer:
         backtrack(0, [(None, 0)] * num_slots, set(), 0)
         valid = [(s, a) for s, a in top if any(r is not None for r, _ in a)]
         return [assignment for _, assignment in valid], truncated
+
+    def _ctx_helper_map(
+        self,
+        candidates_per_slot: list,
+        build: BuildDefinition,
+        desired_compat_effs: dict[int, set[int]] | None,
+    ) -> dict[int, tuple[frozenset[int], frozenset[int]]] | None:
+        """Per-relic reasons a ctx<=0 placement may still pay off later.
+
+        Maps ga_handle -> (unlock_compats, shared_negative_keys):
+        - unlock_compats: excluded-category compat IDs whose DESIRED effect
+          the relic carries (placing it flips later same-category
+          competitors from -penalty to 0).
+        - shared_negative_keys: canonical IDs (text_id when present) of
+          negatively-weighted no_stack/unique effects that at least one
+          other candidate also carries — a later copy dedups to 0 against
+          this one, so paying the penalty once can be globally optimal.
+
+        Relics with neither are omitted; returns None when the map is empty
+        (the common case for all-positive builds, letting the solver skip
+        the lookup entirely).
+        """
+        ds = self.data_source
+        dce = desired_compat_effs or {}
+        unlocks_map: dict[int, frozenset[int]] = {}
+        per_relic_neg: dict[int, set[int]] = {}
+        neg_counts: dict[int, int] = {}
+
+        seen: set[int] = set()
+        for cands in candidates_per_slot:
+            for _pos, r in cands:
+                if r.ga_handle in seen:
+                    continue
+                seen.add(r.ga_handle)
+
+                if dce:
+                    unlocks: set[int] = set()
+                    for eff in r.all_effects:
+                        compat = ds.get_effect_conflict_id(eff)
+                        if compat == -1 or compat not in dce:
+                            continue
+                        dset = dce[compat]
+                        if eff in dset:
+                            unlocks.add(compat)
+                            continue
+                        text_id = ds.get_effect_text_id(eff)
+                        if text_id != -1 and text_id in dset:
+                            unlocks.add(compat)
+                    if unlocks:
+                        unlocks_map[r.ga_handle] = frozenset(unlocks)
+
+                keys: set[int] = set()
+                for eff, is_curse in (
+                    [(e, False) for e in r.effects]
+                    + [(c, True) for c in r.curses]
+                ):
+                    if eff in (EMPTY_EFFECT, 0):
+                        continue
+                    cat, weight = self.scorer._resolve_category_and_weight(eff, build)
+                    negative = (
+                        (cat is not None and cat != "excluded" and weight < 0)
+                        or (cat is None and is_curse
+                            and build.default_curse_weight < 0)
+                    )
+                    if not negative:
+                        continue
+                    if ds.get_effect_stacking_type(eff) == "stack":
+                        continue  # stacking effects never dedup
+                    text_id = ds.get_effect_text_id(eff)
+                    keys.add(text_id if text_id != -1 else eff)
+                if keys:
+                    per_relic_neg[r.ga_handle] = keys
+                    for k in keys:
+                        neg_counts[k] = neg_counts.get(k, 0) + 1
+
+        result: dict[int, tuple[frozenset[int], frozenset[int]]] = {}
+        for handle in seen:
+            unlocks = unlocks_map.get(handle, frozenset())
+            shared = frozenset(
+                k for k in per_relic_neg.get(handle, ())
+                if neg_counts.get(k, 0) >= 2
+            )
+            if unlocks or shared:
+                result[handle] = (unlocks, shared)
+        return result or None
 
     # ------------------------------------------------------------------
     # Pinned relic pre-assignment
