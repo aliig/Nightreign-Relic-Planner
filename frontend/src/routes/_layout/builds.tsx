@@ -12,14 +12,13 @@ import {
   useRouterState,
 } from "@tanstack/react-router"
 import {
-  ArrowDown,
-  ArrowUp,
   Copy,
   MoreVertical,
   Pencil,
   Plus,
   Star,
   Trash2,
+  X,
   Zap,
 } from "lucide-react"
 import { Suspense, useState } from "react"
@@ -27,6 +26,7 @@ import { useForm } from "react-hook-form"
 import { z } from "zod"
 
 import {
+  type BuildChange,
   type BuildSnapshotSummary,
   BuildsService,
   type FeaturedBuildPublic,
@@ -73,6 +73,11 @@ import {
   type LocalBuild,
   useLocalBuilds,
 } from "@/hooks/useLocalBuilds"
+import {
+  describeBuildChange,
+  rawScoreTooltip,
+  relicSummary,
+} from "@/lib/buildChange"
 import { CHARACTER_NAMES } from "@/lib/constants"
 import { handleError } from "@/utils"
 
@@ -242,23 +247,22 @@ function BuildCard({
             onBlur={commitRename}
             className="text-base font-semibold bg-transparent border-b border-transparent hover:border-muted-foreground/30 focus:border-primary focus:outline-none focus:ring-0 py-0.5 min-w-0 flex-1 truncate transition-colors"
           />
-          {summary?.status === "improved" && (summary.delta ?? 0) > 0 && (
-            <span
-              className="shrink-0 inline-flex items-center gap-0.5 text-green-600 text-xs font-medium"
-              title={`Score improved by ${summary.delta} pts`}
-            >
-              <ArrowUp className="h-3 w-3" />+{summary.delta}
-            </span>
-          )}
-          {summary?.status === "degraded" && (summary.delta ?? 0) < 0 && (
-            <span
-              className="shrink-0 inline-flex items-center gap-0.5 text-red-500 text-xs font-medium"
-              title={`Score decreased by ${Math.abs(summary.delta ?? 0)} pts`}
-            >
-              <ArrowDown className="h-3 w-3" />
-              {summary.delta}
-            </span>
-          )}
+          {(() => {
+            // Subtle at-a-glance marker: only the score/pin-moving changes
+            // (neutral "rearranged" lives in the changes-since-last-save list).
+            const d = describeBuildChange(summary?.change)
+            if (!d || d.tone === "neutral") return null
+            const Icon = d.icon
+            return (
+              <span
+                className={`shrink-0 inline-flex items-center gap-0.5 text-xs font-medium ${d.textClass}`}
+                title={rawScoreTooltip(d.rawScore) ?? d.headline}
+              >
+                <Icon className="h-3 w-3" />
+                {d.headline}
+              </span>
+            )
+          })()}
           <div className="flex items-center gap-1 shrink-0">
             <Button
               asChild
@@ -579,6 +583,115 @@ function SuggestedBuildsSection() {
 
 // --- Authenticated build section (API-backed) ---
 
+// --- "Changes since your last save" — durable, server-backed change list ---
+
+function ChangeRow({
+  buildId,
+  name,
+  change,
+  onDismiss,
+}: {
+  buildId: string
+  name: string
+  change: BuildChange
+  onDismiss: (buildId: string) => void
+}) {
+  const d = describeBuildChange(change)
+  if (!d) return null
+  const Icon = d.icon
+  return (
+    <li className="flex items-start justify-between gap-3 py-1.5">
+      <div className="min-w-0">
+        <Link
+          to="/builds/$buildId/optimize"
+          params={{ buildId }}
+          className="font-medium hover:underline"
+        >
+          {name}
+        </Link>
+        <div
+          className={`flex items-center gap-1 text-sm ${d.textClass}`}
+          title={rawScoreTooltip(d.rawScore)}
+        >
+          <Icon className="h-3.5 w-3.5 shrink-0" />
+          <span>{d.headline}</span>
+          {d.reliable === false && (
+            <span className="text-xs opacity-70">(approximate)</span>
+          )}
+        </div>
+        {d.relics && (
+          <p className="truncate text-xs text-muted-foreground">
+            {d.relics.verb} {relicSummary(d.relics)}
+          </p>
+        )}
+      </div>
+      <Button
+        variant="ghost"
+        size="icon"
+        className="h-6 w-6 shrink-0 text-muted-foreground"
+        title="Dismiss"
+        onClick={() => onDismiss(buildId)}
+      >
+        <X className="h-3.5 w-3.5" />
+      </Button>
+    </li>
+  )
+}
+
+function ChangesSinceLastSave({
+  summaries,
+  buildName,
+  onDismiss,
+}: {
+  summaries: BuildSnapshotSummary[]
+  buildName: (buildId: string) => string
+  onDismiss: (buildId: string) => void
+}) {
+  // Unread, relic-caused changes worth surfacing, deduped per build. Build edits
+  // re-baseline silently; only an uploaded save populates this list.
+  const seen = new Set<string>()
+  const rows: { buildId: string; change: BuildChange }[] = []
+  for (const s of summaries) {
+    if (s.reviewed !== false || !s.build_id || seen.has(s.build_id)) continue
+    const change = s.change
+    if (!change) continue
+    if (change.cause !== "relics" && change.cause !== "mixed") continue
+    if (!describeBuildChange(change)) continue
+    seen.add(s.build_id)
+    rows.push({ buildId: s.build_id, change })
+  }
+  if (rows.length === 0) return null
+
+  return (
+    <Card className="px-6 py-4">
+      <div className="flex items-center justify-between gap-2">
+        <h2 className="text-sm font-semibold">Changes since your last save</h2>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-7 text-xs text-muted-foreground"
+          onClick={() => {
+            for (const r of rows) onDismiss(r.buildId)
+          }}
+        >
+          Dismiss all
+        </Button>
+      </div>
+      <ul className="mt-1 divide-y">
+        {rows.map((r) => (
+          <ChangeRow
+            key={r.buildId}
+            buildId={r.buildId}
+            name={buildName(r.buildId)}
+            change={r.change}
+            onDismiss={onDismiss}
+          />
+        ))}
+      </ul>
+    </Card>
+  )
+}
+
 function AuthBuildList() {
   const { data } = useSuspenseQuery({
     queryKey: ["builds"],
@@ -651,6 +764,14 @@ function AuthBuildList() {
     onError: handleError.bind(showErrorToast),
   })
 
+  const dismissChangeMutation = useMutation({
+    mutationFn: (buildId: string) =>
+      OptimizeService.markChangeReviewed({ buildId }),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: ["build-summaries"] }),
+    onError: handleError.bind(showErrorToast),
+  })
+
   if (!data.data?.length) {
     return (
       <p className="text-muted-foreground py-8 text-center">
@@ -660,36 +781,45 @@ function AuthBuildList() {
   }
 
   return (
-    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-      {data.data.map((build) => (
-        <BuildCard
-          key={build.id}
-          build={{
-            id: build.id,
-            name: build.name,
-            character: build.character,
-            groups: (build as any).groups,
-            required_effects: (build as any).required_effects,
-            updated_at: build.updated_at,
-            is_featured: build.is_featured,
-          }}
-          onDelete={(id) => deleteMutation.mutate(id)}
-          onRename={(id, name) => renameMutation.mutate({ buildId: id, name })}
-          onChangeCharacter={(id, character) =>
-            changeCharacterMutation.mutate({ buildId: id, character })
-          }
-          onDuplicate={(id) => duplicateMutation.mutate(id)}
-          onToggleFeatured={
-            user?.is_superuser
-              ? (id) => toggleFeaturedMutation.mutate(id)
-              : undefined
-          }
-          isDeleting={
-            deleteMutation.isPending && deleteMutation.variables === build.id
-          }
-          summary={summaryByBuild.get(build.id)}
-        />
-      ))}
+    <div className="space-y-4">
+      <ChangesSinceLastSave
+        summaries={summaries ?? []}
+        buildName={(id) => data.data?.find((b) => b.id === id)?.name ?? "Build"}
+        onDismiss={(id) => dismissChangeMutation.mutate(id)}
+      />
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        {data.data.map((build) => (
+          <BuildCard
+            key={build.id}
+            build={{
+              id: build.id,
+              name: build.name,
+              character: build.character,
+              groups: (build as any).groups,
+              required_effects: (build as any).required_effects,
+              updated_at: build.updated_at,
+              is_featured: build.is_featured,
+            }}
+            onDelete={(id) => deleteMutation.mutate(id)}
+            onRename={(id, name) =>
+              renameMutation.mutate({ buildId: id, name })
+            }
+            onChangeCharacter={(id, character) =>
+              changeCharacterMutation.mutate({ buildId: id, character })
+            }
+            onDuplicate={(id) => duplicateMutation.mutate(id)}
+            onToggleFeatured={
+              user?.is_superuser
+                ? (id) => toggleFeaturedMutation.mutate(id)
+                : undefined
+            }
+            isDeleting={
+              deleteMutation.isPending && deleteMutation.variables === build.id
+            }
+            summary={summaryByBuild.get(build.id)}
+          />
+        ))}
+      </div>
     </div>
   )
 }

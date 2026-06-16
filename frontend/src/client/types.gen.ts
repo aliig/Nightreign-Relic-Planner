@@ -107,12 +107,17 @@ export type BuildPublic = {
 };
 
 /**
- * Lightweight summary of a build's most recent optimization change.
+ * A build's most recent optimization change.
+ *
+ * Embeds the full :class:`BuildChange` so the frontend can render rich,
+ * relic-aware change text (verdict + relative % + which relics moved) and
+ * filter on ``reviewed`` — all without a full snapshot load.  Deciding which
+ * changes are "interesting" is left to the frontend formatter.
  */
 export type BuildSnapshotSummary = {
     build_id: string;
-    status?: (string | null);
-    delta?: number;
+    change?: (BuildChange | null);
+    reviewed?: boolean;
     best_score?: number;
     computed_at?: (string | null);
 };
@@ -640,6 +645,12 @@ export type OptimizeGetSnapshotData = {
 export type OptimizeGetSnapshotResponse = ((SnapshotResponse | null));
 
 export type OptimizeListBuildSummariesResponse = (Array<BuildSnapshotSummary>);
+
+export type OptimizeMarkChangeReviewedData = {
+    buildId: string;
+};
+
+export type OptimizeMarkChangeReviewedResponse = (void);
 
 export type PrivateCreateUserData = {
     requestBody: PrivateUserCreate;

@@ -1,13 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router"
-import {
-  AlertCircle,
-  ArrowDown,
-  ArrowUp,
-  Info,
-  Upload,
-  User2,
-} from "lucide-react"
+import { AlertCircle, Info, Upload, User2 } from "lucide-react"
 import { useRef, useState } from "react"
 
 import type { BuildChange } from "@/client"
@@ -25,6 +18,12 @@ import { Progress } from "@/components/ui/progress"
 import { isLoggedIn } from "@/hooks/useAuth"
 import useCustomToast from "@/hooks/useCustomToast"
 import { storeAnonUploadMeta, useSaveStatus } from "@/hooks/useSaveStatus"
+import {
+  type ChangeDescription,
+  describeBuildChange,
+  rawScoreTooltip,
+  relicSummary,
+} from "@/lib/buildChange"
 import { formatRelativeTime, handleError } from "@/utils"
 
 export const Route = createFileRoute("/_layout/upload")({
@@ -189,52 +188,55 @@ async function runUploadStream(
 }
 
 function ChangesSummary({ changes }: { changes: BuildChange[] }) {
-  const meaningful = changes.filter(
-    (c) => c.status !== "unchanged" && c.status !== "new",
-  )
-  if (meaningful.length === 0) return null
+  const rows = changes
+    .map((change) => ({ change, d: describeBuildChange(change) }))
+    .filter(
+      (r): r is { change: BuildChange; d: ChangeDescription } => r.d !== null,
+    )
+  if (rows.length === 0) return null
 
   return (
     <Alert>
       <Info className="h-4 w-4" />
       <AlertTitle>
-        {meaningful.length} build{meaningful.length !== 1 ? "s" : ""} updated
+        {rows.length} build{rows.length !== 1 ? "s" : ""} updated
       </AlertTitle>
       <AlertDescription>
-        <ul className="mt-1 space-y-0.5">
-          {meaningful.map((c) => (
-            <li
-              key={`${c.build_id}-${c.slot_index}`}
-              className="flex items-center gap-1.5"
-            >
-              <Link
-                to="/builds/$buildId/optimize"
-                params={{ buildId: c.build_id ?? "" }}
-                className="underline"
+        <ul className="mt-1 space-y-1">
+          {rows.map(({ change: c, d }) => {
+            const Icon = d.icon
+            return (
+              <li
+                key={`${c.build_id}-${c.slot_index}`}
+                className="flex flex-col"
               >
-                {c.build_name || "Build"}
-              </Link>
-              {c.status === "improved" && c.delta != null && (
-                <span className="inline-flex items-center gap-0.5 text-green-600 text-xs font-medium">
-                  <ArrowUp className="h-3 w-3" />+{c.delta} pts
-                </span>
-              )}
-              {c.status === "degraded" && c.delta != null && (
-                <span className="inline-flex items-center gap-0.5 text-red-500 text-xs font-medium">
-                  <ArrowDown className="h-3 w-3" />
-                  {c.delta} pts
-                </span>
-              )}
-              {c.status === "reordered" && (
-                <span className="text-xs text-muted-foreground">
-                  — different arrangement, same score
-                </span>
-              )}
-              {c.pinned_removed && c.pinned_removed.length > 0 && (
-                <span className="text-xs text-amber-600">— pin lost</span>
-              )}
-            </li>
-          ))}
+                <div className="flex items-center gap-1.5">
+                  <Link
+                    to="/builds/$buildId/optimize"
+                    params={{ buildId: c.build_id ?? "" }}
+                    className="underline"
+                  >
+                    {c.build_name || "Build"}
+                  </Link>
+                  <span
+                    className={`inline-flex items-center gap-0.5 text-xs font-medium ${d.textClass}`}
+                    title={rawScoreTooltip(d.rawScore)}
+                  >
+                    <Icon className="h-3 w-3" />
+                    {d.headline}
+                  </span>
+                  {d.reliable === false && (
+                    <span className="text-xs opacity-70">(approximate)</span>
+                  )}
+                </div>
+                {d.relics && (
+                  <span className="pl-0.5 text-xs text-muted-foreground">
+                    {d.relics.verb} {relicSummary(d.relics)}
+                  </span>
+                )}
+              </li>
+            )
+          })}
         </ul>
       </AlertDescription>
     </Alert>

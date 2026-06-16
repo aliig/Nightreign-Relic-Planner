@@ -464,21 +464,20 @@ export const BuildSnapshotSummarySchema = {
             type: 'string',
             title: 'Build Id'
         },
-        status: {
+        change: {
             anyOf: [
                 {
-                    type: 'string'
+                    '$ref': '#/components/schemas/BuildChange'
                 },
                 {
                     type: 'null'
                 }
-            ],
-            title: 'Status'
+            ]
         },
-        delta: {
-            type: 'integer',
-            title: 'Delta',
-            default: 0
+        reviewed: {
+            type: 'boolean',
+            title: 'Reviewed',
+            default: true
         },
         best_score: {
             type: 'integer',
@@ -500,7 +499,12 @@ export const BuildSnapshotSummarySchema = {
     type: 'object',
     required: ['build_id'],
     title: 'BuildSnapshotSummary',
-    description: "Lightweight summary of a build's most recent optimization change."
+    description: `A build's most recent optimization change.
+
+Embeds the full :class:\`BuildChange\` so the frontend can render rich,
+relic-aware change text (verdict + relative % + which relics moved) and
+filter on \`\`reviewed\`\` — all without a full snapshot load.  Deciding which
+changes are "interesting" is left to the frontend formatter.`
 } as const;
 
 export const BuildUpdateSchema = {

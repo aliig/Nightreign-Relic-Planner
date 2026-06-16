@@ -3,7 +3,7 @@
 import type { CancelablePromise } from './core/CancelablePromise';
 import { OpenAPI } from './core/OpenAPI';
 import { request as __request } from './core/request';
-import type { BuildsListBuildsData, BuildsListBuildsResponse, BuildsCreateBuildData, BuildsCreateBuildResponse, BuildsListFeaturedBuildsData, BuildsListFeaturedBuildsResponse, BuildsGetBuildData, BuildsGetBuildResponse, BuildsUpdateBuildData, BuildsUpdateBuildResponse, BuildsDeleteBuildData, BuildsDeleteBuildResponse, BuildsToggleFeaturedData, BuildsToggleFeaturedResponse, BuildsCloneBuildData, BuildsCloneBuildResponse, DebugExportDebugStateData, DebugExportDebugStateResponse, GameGetEffectsResponse, GameGetFamiliesResponse, GameGetCharactersResponse, GameGetVesselsData, GameGetVesselsResponse, GameGetStackingCategoriesResponse, GameGetColorsResponse, LoginLoginAccessTokenData, LoginLoginAccessTokenResponse, LoginTestTokenResponse, LoginRecoverPasswordData, LoginRecoverPasswordResponse, LoginResetPasswordData, LoginResetPasswordResponse, LoginRecoverPasswordHtmlContentData, LoginRecoverPasswordHtmlContentResponse, OauthLoginGoogleResponse, OauthGoogleCallbackData, OauthGoogleCallbackResponse, OptimizeRunOptimizeData, OptimizeRunOptimizeResponse, OptimizeRunOptimizeStreamData, OptimizeRunOptimizeStreamResponse, OptimizeOptimizeSlotAlternativeData, OptimizeOptimizeSlotAlternativeResponse, OptimizeGetSnapshotData, OptimizeGetSnapshotResponse, OptimizeListBuildSummariesResponse, PrivateCreateUserData, PrivateCreateUserResponse, SavesUploadSaveData, SavesUploadSaveResponse, SavesUploadSaveStreamData, SavesUploadSaveStreamResponse, SavesGetSaveStatusResponse, SavesListProfilesResponse, SavesGetProfileRelicsData, SavesGetProfileRelicsResponse, UsersReadUsersData, UsersReadUsersResponse, UsersCreateUserData, UsersCreateUserResponse, UsersReadUserMeResponse, UsersDeleteUserMeResponse, UsersUpdateUserMeData, UsersUpdateUserMeResponse, UsersUpdatePasswordMeData, UsersUpdatePasswordMeResponse, UsersRegisterUserData, UsersRegisterUserResponse, UsersReadUserByIdData, UsersReadUserByIdResponse, UsersUpdateUserData, UsersUpdateUserResponse, UsersDeleteUserData, UsersDeleteUserResponse, UtilsTestEmailData, UtilsTestEmailResponse, UtilsHealthCheckResponse } from './types.gen';
+import type { BuildsListBuildsData, BuildsListBuildsResponse, BuildsCreateBuildData, BuildsCreateBuildResponse, BuildsListFeaturedBuildsData, BuildsListFeaturedBuildsResponse, BuildsGetBuildData, BuildsGetBuildResponse, BuildsUpdateBuildData, BuildsUpdateBuildResponse, BuildsDeleteBuildData, BuildsDeleteBuildResponse, BuildsToggleFeaturedData, BuildsToggleFeaturedResponse, BuildsCloneBuildData, BuildsCloneBuildResponse, DebugExportDebugStateData, DebugExportDebugStateResponse, GameGetEffectsResponse, GameGetFamiliesResponse, GameGetCharactersResponse, GameGetVesselsData, GameGetVesselsResponse, GameGetStackingCategoriesResponse, GameGetColorsResponse, LoginLoginAccessTokenData, LoginLoginAccessTokenResponse, LoginTestTokenResponse, LoginRecoverPasswordData, LoginRecoverPasswordResponse, LoginResetPasswordData, LoginResetPasswordResponse, LoginRecoverPasswordHtmlContentData, LoginRecoverPasswordHtmlContentResponse, OauthLoginGoogleResponse, OauthGoogleCallbackData, OauthGoogleCallbackResponse, OptimizeRunOptimizeData, OptimizeRunOptimizeResponse, OptimizeRunOptimizeStreamData, OptimizeRunOptimizeStreamResponse, OptimizeOptimizeSlotAlternativeData, OptimizeOptimizeSlotAlternativeResponse, OptimizeGetSnapshotData, OptimizeGetSnapshotResponse, OptimizeListBuildSummariesResponse, OptimizeMarkChangeReviewedData, OptimizeMarkChangeReviewedResponse, PrivateCreateUserData, PrivateCreateUserResponse, SavesUploadSaveData, SavesUploadSaveResponse, SavesUploadSaveStreamData, SavesUploadSaveStreamResponse, SavesGetSaveStatusResponse, SavesListProfilesResponse, SavesGetProfileRelicsData, SavesGetProfileRelicsResponse, UsersReadUsersData, UsersReadUsersResponse, UsersCreateUserData, UsersCreateUserResponse, UsersReadUserMeResponse, UsersDeleteUserMeResponse, UsersUpdateUserMeData, UsersUpdateUserMeResponse, UsersUpdatePasswordMeData, UsersUpdatePasswordMeResponse, UsersRegisterUserData, UsersRegisterUserResponse, UsersReadUserByIdData, UsersReadUserByIdResponse, UsersUpdateUserData, UsersUpdateUserResponse, UsersDeleteUserData, UsersDeleteUserResponse, UtilsTestEmailData, UtilsTestEmailResponse, UtilsHealthCheckResponse } from './types.gen';
 
 export class BuildsService {
     /**
@@ -540,10 +540,10 @@ export class OptimizeService {
     
     /**
      * List Build Summaries
-     * Return the most recent optimization status for each of the user's builds.
+     * Return the most recent optimization change for each of the user's builds.
      *
-     * Used by the builds list to show subtle score change indicators without
-     * requiring a full snapshot load.  Only returns builds that have at least
+     * Powers both the subtle per-build score badge and the "Changes since your
+     * last save" list on the builds page.  Only returns builds that have at least
      * one snapshot; builds that have never been optimized are omitted.
      * @returns BuildSnapshotSummary Successful Response
      * @throws ApiError
@@ -552,6 +552,30 @@ export class OptimizeService {
         return __request(OpenAPI, {
             method: 'GET',
             url: '/api/v1/optimize/summaries'
+        });
+    }
+    
+    /**
+     * Mark Change Reviewed
+     * Mark a build's change as seen, removing it from the unread changes list.
+     *
+     * Flips ``reviewed`` on every snapshot the user owns for this build (a build
+     * may have one snapshot per profile slot).  Idempotent.
+     * @param data The data for the request.
+     * @param data.buildId
+     * @returns void Successful Response
+     * @throws ApiError
+     */
+    public static markChangeReviewed(data: OptimizeMarkChangeReviewedData): CancelablePromise<OptimizeMarkChangeReviewedResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/api/v1/optimize/summaries/{build_id}/reviewed',
+            path: {
+                build_id: data.buildId
+            },
+            errors: {
+                422: 'Validation Error'
+            }
         });
     }
 }

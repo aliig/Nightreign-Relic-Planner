@@ -13,7 +13,14 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
 from app.core.config import settings
-from app.models import Build, Profile, Relic, SaveUpload, User
+from app.models import (
+    Build,
+    OptimizationSnapshot,
+    Profile,
+    Relic,
+    SaveUpload,
+    User,
+)
 from nrplanner.changes import relics_signature
 from nrplanner.constants import EMPTY_EFFECT
 from nrplanner.models import OwnedRelic
@@ -217,3 +224,97 @@ class TestSnapshotCache:
             "a snapshot must not be served when the profile carries no "
             "relics_hash to compare against"
         )
+
+
+@pytest.mark.usefixtures("override_game_data")
+class TestBuildSummaries:
+    """The /optimize/summaries feed and the mark-reviewed dismissal endpoint
+    that back the builds page badge + "Changes since your last save" list."""
+
+    def test_summaries_requires_auth(self, client: TestClient) -> None:
+        assert client.get("/api/v1/optimize/summaries").status_code in (401, 403)
+
+    def test_summaries_embeds_change_and_reviewed_flag(
+        self,
+        client: TestClient,
+        normal_user_token_headers: dict[str, str],
+        db: Session,
+    ) -> None:
+        """A DB-mode optimize records a snapshot; /summaries surfaces its
+        embedded BuildChange and reviewed flag.  A manual optimize is the user
+        actively looking, so it is reviewed; the first run's change is "new"."""
+        user = _test_user(db)
+        profile = _seed_profile_with_relics(db, user.id, with_hash=True)
+        build = _create_build(client, normal_user_token_headers)
+
+        run = client.post(
+            "/api/v1/optimize/",
+            headers=normal_user_token_headers,
+            json={
+                "build_id": build["id"],
+                "profile_id": str(profile.id),
+                "top_n": 5,
+            },
+        )
+        assert run.status_code == 200, run.text
+
+        resp = client.get(
+            "/api/v1/optimize/summaries", headers=normal_user_token_headers
+        )
+        assert resp.status_code == 200, resp.text
+        rows = [r for r in resp.json() if r["build_id"] == build["id"]]
+        assert len(rows) == 1, "exactly one snapshot summary for the build"
+        row = rows[0]
+        assert row["reviewed"] is True, "a manual optimize marks the change reviewed"
+        assert row["change"] is not None
+        assert row["change"]["status"] == "new", "first-ever optimize has no baseline"
+
+    def test_mark_reviewed_clears_unread_change(
+        self,
+        client: TestClient,
+        normal_user_token_headers: dict[str, str],
+        db: Session,
+    ) -> None:
+        """POST /summaries/{id}/reviewed flips an unread (upload-style) change
+        to reviewed so it leaves the "changes since last save" list."""
+        user = _test_user(db)
+        profile = _seed_profile_with_relics(db, user.id, with_hash=True)
+        build = _create_build(client, normal_user_token_headers)
+        client.post(
+            "/api/v1/optimize/",
+            headers=normal_user_token_headers,
+            json={
+                "build_id": build["id"],
+                "profile_id": str(profile.id),
+                "top_n": 5,
+            },
+        )
+
+        # Simulate the streaming-upload path, which leaves the change unread.
+        snap = db.exec(
+            select(OptimizationSnapshot).where(
+                OptimizationSnapshot.build_id == uuid.UUID(build["id"]),
+            )
+        ).first()
+        assert snap is not None
+        snap.reviewed = False
+        db.add(snap)
+        db.commit()
+
+        before = client.get(
+            "/api/v1/optimize/summaries", headers=normal_user_token_headers
+        )
+        unread = next(r for r in before.json() if r["build_id"] == build["id"])
+        assert unread["reviewed"] is False
+
+        ack = client.post(
+            f"/api/v1/optimize/summaries/{build['id']}/reviewed",
+            headers=normal_user_token_headers,
+        )
+        assert ack.status_code == 204, ack.text
+
+        after = client.get(
+            "/api/v1/optimize/summaries", headers=normal_user_token_headers
+        )
+        read = next(r for r in after.json() if r["build_id"] == build["id"])
+        assert read["reviewed"] is True, "dismissal must persist on the snapshot"

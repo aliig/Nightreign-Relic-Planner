@@ -538,10 +538,16 @@ def get_snapshot(
 
 
 class BuildSnapshotSummary(BaseModel):
-    """Lightweight summary of a build's most recent optimization change."""
+    """A build's most recent optimization change.
+
+    Embeds the full :class:`BuildChange` so the frontend can render rich,
+    relic-aware change text (verdict + relative % + which relics moved) and
+    filter on ``reviewed`` — all without a full snapshot load.  Deciding which
+    changes are "interesting" is left to the frontend formatter.
+    """
     build_id: str
-    status: str | None = None
-    delta: int = 0
+    change: BuildChange | None = None
+    reviewed: bool = True
     best_score: int = 0
     computed_at: str | None = None
 
@@ -551,10 +557,10 @@ def list_build_summaries(
     current_user: CurrentUser,
     session: SessionDep,
 ) -> list[BuildSnapshotSummary]:
-    """Return the most recent optimization status for each of the user's builds.
+    """Return the most recent optimization change for each of the user's builds.
 
-    Used by the builds list to show subtle score change indicators without
-    requiring a full snapshot load.  Only returns builds that have at least
+    Powers both the subtle per-build score badge and the "Changes since your
+    last save" list on the builds page.  Only returns builds that have at least
     one snapshot; builds that have never been optimized are omitted.
     """
     snaps = session.exec(
@@ -565,16 +571,35 @@ def list_build_summaries(
 
     summaries: list[BuildSnapshotSummary] = []
     for snap in snaps:
-        lc = snap.last_change or {}
-        status = lc.get("status")
-        # Only surface interesting changes (not "unchanged", "new", None)
-        if status in (None, "unchanged", "new"):
-            status = None
+        change = BuildChange(**snap.last_change) if snap.last_change else None
         summaries.append(BuildSnapshotSummary(
             build_id=str(snap.build_id),
-            status=status,
-            delta=lc.get("delta", 0),
+            change=change,
+            reviewed=snap.reviewed,
             best_score=snap.best_score,
             computed_at=snap.computed_at.isoformat() if snap.computed_at else None,
         ))
     return summaries
+
+
+@router.post("/summaries/{build_id}/reviewed", status_code=204)
+def mark_change_reviewed(
+    build_id: uuid.UUID,
+    current_user: CurrentUser,
+    session: SessionDep,
+) -> None:
+    """Mark a build's change as seen, removing it from the unread changes list.
+
+    Flips ``reviewed`` on every snapshot the user owns for this build (a build
+    may have one snapshot per profile slot).  Idempotent.
+    """
+    snaps = session.exec(
+        select(OptimizationSnapshot).where(
+            OptimizationSnapshot.build_id == build_id,
+            OptimizationSnapshot.owner_id == current_user.id,
+        )
+    ).all()
+    for snap in snaps:
+        snap.reviewed = True
+        session.add(snap)
+    session.commit()

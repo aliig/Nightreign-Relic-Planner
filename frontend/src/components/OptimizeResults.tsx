@@ -5,9 +5,6 @@ import {
   Loader2,
   Pin,
   RotateCcw,
-  Sparkles,
-  TrendingDown,
-  TrendingUp,
   Trophy,
   X,
   XCircle,
@@ -27,6 +24,11 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Separator } from "@/components/ui/separator"
 import useCustomToast from "@/hooks/useCustomToast"
+import {
+  describeBuildChange,
+  rawScoreTooltip,
+  relicSummary,
+} from "@/lib/buildChange"
 
 // --- Types ---
 
@@ -521,40 +523,21 @@ export function ChangeBanner({ change }: { change?: BuildChange | null }) {
   // Only narrate changes a newer save caused. Build edits (cause "build_edit" /
   // "mixed") and run-to-run search noise (cause null) re-baseline silently.
   if (!change || change.cause !== "relics") return null
-  if (change.status === "unchanged" || change.status === "new") return null
-
-  const delta = change.delta ?? 0
-  let Icon = Sparkles
-  let tone = "border-muted-foreground/30 bg-muted/40 text-foreground"
-  let text = ""
-
-  if (change.status === "improved") {
-    Icon = TrendingUp
-    tone =
-      "border-green-500/40 bg-green-500/10 text-green-700 dark:text-green-400"
-    text = `Your best arrangement improved by ${delta} pts since your last save.`
-  } else if (change.status === "degraded") {
-    Icon = TrendingDown
-    tone = "border-destructive/40 bg-destructive/10 text-destructive"
-    text = `Your best arrangement dropped by ${Math.abs(delta)} pts since your last save.`
-  } else if (change.status === "reordered") {
-    text = "A different relic arrangement now ties your best — worth a look."
-  } else if (change.status === "broken_pin") {
-    Icon = TrendingDown
-    tone = "border-destructive/40 bg-destructive/10 text-destructive"
-    text = "A relic this build pins is no longer in your save."
-  } else if (change.status === "potentially_affected") {
-    const n = change.relevant_added ?? 0
-    text = `New relics may improve this build${n ? ` (${n} relevant)` : ""}.`
-  }
+  const d = describeBuildChange(change)
+  if (!d) return null
+  const Icon = d.icon
 
   return (
     <div
-      className={`flex items-center gap-2 rounded-md border px-3 py-2 text-sm ${tone}`}
+      className={`flex items-center gap-2 rounded-md border px-3 py-2 text-sm ${d.boxClass}`}
+      title={rawScoreTooltip(d.rawScore)}
     >
       <Icon className="h-4 w-4 shrink-0" />
-      <span>{text}</span>
-      {change.reliable === false && (
+      <span>
+        Since your last save: {d.headline}
+        {d.relics ? ` — ${d.relics.verb} ${relicSummary(d.relics)}` : ""}.
+      </span>
+      {d.reliable === false && (
         <span className="text-xs opacity-70">(approximate)</span>
       )}
     </div>

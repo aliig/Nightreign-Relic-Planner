@@ -600,7 +600,10 @@ def _apply_snapshot_for_stream(
             best_score=best_score,
             any_truncated=any_truncated,
             last_change=change_json,
-            reviewed=True,
+            # A freshly uploaded change is "unread" until the user views or
+            # dismisses it — this is what surfaces it in the builds-page
+            # "Changes since your last save" list.
+            reviewed=False,
         )
     else:
         snap.relics_hash = relics_hash
@@ -612,7 +615,8 @@ def _apply_snapshot_for_stream(
         snap.best_score = best_score
         snap.any_truncated = any_truncated
         snap.last_change = change_json
-        snap.reviewed = True
+        # Unread until viewed/dismissed — see the create branch above.
+        snap.reviewed = False
         snap.updated_at = get_datetime_utc()
     session.add(snap)
     session.commit()
