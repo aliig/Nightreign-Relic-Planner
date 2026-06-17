@@ -235,7 +235,8 @@ class CumulativeEffectGroup(BaseModel):
 
     Computed at serve time by nrplanner.cumulative.summarize_cumulative_effects
     from the curated per-effect values in resources/json/effect_bonus_values.json.
-    Only clean, unconditional, self-stackable numeric effects produce a group.
+    Self-stackable numeric effects (incl. family-less singletons) produce a group;
+    conditional ones (e.g. "at low HP") set ``conditional`` so the UI can badge them.
     """
     family: str
     mode: Literal["multiplicative", "multiplicative_reduction", "additive_flat"]
@@ -244,6 +245,9 @@ class CumulativeEffectGroup(BaseModel):
     cumulative_value: float          # product (mult), reduction fraction (reduction), or sum (flat)
     bonus_percent: Optional[float] = None  # set for mult/reduction; None for additive_flat
     bonus_display: str               # preformatted, e.g. "1.58× (+58%)" / "+19% Magic Negation" / "+60 Max HP"
+    # Set when the effect only applies in a context (e.g. "when HP below 40%");
+    # the UI badges it so a conditional total never reads as always-on.
+    conditional: Optional[str] = None
     is_top: bool = False             # the single biggest-bonus group (glance line)
 
 

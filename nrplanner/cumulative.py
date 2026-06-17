@@ -4,9 +4,11 @@ Pure functions (take a SourceDataHandler) that group a vessel's placed effect
 ids by family and compute the real in-game cumulative bonus per family, using
 the curated per-effect values in resources/json/effect_bonus_values.json.
 
-Only clean, unconditional, self-stackable numeric effects have curated values;
-everything else (conditional, non-stacking, curses) has no value and is silently
-ignored. See nrplanner.models.CumulativeEffectGroup for the output shape.
+Self-stackable numeric effects (including family-less singletons like weapon-class
+attack powers) have curated values; everything else (non-stacking, curses) has no
+value and is silently ignored. Conditional effects (e.g. "at low HP") carry a
+``conditional`` tag so the UI can badge them. See
+nrplanner.models.CumulativeEffectGroup for the output shape.
 """
 from __future__ import annotations
 
@@ -21,10 +23,17 @@ if TYPE_CHECKING:
 _TIER_RE = re.compile(r"\+(\d+)%?\s*$")
 
 
-def _tier_label(name: str) -> str:
-    """'+N' parsed from an effect name; '+0' when the base carries no suffix."""
+def _tier_label(name: str, multi: bool) -> str:
+    """'+N' parsed from an effect name.
+
+    A suffix-less name is the '+0' base of a tiered family when the group has
+    other tiers (``multi``); a lone singleton (e.g. 'Improved Katana Attack
+    Power') gets no label so the UI shows just '×N'.
+    """
     m = _TIER_RE.search(name)
-    return f"+{m.group(1)}" if m else "+0"
+    if m:
+        return f"+{m.group(1)}"
+    return "+0" if multi else ""
 
 
 def _fmt_num(x: float) -> str:
@@ -52,16 +61,21 @@ def summarize_cumulative_effects(
             continue
         name = ds.get_effect_name(eid)
         family = ds.get_effect_family(eid) or name
-        g = groups.setdefault(family, {"mode": bonus["mode"], "unit": bonus["unit"], "members": {}})
+        g = groups.setdefault(family, {
+            "mode": bonus["mode"], "unit": bonus["unit"],
+            "conditional": bonus.get("conditional"), "members": {},
+        })
         slot = g["members"].setdefault(name, {"count": 0, "value": bonus["value"]})
         slot["count"] += 1
 
     result: list[CumulativeEffectGroup] = []
     for family, g in groups.items():
         mode, unit, members = g["mode"], g["unit"], g["members"]
+        cond = g["conditional"]
+        multi = len(members) > 1
         # tiers strongest-first ("+4 ×3, +2 ×1, +1 ×1")
         tiers = [
-            CumulativeEffectTier(name=name, tier_label=_tier_label(name), count=info["count"])
+            CumulativeEffectTier(name=name, tier_label=_tier_label(name, multi), count=info["count"])
             for name, info in sorted(members.items(), key=lambda kv: kv[1]["value"], reverse=True)
         ]
 
@@ -70,10 +84,13 @@ def summarize_cumulative_effects(
             for info in members.values():
                 cum *= info["value"] ** info["count"]
             pct = (cum - 1) * 100
+            # "%"-unit effects read as raw multipliers ("1.58× (+58%)"); a named
+            # unit (Max HP/FP/Stamina) reads as a percent gain ("+21% Max HP").
+            display = f"{cum:.2f}× (+{pct:.0f}%)" if unit == "%" else f"+{pct:.0f}% {unit}"
             result.append(CumulativeEffectGroup(
                 family=family, mode=mode, unit=unit, tiers=tiers,
                 cumulative_value=cum, bonus_percent=pct,
-                bonus_display=f"{cum:.2f}× (+{pct:.0f}%)",
+                bonus_display=display, conditional=cond,
             ))
         elif mode == "multiplicative_reduction":
             remaining = 1.0
@@ -84,14 +101,14 @@ def summarize_cumulative_effects(
             result.append(CumulativeEffectGroup(
                 family=family, mode=mode, unit=unit, tiers=tiers,
                 cumulative_value=reduction, bonus_percent=pct,
-                bonus_display=f"+{pct:.0f}% {unit}",
+                bonus_display=f"+{pct:.0f}% {unit}", conditional=cond,
             ))
         else:  # additive_flat
             total = sum(info["value"] * info["count"] for info in members.values())
             result.append(CumulativeEffectGroup(
                 family=family, mode=mode, unit=unit, tiers=tiers,
                 cumulative_value=float(total), bonus_percent=None,
-                bonus_display=f"+{_fmt_num(total)} {unit}",
+                bonus_display=f"+{_fmt_num(total)} {unit}", conditional=cond,
             ))
 
     # Percentage groups (mult + reduction) first, biggest % first; then flat by amount.

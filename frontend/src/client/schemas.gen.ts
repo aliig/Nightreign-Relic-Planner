@@ -760,6 +760,17 @@ export const CumulativeEffectGroupSchema = {
             type: 'string',
             title: 'Bonus Display'
         },
+        conditional: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Conditional'
+        },
         is_top: {
             type: 'boolean',
             title: 'Is Top',

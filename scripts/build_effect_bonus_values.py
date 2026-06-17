@@ -69,6 +69,101 @@ SPEC: dict[str, tuple[str, str, dict[int, float]]] = {
     "Improved Sleep Resistance":        (FLAT, "Resistance", {0: 75, 1: 110, 2: 130}),
 }
 
+# Self-stackable effects that the family builder does NOT group into a +N family
+# (no numeric magnitude suffix, so get_effect_family() returns None). Keyed by the
+# exact resolved effect name; resolved to raw ids via a name->ids reverse map.
+#   name -> (mode, unit, per_copy_value, condition | None)
+# When a name here also matches an existing FAMILY base (the four "+0 base"
+# entries below), its id is the suffix-less base; cumulative.py groups it under
+# the same family name, so it unifies with the family's +1/+2 tiers.
+SINGLETON_SPEC: dict[str, tuple[str, str, float, str | None]] = {
+    # --- weapon-type attack power (1.09x; bows 1.06x) ---
+    "Improved Axe Attack Power":                  (MULT, "%", 1.09, None),
+    "Improved Bow Attack Power":                  (MULT, "%", 1.06, None),
+    "Improved Claw Attack Power":                 (MULT, "%", 1.09, None),
+    "Improved Colossal Sword Attack Power":       (MULT, "%", 1.09, None),
+    "Improved Colossal Weapon Attack Power":      (MULT, "%", 1.09, None),
+    "Improved Curved Greatsword Attack Power":    (MULT, "%", 1.09, None),
+    "Improved Curved Sword Attack Power":         (MULT, "%", 1.09, None),
+    "Improved Dagger Attack Power":               (MULT, "%", 1.09, None),
+    "Improved Fist Attack Power":                 (MULT, "%", 1.09, None),
+    "Improved Flail Attack Power":                (MULT, "%", 1.09, None),
+    "Improved Great Hammer Attack Power":         (MULT, "%", 1.09, None),
+    "Improved Great Spear Attack Power":          (MULT, "%", 1.09, None),
+    "Improved Greataxe Attack Power":             (MULT, "%", 1.09, None),
+    "Improved Greatsword Attack Power":           (MULT, "%", 1.09, None),
+    "Improved Halberd Attack Power":              (MULT, "%", 1.09, None),
+    "Improved Hammer Attack Power":               (MULT, "%", 1.09, None),
+    "Improved Heavy Thrusting Sword Attack Power": (MULT, "%", 1.09, None),
+    "Improved Katana Attack Power":               (MULT, "%", 1.09, None),
+    "Improved Reaper Attack Power":               (MULT, "%", 1.09, None),
+    "Improved Spear Attack Power":                (MULT, "%", 1.09, None),
+    "Improved Straight Sword Attack Power":       (MULT, "%", 1.09, None),
+    "Improved Thrusting Sword Attack Power":      (MULT, "%", 1.09, None),
+    "Improved Twinblade Attack Power":            (MULT, "%", 1.09, None),
+    "Improved Whip Attack Power":                 (MULT, "%", 1.09, None),
+
+    # --- spell-school sorceries / incantations (1.12x) ---
+    "Improved Bestial Incantations":          (MULT, "%", 1.12, None),
+    "Improved Carian Sword Sorcery":          (MULT, "%", 1.12, None),
+    "Improved Crystalian sorcery":            (MULT, "%", 1.12, None),
+    "Improved Dragon Communion Incantations": (MULT, "%", 1.12, None),
+    "Improved Dragon Cult Incantations":      (MULT, "%", 1.12, None),
+    "Improved Frenzied Flame Incantations":   (MULT, "%", 1.12, None),
+    "Improved Fundamentalist Incantations":   (MULT, "%", 1.12, None),
+    "Improved Giants' Flame Incantations":    (MULT, "%", 1.12, None),
+    "Improved Glintblade Sorcery":            (MULT, "%", 1.12, None),
+    "Improved Godslayer Incantations":        (MULT, "%", 1.12, None),
+    "Improved Gravity Sorcery":               (MULT, "%", 1.12, None),
+    "Improved Invisibility Sorcery":          (MULT, "%", 1.12, None),
+    "Improved Stonedigger Sorcery":           (MULT, "%", 1.12, None),
+    "Improved Thorn Sorcery":                 (MULT, "%", 1.12, None),
+
+    # --- broad / misc multiplicative attack ---
+    "Improved Melee Attack Power":                  (MULT, "%", 1.05, None),
+    "Improved Skill Attack Power":                  (MULT, "%", 1.15, None),
+    "Improved Initial Standard Attack":             (MULT, "%", 1.15, None),
+    "Improved Roar & Breath Attacks":               (MULT, "%", 1.15, None),
+    "Boosts Attack Power of Added Affinity Attacks": (MULT, "%", 1.10, None),
+
+    # --- +0 bases of existing families (suffix-less; unify by shared name) ---
+    "Improved Affinity Attack Power":   (MULT, "%", 1.05, None),
+    "Improved Sorceries":               (MULT, "%", 1.05, None),
+    "Improved Incantations":            (MULT, "%", 1.05, None),
+    "Improved Affinity Damage Negation": (RED, "Affinity Negation", 0.06, None),
+
+    # --- elemental "Damage Negation Up" singletons (10% reduction each) ---
+    "Magic Damage Negation Up":     (RED, "Magic Negation", 0.10, None),
+    "Fire Damage Negation Up":      (RED, "Fire Negation", 0.10, None),
+    "Lightning Damage Negation Up": (RED, "Lightning Negation", 0.10, None),
+    "Holy Damage Negation Up":      (RED, "Holy Negation", 0.10, None),
+
+    # --- max-stat multipliers (deep pool; per-copy multiplier on the stat) ---
+    "Increased Maximum HP":      (MULT, "Max HP", 1.10, None),
+    "Increased Maximum FP":      (MULT, "Max FP", 1.15, None),
+    "Increased Maximum Stamina": (MULT, "Max Stamina", 1.12, None),
+
+    # --- conditional (badged in UI; not always-on) ---
+    "Improved Damage Negation at Low HP": (RED, "Damage Negation", 0.16, "when HP below 40%"),
+}
+
+
+def _name_to_ids(ds: SourceDataHandler) -> dict[str, list[int]]:
+    """Reverse map of resolved effect name -> all ids that render to it."""
+    import json as _json
+
+    effects = _json.loads(
+        (Path(ds._resources_dir) / "json" / "effects.json").read_text(encoding="utf-8")
+    )
+    out: dict[str, list[int]] = {}
+    for key in effects:
+        eid = int(key)
+        try:
+            out.setdefault(ds.get_effect_name(eid), []).append(eid)
+        except Exception:
+            continue
+    return out
+
 
 def main() -> None:
     ds = SourceDataHandler()
@@ -95,13 +190,34 @@ def main() -> None:
             if mag not in seen_mags:
                 warnings.append(f"{base}: spec tier mag{mag} matched no family member")
 
+    # Family-less singletons resolved by exact name. A display name can map to
+    # several ids that behave differently by pool — e.g. "Increased Maximum HP"
+    # is the deep-pool 1.1x multiplier (stack) AND the regular-pool +100 flat
+    # boost (no_stack, "+5 vigor"). Only tag the self-stacking ids, since the
+    # whole table is about self-stacking totals and a single per-id (value, mode)
+    # can't describe both pools.
+    name_to_ids = _name_to_ids(ds)
+    for name, (mode, unit, value, cond) in SINGLETON_SPEC.items():
+        all_ids = name_to_ids.get(name) or []
+        ids = [e for e in all_ids if ds.get_effect_stacking_type(e) == "stack"]
+        if not ids:
+            kind = "no self-stacking ids" if all_ids else "name not found"
+            warnings.append(f"SINGLETON SKIPPED ({kind}): {name!r}")
+            continue
+        entry: dict[str, object] = {"value": value, "mode": mode, "unit": unit}
+        if cond is not None:
+            entry["conditional"] = cond
+        for eid in ids:
+            table[int(eid)] = dict(entry)
+
     out: dict[str, object] = {
         "_comment": (
             "GENERATED by scripts/build_effect_bonus_values.py — edit SPEC there, not this file. "
             "Keys are effect_ids. mode 'multiplicative': value=per-copy damage multiplier (1.12=+12%). "
             "'multiplicative_reduction': value=per-copy reduction fraction (0.10=-10% taken), stacks as "
-            "1-prod(1-v). 'additive_flat': value=per-copy flat amount named by unit. Clean, unconditional, "
-            "self-stackable numeric effects only; absent id => no computed total."
+            "1-prod(1-v). 'additive_flat': value=per-copy flat amount named by unit. Self-stackable "
+            "numeric effects only; absent id => no computed total. Optional 'conditional' marks effects "
+            "that only apply in a context (e.g. 'when HP below 40%') so the UI can badge them."
         ),
         "_source": "community spreadsheet NORMAL+DEEP tabs, Stackable-with-self=Yes rows",
     }

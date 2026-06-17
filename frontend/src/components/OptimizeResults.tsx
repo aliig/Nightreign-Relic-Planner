@@ -331,6 +331,18 @@ export function SlotCard({
 }
 
 /**
+ * Marks a cumulative total that only applies in a context (e.g. "when HP below
+ * 40%") so it never reads as an always-on bonus.
+ */
+function ConditionalBadge({ text }: { text: string }) {
+  return (
+    <span className="ml-1 rounded bg-amber-500/15 px-1 py-px text-[10px] font-medium text-amber-600 dark:text-amber-400 shrink-0 whitespace-nowrap">
+      {text}
+    </span>
+  )
+}
+
+/**
  * Cumulative stacked-effect summary shown under each vessel: the single biggest
  * bonus at a glance, plus a "see all" toggle listing every family's cumulative %.
  * Rendered outside the (clickable) CardHeader so it stays visible when collapsed
@@ -353,6 +365,7 @@ function CumulativeSummary({
           <span className="font-mono text-muted-foreground shrink-0">
             {top.bonus_display}
           </span>
+          {top.conditional && <ConditionalBadge text={top.conditional} />}
         </span>
         {groups.length > 1 && (
           <button
@@ -378,7 +391,14 @@ function CumulativeSummary({
             >
               <span className="text-muted-foreground truncate">
                 <span className="text-foreground">{g.family}</span>{" "}
-                {g.tiers.map((t) => `${t.tier_label} ×${t.count}`).join(", ")}
+                {g.tiers
+                  .map((t) =>
+                    t.tier_label
+                      ? `${t.tier_label} ×${t.count}`
+                      : `×${t.count}`,
+                  )
+                  .join(", ")}
+                {g.conditional && <ConditionalBadge text={g.conditional} />}
               </span>
               <span className="font-mono shrink-0">{g.bonus_display}</span>
             </div>

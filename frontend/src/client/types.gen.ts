@@ -165,6 +165,7 @@ export type CumulativeEffectGroup = {
     cumulative_value: number;
     bonus_percent?: (number | null);
     bonus_display: string;
+    conditional?: (string | null);
     is_top?: boolean;
 };
 
