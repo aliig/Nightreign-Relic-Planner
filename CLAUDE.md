@@ -184,4 +184,4 @@ Do not loop blindly.
 
 ## Etc.
 
-For Git operations, always use the github MCP server. Do not use MCP_DOCKER for version control tasks." 
+For Git operations, use the git CLI directly (via the Bash tool). For GitHub-specific actions (PRs, issues), use the `gh` CLI. Do not use the MCP_DOCKER server for version control tasks. 
