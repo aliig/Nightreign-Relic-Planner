@@ -150,6 +150,35 @@ export type BuildUpdate = {
 } | null);
 };
 
+/**
+ * Cumulative in-game bonus for one effect family across a whole vessel.
+ *
+ * Computed at serve time by nrplanner.cumulative.summarize_cumulative_effects
+ * from the curated per-effect values in resources/json/effect_bonus_values.json.
+ * Only clean, unconditional, self-stackable numeric effects produce a group.
+ */
+export type CumulativeEffectGroup = {
+    family: string;
+    mode: 'multiplicative' | 'multiplicative_reduction' | 'additive_flat';
+    unit: string;
+    tiers: Array<CumulativeEffectTier>;
+    cumulative_value: number;
+    bonus_percent?: (number | null);
+    bonus_display: string;
+    is_top?: boolean;
+};
+
+export type mode = 'multiplicative' | 'multiplicative_reduction' | 'additive_flat';
+
+/**
+ * One tier within a stacked-effect group (e.g. '+4' present 3 times).
+ */
+export type CumulativeEffectTier = {
+    name: string;
+    tier_label: string;
+    count: number;
+};
+
 export type DebugExportRequest = {
     mode?: 'view' | 'full';
     build_id?: (string | null);
@@ -160,7 +189,7 @@ export type DebugExportRequest = {
     note?: (string | null);
 };
 
-export type mode = 'view' | 'full';
+export type mode2 = 'view' | 'full';
 
 export type FeaturedBuildPublic = {
     id: string;
@@ -485,6 +514,7 @@ export type VesselResult = {
     meets_requirements?: boolean;
     missing_requirements?: Array<(number | string)>;
     search_truncated?: boolean;
+    cumulative_effects?: Array<CumulativeEffectGroup>;
 };
 
 /**

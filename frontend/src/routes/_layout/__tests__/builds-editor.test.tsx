@@ -203,6 +203,40 @@ describe("Effect Browser – Groups section visibility", () => {
   })
 })
 
+describe("Effect Browser – family limit toggle", () => {
+  it("cycles the family limit 1→2→3→unlimited without assigning the family", () => {
+    mockFamilies = [
+      {
+        name: "Poise",
+        member_names: ["Poise +1", "Poise +2"],
+        member_ids: [1, 2],
+      },
+    ]
+    mockEffects = [
+      { id: 1, name: "Poise +1" },
+      { id: 2, name: "Poise +2" },
+    ]
+
+    renderEditor()
+
+    // The family row carries an unset limit toggle ("#"); clicking cycles it.
+    fireEvent.click(screen.getByText("#"))
+    expect(screen.getByText("≤1")).toBeInTheDocument()
+    fireEvent.click(screen.getByText("≤1"))
+    expect(screen.getByText("≤2")).toBeInTheDocument()
+    fireEvent.click(screen.getByText("≤2"))
+    expect(screen.getByText("≤3")).toBeInTheDocument()
+    fireEvent.click(screen.getByText("≤3"))
+    expect(screen.getByText("#")).toBeInTheDocument()
+
+    // Clicking the toggle must NOT assign the family to a group (the row's own
+    // onClick). Assigned families are filtered out of the browser, so the row
+    // would disappear — and the group chip would read "Poise (group)" instead.
+    expect(screen.getByText("Poise")).toBeInTheDocument()
+    expect(screen.queryByText("Poise (group)")).not.toBeInTheDocument()
+  })
+})
+
 describe("Effect Browser – 'Improved Damage Negation at Low HP' regression", () => {
   it("does not appear under Groups when families list excludes it", () => {
     // Correct backend behaviour: this effect is NOT a family (no real +1/+2 params)

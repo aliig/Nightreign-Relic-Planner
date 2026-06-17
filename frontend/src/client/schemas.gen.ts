@@ -719,6 +719,84 @@ export const BuildsPublicSchema = {
     title: 'BuildsPublic'
 } as const;
 
+export const CumulativeEffectGroupSchema = {
+    properties: {
+        family: {
+            type: 'string',
+            title: 'Family'
+        },
+        mode: {
+            type: 'string',
+            enum: ['multiplicative', 'multiplicative_reduction', 'additive_flat'],
+            title: 'Mode'
+        },
+        unit: {
+            type: 'string',
+            title: 'Unit'
+        },
+        tiers: {
+            items: {
+                '$ref': '#/components/schemas/CumulativeEffectTier'
+            },
+            type: 'array',
+            title: 'Tiers'
+        },
+        cumulative_value: {
+            type: 'number',
+            title: 'Cumulative Value'
+        },
+        bonus_percent: {
+            anyOf: [
+                {
+                    type: 'number'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Bonus Percent'
+        },
+        bonus_display: {
+            type: 'string',
+            title: 'Bonus Display'
+        },
+        is_top: {
+            type: 'boolean',
+            title: 'Is Top',
+            default: false
+        }
+    },
+    type: 'object',
+    required: ['family', 'mode', 'unit', 'tiers', 'cumulative_value', 'bonus_display'],
+    title: 'CumulativeEffectGroup',
+    description: `Cumulative in-game bonus for one effect family across a whole vessel.
+
+Computed at serve time by nrplanner.cumulative.summarize_cumulative_effects
+from the curated per-effect values in resources/json/effect_bonus_values.json.
+Only clean, unconditional, self-stackable numeric effects produce a group.`
+} as const;
+
+export const CumulativeEffectTierSchema = {
+    properties: {
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        tier_label: {
+            type: 'string',
+            title: 'Tier Label'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        }
+    },
+    type: 'object',
+    required: ['name', 'tier_label', 'count'],
+    title: 'CumulativeEffectTier',
+    description: "One tier within a stacked-effect group (e.g. '+4' present 3 times)."
+} as const;
+
 export const DebugExportRequestSchema = {
     properties: {
         mode: {
@@ -2116,6 +2194,13 @@ export const VesselResultSchema = {
             type: 'boolean',
             title: 'Search Truncated',
             default: false
+        },
+        cumulative_effects: {
+            items: {
+                '$ref': '#/components/schemas/CumulativeEffectGroup'
+            },
+            type: 'array',
+            title: 'Cumulative Effects'
         }
     },
     type: 'object',

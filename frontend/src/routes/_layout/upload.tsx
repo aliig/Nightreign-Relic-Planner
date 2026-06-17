@@ -24,6 +24,7 @@ import {
   rawScoreTooltip,
   relicSummary,
 } from "@/lib/buildChange"
+import { computeOverallPct, optimizingLabel } from "@/lib/optimizeProgress"
 import { formatRelativeTime, handleError } from "@/utils"
 
 export const Route = createFileRoute("/_layout/upload")({
@@ -126,6 +127,15 @@ async function runUploadStream(
   let uploadData: any = null
   const changes: BuildChange[] = []
 
+  // Accumulate progress so per-build context (which build, of how many) survives
+  // into the per-vessel ticks — the backend sends build identity only on
+  // `optimize_start`, not on each `optimize_progress`.
+  let progress: StreamUploadProgress = { phase: "parsing" }
+  const emit = (patch: Partial<StreamUploadProgress>) => {
+    progress = { ...progress, ...patch }
+    onProgress(progress)
+  }
+
   while (true) {
     const { done, value } = await reader.read()
     if (done) break
@@ -141,20 +151,20 @@ async function runUploadStream(
 
       if (payload.type === "upload_complete") {
         uploadData = payload.data
-        onProgress({ phase: "optimizing", buildIndex: 0, buildTotal: 0 })
+        emit({ phase: "optimizing" })
       } else if (payload.type === "optimize_start") {
-        onProgress({
-          phase: "optimizing",
+        // New build: set its identity, clear the prior build's vessel sub-progress.
+        emit({
           buildIndex: payload.index,
           buildTotal: payload.total,
           buildName: payload.build_name,
+          vessel: undefined,
+          vesselTotal: undefined,
+          vesselName: undefined,
         })
       } else if (payload.type === "optimize_progress") {
-        onProgress({
-          phase: "optimizing",
-          buildIndex: undefined,
-          buildTotal: undefined,
-          buildName: payload.build_name,
+        // Vessel tick: merges onto the current build's identity from optimize_start.
+        emit({
           vessel: payload.vessel,
           vesselTotal: payload.total,
           vesselName: payload.name,
@@ -162,7 +172,7 @@ async function runUploadStream(
       } else if (payload.type === "optimize_done") {
         if (payload.change) changes.push(payload.change as BuildChange)
       } else if (payload.type === "complete") {
-        onProgress({ phase: "done" })
+        emit({ phase: "done" })
         return {
           profiles: uploadData?.profiles ?? [],
           profileCount: uploadData?.profile_count ?? 0,
@@ -413,20 +423,9 @@ function UploadPage() {
           {streamProgress?.phase === "optimizing" && (
             <>
               <p className="text-sm text-muted-foreground">
-                {streamProgress.buildName
-                  ? `Optimizing "${streamProgress.buildName}"${streamProgress.vessel ? ` (${streamProgress.vessel}/${streamProgress.vesselTotal} vessels)` : ""}…`
-                  : streamProgress.buildTotal
-                    ? `Optimizing ${streamProgress.buildTotal} build${streamProgress.buildTotal !== 1 ? "s" : ""}…`
-                    : "Optimizing builds…"}
+                {optimizingLabel(streamProgress)}
               </p>
-              {streamProgress.vessel != null &&
-                streamProgress.vesselTotal != null && (
-                  <Progress
-                    value={
-                      (streamProgress.vessel / streamProgress.vesselTotal) * 100
-                    }
-                  />
-                )}
+              <Progress value={computeOverallPct(streamProgress)} />
             </>
           )}
           {!streamProgress && (

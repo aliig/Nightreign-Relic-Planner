@@ -83,6 +83,36 @@ class TestInlineMode:
             assert "total_score" in result
             assert "assignments" in result
 
+    def test_cumulative_effects_in_response(self, client: TestClient) -> None:
+        """A placed clean-numeric effect surfaces a cumulative_effects group."""
+        # 7001500 == "Magic Attack Power Up" (+0). Require it so it gets placed.
+        magic = 7001500
+        build = {**_MINIMAL_BUILD, "required_effects": [magic]}
+        relics = [
+            {**_MINIMAL_RELIC, "ga_handle": 0xC0000010 + i, "color": color,
+             "effects": [magic, EMPTY, EMPTY]}
+            for i, color in enumerate(("Red", "Blue", "Green"))
+        ]
+        response = client.post(
+            "/api/v1/optimize/",
+            json={"build": build, "relics": relics, "top_n": 10},
+        )
+        assert response.status_code == 200
+        results = response.json()
+        # Field is always present (serialized) on every result.
+        assert all("cumulative_effects" in r for r in results)
+        # Wherever the relic was placed, the summary names the family.
+        placed = [
+            r for r in results
+            if any(a["relic"] and magic in a["relic"]["effects"] for a in r["assignments"])
+        ]
+        assert placed, "magic-attack relic should be placed in at least one vessel"
+        groups = placed[0]["cumulative_effects"]
+        mag_group = next(g for g in groups if g["family"] == "Magic Attack Power Up")
+        assert mag_group["mode"] == "multiplicative"
+        assert mag_group["cumulative_value"] >= 1.045
+        assert mag_group["bonus_display"]  # non-empty preformatted string
+
     def test_missing_build_returns_422(self, client: TestClient) -> None:
         """Inline mode requires both build and relics."""
         response = client.post(

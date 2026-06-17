@@ -199,7 +199,7 @@ function AuthOptimizeForm({ buildId }: { buildId: string }) {
         <div className="space-y-2">
           <p className="text-sm text-muted-foreground">
             {progress
-              ? `Optimized ${progress.vessel} of ${progress.total} vessels (${progress.name})…`
+              ? `Optimizing… ${progress.vessel} of ${progress.total} vessels`
               : "Starting…"}
           </p>
           <Progress
@@ -461,7 +461,7 @@ function AnonOptimizeForm({ buildId }: { buildId: string }) {
         <div className="space-y-2">
           <p className="text-sm text-muted-foreground">
             {progress
-              ? `Optimized ${progress.vessel} of ${progress.total} vessels (${progress.name})…`
+              ? `Optimizing… ${progress.vessel} of ${progress.total} vessels`
               : "Starting…"}
           </p>
           <Progress

@@ -134,6 +134,46 @@ class TestSnapshotCache:
         # Same scoring-relevant content -> same signature as the source.
         assert clone_row.build_hash == source_row.build_hash
 
+    def test_cumulative_effects_served_but_not_persisted(
+        self,
+        client: TestClient,
+        normal_user_token_headers: dict[str, str],
+        db: Session,
+    ) -> None:
+        """cumulative_effects is a serve-time field: present on every response
+        (POST + GET /snapshot) but never written into the stored snapshot."""
+        user = _test_user(db)
+        profile = _seed_profile_with_relics(db, user.id, with_hash=True)
+        build = _create_build(client, normal_user_token_headers)
+
+        run = client.post(
+            "/api/v1/optimize/",
+            headers=normal_user_token_headers,
+            json={"build_id": build["id"], "profile_id": str(profile.id), "top_n": 5},
+        )
+        assert run.status_code == 200, run.text
+        assert all("cumulative_effects" in r for r in run.json())
+
+        # The persisted snapshot must NOT carry the field.
+        snap = db.exec(
+            select(OptimizationSnapshot).where(
+                OptimizationSnapshot.build_id == uuid.UUID(build["id"]),
+                OptimizationSnapshot.slot_index == profile.slot_index,
+            )
+        ).first()
+        assert snap is not None and snap.full_results
+        for layout in snap.full_results:
+            assert "cumulative_effects" not in layout
+
+        # GET /snapshot reconstructs and re-attaches it at serve time.
+        body = client.get(
+            "/api/v1/optimize/snapshot",
+            params={"build_id": build["id"], "profile_id": str(profile.id)},
+            headers=normal_user_token_headers,
+        ).json()
+        assert body is not None
+        assert all("cumulative_effects" in r for r in body["results"])
+
     def test_snapshot_fresh_after_optimize_then_stale_after_edit(
         self,
         client: TestClient,

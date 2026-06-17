@@ -733,7 +733,14 @@ class SourceDataHandler:
         return None
 
     def get_family_magnitude_weight(self, effect_id: int, base_weight: int) -> int:
-        """Scale weight by rank/total within the effect's family."""
+        """Scale a family weight down to one of its tiers.
+
+        Proportional-to-top: a tier's weight is its real in-game bonus magnitude
+        relative to the family's strongest tier (so +0 still earns the share of
+        the top its bonus represents, e.g. Magic Attack +0 -> 37.5% of +4's
+        weight). Falls back to the old linear rank/total for families that have
+        no curated bonus values in effect_bonus_values.json.
+        """
         self._ensure_families()
         info = self._effect_id_to_family.get(effect_id)
         if not info:
@@ -742,7 +749,15 @@ class SourceDataHandler:
                 info = self._effect_id_to_family.get(text_id)
         if not info:
             return base_weight
-        _, rank, total = info
+        family, rank, total = info
+
+        bonus = self.get_effect_bonus_value(effect_id)
+        if bonus is not None:
+            self._ensure_family_top_magnitude()
+            top = self._family_top_mag.get(family, 0.0)
+            if top > 0:
+                return int(base_weight * self._bonus_magnitude(bonus) / top)
+        # Fallback: linear rank within the family (uncurated families).
         return int(base_weight * rank / total)
 
     def get_family_effect_ids(self, family_name: str) -> set[int]:
@@ -756,20 +771,100 @@ class SourceDataHandler:
         return ids
 
     def get_all_families_list(self) -> list[dict]:
-        """All effect families for the build UI."""
+        """All effect families for the build UI.
+
+        Each member also carries ``weight_fraction``: the share of the family
+        weight that tier receives under proportional-to-top scaling (mirrors
+        get_family_magnitude_weight, so the editor can preview per-tier weights
+        as ``round(family_weight * weight_fraction)``). Falls back to linear
+        rank/total for families without curated bonus values.
+        """
         self._ensure_families()
+        self._ensure_family_top_magnitude()
         results = []
         for base, fam in self._effect_families.items():
+            members = fam["members"]
+            total = len(members)
+            top = self._family_top_mag.get(base, 0.0)
             ids: set[int] = set()
-            for m in fam["members"]:
+            tiers: list[dict] = []
+            for rank, m in enumerate(members, 1):
                 ids.update(m["effect_ids"])
+                fraction = rank / total  # linear fallback
+                if top > 0 and m["effect_ids"]:
+                    bonus = self.get_effect_bonus_value(m["effect_ids"][0])
+                    if bonus is not None:
+                        fraction = self._bonus_magnitude(bonus) / top
+                tiers.append({"name": m["name"], "weight_fraction": round(fraction, 4)})
             if ids:
                 results.append({
                     "name": base,
-                    "member_names": [m["name"] for m in fam["members"]],
+                    "member_names": [m["name"] for m in members],
                     "member_ids": ids,
+                    "tiers": tiers,
                 })
         return sorted(results, key=lambda x: x["name"])
+
+    # ------------------------------------------------------------------
+    # Effect bonus values (cumulative summary + magnitude weighting)
+    # ------------------------------------------------------------------
+
+    def _load_bonus_values(self) -> None:
+        import orjson
+        path = self._resources_dir / "json" / "effect_bonus_values.json"
+        self._bonus_values: dict[int, dict] = {}
+        if not path.exists():
+            return
+        try:
+            raw = orjson.loads(path.read_bytes())
+        except Exception:
+            return
+        for k, v in raw.items():
+            if k.startswith("_"):
+                continue
+            self._bonus_values[int(k)] = v
+
+    def _ensure_bonus_values(self) -> None:
+        if not hasattr(self, "_bonus_values"):
+            self._load_bonus_values()
+
+    def get_effect_bonus_value(self, effect_id: int) -> Optional[dict]:
+        """Per-copy bonus ``{value, mode, unit}`` for a clean numeric effect, or None.
+
+        Mirrors get_effect_family's attachTextId alias fallback so aliased ids resolve.
+        """
+        self._ensure_bonus_values()
+        hit = self._bonus_values.get(effect_id)
+        if hit is not None:
+            return hit
+        text_id = self.get_effect_text_id(effect_id)
+        if text_id != -1 and text_id != effect_id:
+            return self._bonus_values.get(text_id)
+        return None
+
+    @staticmethod
+    def _bonus_magnitude(bonus: dict) -> float:
+        """Per-copy bonus 'size' for weight scaling (0 == no effect / 1.0x)."""
+        if bonus["mode"] == "multiplicative":
+            return bonus["value"] - 1.0
+        return bonus["value"]  # additive flat amount, or reduction fraction
+
+    def _ensure_family_top_magnitude(self) -> None:
+        """Lazily map family base name -> max bonus magnitude across its tiers."""
+        if hasattr(self, "_family_top_mag"):
+            return
+        self._ensure_bonus_values()
+        self._ensure_families()
+        top: dict[str, float] = {}
+        for eid, bonus in self._bonus_values.items():
+            info = self._effect_id_to_family.get(eid)
+            if not info:
+                continue
+            fam = info[0]
+            mag = self._bonus_magnitude(bonus)
+            if mag > top.get(fam, 0.0):
+                top[fam] = mag
+        self._family_top_mag = top
 
     # ------------------------------------------------------------------
     # Pool queries

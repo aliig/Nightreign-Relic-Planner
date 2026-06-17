@@ -16,7 +16,7 @@ import {
   useSuspenseQuery,
 } from "@tanstack/react-query"
 import { createFileRoute, useParams } from "@tanstack/react-router"
-import { Pin, Plus, Search, Trash2, X } from "lucide-react"
+import { Info, Pin, Plus, Search, Trash2, X } from "lucide-react"
 import {
   Suspense,
   useCallback,
@@ -93,7 +93,14 @@ type EffectMeta = {
   is_debuff?: boolean
   source?: string | null
 }
-type FamilyMeta = { name: string; member_names: string[]; member_ids: number[] }
+type FamilyMeta = {
+  name: string
+  member_names: string[]
+  member_ids: number[]
+  // Per-tier share of the family weight under proportional-to-top scaling
+  // (mirrors the backend scorer). Editor previews round(family_weight * fraction).
+  tiers?: { name: string; weight_fraction: number }[]
+}
 type RelicForPicker = {
   ga_handle: number
   name: string
@@ -208,6 +215,46 @@ function getLabelForWeight(weight: number): { label: string; color: string } {
 // DnD sub-components
 // ---------------------------------------------------------------------------
 
+function LimitToggleButton({
+  limit,
+  onLimitChange,
+  color,
+  revealClass,
+  unsetTitle = "Click to limit how many slots can have this effect",
+}: {
+  limit?: number
+  onLimitChange: (limit: number | undefined) => void
+  color?: string
+  revealClass: string
+  unsetTitle?: string
+}) {
+  return (
+    <button
+      type="button"
+      onPointerDown={(e) => e.stopPropagation()}
+      onClick={(e) => {
+        e.stopPropagation()
+        if (limit === undefined) onLimitChange(1)
+        else if (limit >= 3) onLimitChange(undefined)
+        else onLimitChange(limit + 1)
+      }}
+      className={`text-[10px] leading-none px-1 rounded hover:opacity-70 ${
+        limit !== undefined
+          ? "border opacity-100"
+          : `border border-transparent opacity-0 ${revealClass}`
+      }`}
+      style={limit !== undefined && color ? { borderColor: color } : undefined}
+      title={
+        limit !== undefined
+          ? `Max ${limit} across all slots (click to change, cycles 1→2→3→unlimited)`
+          : unsetTitle
+      }
+    >
+      {limit !== undefined ? `≤${limit}` : "#"}
+    </button>
+  )
+}
+
 function DraggableChip({
   dragId,
   name,
@@ -245,28 +292,12 @@ function DraggableChip({
     >
       {name}
       {onLimitChange && (
-        <button
-          type="button"
-          onPointerDown={(e) => e.stopPropagation()}
-          onClick={() => {
-            if (limit === undefined) onLimitChange(1)
-            else if (limit >= 3) onLimitChange(undefined)
-            else onLimitChange(limit + 1)
-          }}
-          className={`text-[10px] leading-none px-1 rounded hover:opacity-70 ${
-            limit !== undefined
-              ? "border opacity-100"
-              : "border border-transparent opacity-0 group-hover/chip:opacity-40"
-          }`}
-          style={limit !== undefined ? { borderColor: color } : undefined}
-          title={
-            limit !== undefined
-              ? `Max ${limit} across all slots (click to change, cycles 1→2→3→unlimited)`
-              : "Click to limit how many slots can have this effect"
-          }
-        >
-          {limit !== undefined ? `≤${limit}` : "#"}
-        </button>
+        <LimitToggleButton
+          limit={limit}
+          onLimitChange={onLimitChange}
+          color={color}
+          revealClass="group-hover/chip:opacity-40"
+        />
       )}
       <button
         type="button"
@@ -330,7 +361,7 @@ function DraggableBrowserRow({
       {...attributes}
       onClick={onClick}
       className={cn(
-        "flex items-center rounded px-2 py-1.5 hover:bg-gradient-to-r hover:from-accent/40 hover:to-transparent transition-colors gap-2 cursor-grab active:cursor-grabbing select-none",
+        "group/row flex items-center rounded px-2 py-1.5 hover:bg-gradient-to-r hover:from-accent/40 hover:to-transparent transition-colors gap-2 cursor-grab active:cursor-grabbing select-none",
         isDragging && "opacity-40",
       )}
     >
@@ -698,6 +729,10 @@ function BuildEditorUI({
   )
 
   const effectMap = new Map(effects.map((e) => [e.id, e]))
+  const familyByName = useMemo(
+    () => new Map(families.map((f) => [f.name, f])),
+    [families],
+  )
 
   // Groups sorted by weight descending for display; zone IDs use original array index
   const sortedGroupIndices = useMemo(
@@ -1139,41 +1174,88 @@ function BuildEditorUI({
                           </p>
                         ) : (
                           <div className="flex flex-wrap gap-2">
-                            {group.families.map((familyName) => (
-                              <DraggableChip
-                                key={`family:${familyName}`}
-                                dragId={`family:${familyName}`}
-                                name={`${familyName} (group)`}
-                                color={section.color}
-                                dragData={{
-                                  type: "family",
-                                  familyName,
-                                  sourceZone: `zone:group:${idx}`,
-                                }}
-                                onRemove={() =>
-                                  onGroupsChange(
-                                    groups.map((g, i) =>
-                                      i === idx
-                                        ? {
-                                            ...g,
-                                            families: g.families.filter(
-                                              (n) => n !== familyName,
-                                            ),
-                                          }
-                                        : g,
-                                    ),
-                                  )
-                                }
-                                limit={familyLimits[familyName]}
-                                onLimitChange={(newLimit) => {
-                                  const next = { ...familyLimits }
-                                  if (newLimit === undefined)
-                                    delete next[familyName]
-                                  else next[familyName] = newLimit
-                                  onFamilyLimitsChange(next)
-                                }}
-                              />
-                            ))}
+                            {group.families.map((familyName) => {
+                              const famTiers =
+                                familyByName.get(familyName)?.tiers
+                              return (
+                                <div
+                                  key={`family:${familyName}`}
+                                  className="flex items-center gap-1"
+                                >
+                                  <DraggableChip
+                                    dragId={`family:${familyName}`}
+                                    name={`${familyName} (group)`}
+                                    color={section.color}
+                                    dragData={{
+                                      type: "family",
+                                      familyName,
+                                      sourceZone: `zone:group:${idx}`,
+                                    }}
+                                    onRemove={() =>
+                                      onGroupsChange(
+                                        groups.map((g, i) =>
+                                          i === idx
+                                            ? {
+                                                ...g,
+                                                families: g.families.filter(
+                                                  (n) => n !== familyName,
+                                                ),
+                                              }
+                                            : g,
+                                        ),
+                                      )
+                                    }
+                                    limit={familyLimits[familyName]}
+                                    onLimitChange={(newLimit) => {
+                                      const next = { ...familyLimits }
+                                      if (newLimit === undefined)
+                                        delete next[familyName]
+                                      else next[familyName] = newLimit
+                                      onFamilyLimitsChange(next)
+                                    }}
+                                  />
+                                  {famTiers &&
+                                    famTiers.length > 0 &&
+                                    group.weight !== 0 && (
+                                      <Tooltip>
+                                        <TooltipTrigger asChild>
+                                          <button
+                                            type="button"
+                                            className="text-muted-foreground hover:text-foreground shrink-0"
+                                            aria-label={`Per-tier weights for ${familyName}`}
+                                          >
+                                            <Info className="h-3.5 w-3.5" />
+                                          </button>
+                                        </TooltipTrigger>
+                                        <TooltipContent
+                                          side="right"
+                                          className="space-y-1"
+                                        >
+                                          <p className="text-xs font-medium">
+                                            Tier weights · family {group.weight}
+                                          </p>
+                                          {[...famTiers].reverse().map((t) => (
+                                            <div
+                                              key={t.name}
+                                              className="flex justify-between gap-3 text-xs"
+                                            >
+                                              <span className="text-muted-foreground">
+                                                {t.name}
+                                              </span>
+                                              <span className="font-mono">
+                                                {Math.round(
+                                                  group.weight *
+                                                    t.weight_fraction,
+                                                )}
+                                              </span>
+                                            </div>
+                                          ))}
+                                        </TooltipContent>
+                                      </Tooltip>
+                                    )}
+                                </div>
+                              )
+                            })}
                             {group.effects.map((id) => {
                               const e = effectMap.get(id)
                               if (!e) return null
@@ -1361,6 +1443,17 @@ function BuildEditorUI({
                       >
                         {family.name}
                       </span>
+                      <LimitToggleButton
+                        limit={familyLimits[family.name]}
+                        onLimitChange={(newLimit) => {
+                          const next = { ...familyLimits }
+                          if (newLimit === undefined) delete next[family.name]
+                          else next[family.name] = newLimit
+                          onFamilyLimitsChange(next)
+                        }}
+                        revealClass="group-hover/row:opacity-40"
+                        unsetTitle="Limit how many relic slots may count effects from this family — applies even when members are weighted individually"
+                      />
                     </DraggableBrowserRow>
                   ))}
                   {filteredEffects.length > 0 && (

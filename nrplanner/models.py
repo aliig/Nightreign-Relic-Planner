@@ -223,6 +223,30 @@ class SlotAssignment(BaseModel):
     breakdown: list[dict[str, Any]]
 
 
+class CumulativeEffectTier(BaseModel):
+    """One tier within a stacked-effect group (e.g. '+4' present 3 times)."""
+    name: str          # full effect name, e.g. "Magic Attack Power Up +4"
+    tier_label: str    # "+4" (display only; "+0" when the base has no suffix)
+    count: int         # how many copies of this tier are placed on the vessel
+
+
+class CumulativeEffectGroup(BaseModel):
+    """Cumulative in-game bonus for one effect family across a whole vessel.
+
+    Computed at serve time by nrplanner.cumulative.summarize_cumulative_effects
+    from the curated per-effect values in resources/json/effect_bonus_values.json.
+    Only clean, unconditional, self-stackable numeric effects produce a group.
+    """
+    family: str
+    mode: Literal["multiplicative", "multiplicative_reduction", "additive_flat"]
+    unit: str
+    tiers: list[CumulativeEffectTier]
+    cumulative_value: float          # product (mult), reduction fraction (reduction), or sum (flat)
+    bonus_percent: Optional[float] = None  # set for mult/reduction; None for additive_flat
+    bonus_display: str               # preformatted, e.g. "1.58× (+58%)" / "+19% Magic Negation" / "+60 Max HP"
+    is_top: bool = False             # the single biggest-bonus group (glance line)
+
+
 class VesselResult(BaseModel):
     """Optimization result for a single vessel. Ready as FastAPI response."""
     vessel_id: int
@@ -238,6 +262,9 @@ class VesselResult(BaseModel):
     # completing — the returned layout is the best found so far (always >=
     # greedy) but may not be provably optimal.
     search_truncated: bool = False
+    # Cumulative stacked-effect summary. Populated at serve time by the optimize
+    # routes (NOT stored in the optimization snapshot); empty on persisted rows.
+    cumulative_effects: list[CumulativeEffectGroup] = Field(default_factory=list)
 
     def layout_fingerprint(self) -> tuple:
         """Hashable key identifying the functional layout (ignores ga_handle).

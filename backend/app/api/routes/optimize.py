@@ -47,6 +47,7 @@ from nrplanner.changes import (
     serialize_top_layouts,
 )
 from nrplanner.constants import CHARACTER_NAMES
+from nrplanner.cumulative import summarize_cumulative_effects
 from nrplanner.models import (
     BuildChange,
     BuildDefinition,
@@ -290,7 +291,9 @@ def _apply_snapshot(
     change.cause = _attribute_cause(snap, relics_hash, build_hash, gdv)
 
     top_layouts = serialize_top_layouts(results)
-    full_results = [r.model_dump(mode="json") for r in results]
+    # cumulative_effects is a serve-time presentation field (recomputed on every
+    # response, incl. GET /snapshot) — never persist it in the snapshot.
+    full_results = [r.model_dump(mode="json", exclude={"cumulative_effects"}) for r in results]
     best_score = max((r.total_score for r in results), default=0)
     any_truncated = any(r.search_truncated for r in results)
     change_json = change.model_dump(mode="json")
@@ -329,6 +332,24 @@ def _apply_snapshot(
 
 
 # ---------------------------------------------------------------------------
+# Cumulative stacked-effect summary (serve-time enrichment; not persisted)
+# ---------------------------------------------------------------------------
+
+def _attach_cumulative(results: list[VesselResult], ds: Any) -> None:
+    """Populate each VesselResult.cumulative_effects in place from placed relics.
+
+    Pure/derived: computed fresh on every response (POST, stream, snapshot,
+    strike) so the field never needs to live in the persisted snapshot.
+    """
+    for r in results:
+        ids: list[int] = []
+        for a in r.assignments:
+            if a.relic is not None:
+                ids.extend(a.relic.all_effects)
+        r.cumulative_effects = summarize_cumulative_effects(ids, ds)
+
+
+# ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
 
@@ -356,6 +377,7 @@ def run_optimize(
         except Exception:
             # Snapshotting is best-effort — never fail the optimize response.
             session.rollback()
+    _attach_cumulative(results, ds)
     return results
 
 
@@ -404,6 +426,7 @@ def run_optimize_stream(
                                 )
                         except Exception:
                             change = None  # best-effort; don't break the stream
+                    _attach_cumulative(results, ds)
                     payload = {
                         "type": "result",
                         "data": [r.model_dump(mode="json") for r in results],
@@ -470,6 +493,7 @@ def optimize_slot_alternative(
         return None
     # optimize_locked_slot leaves vessel_id for the caller to assign.
     results[0].vessel_id = req.vessel_id
+    _attach_cumulative(results, ds)
     return results[0]
 
 
@@ -486,6 +510,7 @@ def get_snapshot(
     profile_id: uuid.UUID,
     current_user: CurrentUser,
     session: SessionDep,
+    ds: GameDataDep,
 ) -> SnapshotResponse | None:
     """Return cached optimization results if the snapshot is fresh.
 
@@ -528,6 +553,7 @@ def get_snapshot(
     if not snap.full_results:
         return None
     results = [VesselResult(**layout) for layout in snap.full_results]
+    _attach_cumulative(results, ds)
     last_change = BuildChange(**snap.last_change) if snap.last_change else None
 
     return SnapshotResponse(

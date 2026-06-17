@@ -8,6 +8,7 @@ import {
   Trophy,
   X,
   XCircle,
+  Zap,
 } from "lucide-react"
 import { useEffect, useState } from "react"
 
@@ -329,6 +330,65 @@ export function SlotCard({
   )
 }
 
+/**
+ * Cumulative stacked-effect summary shown under each vessel: the single biggest
+ * bonus at a glance, plus a "see all" toggle listing every family's cumulative %.
+ * Rendered outside the (clickable) CardHeader so it stays visible when collapsed
+ * and its toggle never triggers the card's expand/collapse.
+ */
+function CumulativeSummary({
+  groups,
+}: {
+  groups: VesselResult["cumulative_effects"]
+}) {
+  const [open, setOpen] = useState(false)
+  if (!groups || groups.length === 0) return null
+  const top = groups.find((g) => g.is_top) ?? groups[0]
+  return (
+    <div className="px-6 pb-3 text-xs">
+      <div className="flex items-center justify-between gap-2">
+        <span className="flex items-center gap-1.5 min-w-0">
+          <Zap className="h-3.5 w-3.5 text-amber-500 shrink-0" />
+          <span className="font-medium truncate">{top.family}</span>
+          <span className="font-mono text-muted-foreground shrink-0">
+            {top.bonus_display}
+          </span>
+        </span>
+        {groups.length > 1 && (
+          <button
+            type="button"
+            onClick={() => setOpen((v) => !v)}
+            className="text-muted-foreground hover:text-foreground shrink-0 flex items-center gap-0.5"
+          >
+            {open ? "See less" : `See all (${groups.length})`}
+            {open ? (
+              <ChevronUp className="h-3 w-3" />
+            ) : (
+              <ChevronDown className="h-3 w-3" />
+            )}
+          </button>
+        )}
+      </div>
+      {open && (
+        <div className="mt-2 space-y-1 border-t pt-2">
+          {groups.map((g) => (
+            <div
+              key={g.family}
+              className="flex items-center justify-between gap-2"
+            >
+              <span className="text-muted-foreground truncate">
+                <span className="text-foreground">{g.family}</span>{" "}
+                {g.tiers.map((t) => `${t.tier_label} ×${t.count}`).join(", ")}
+              </span>
+              <span className="font-mono shrink-0">{g.bonus_display}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function VesselCard({
   vessel,
   defaultExpanded = false,
@@ -472,6 +532,7 @@ export function VesselCard({
           {workingVessel.vessel_character}
         </p>
       </CardHeader>
+      <CumulativeSummary groups={workingVessel.cumulative_effects} />
       {expanded && (
         <CardContent className="pt-0">
           <Separator className="mb-3" />
