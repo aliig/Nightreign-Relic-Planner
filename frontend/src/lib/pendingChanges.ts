@@ -1,10 +1,11 @@
 /**
- * Global "pending changes" cart for save-file edits, shared across pages.
+ * Working diff of edits the user has made to their save, shared across pages.
  *
- * Every edit the user makes (sell/bookmark a relic, add/delete/rename/overwrite a
- * loadout, reset vessels/loadouts) is queued here instead of exporting immediately.
- * The navbar shows the count and exports everything in one go. Lists read this
- * store to render optimistic "pending" badges.
+ * The app treats these edits as already applied to a live, in-memory copy of the
+ * save: trashed relics drop out of the inventory, deleted loadouts disappear, new
+ * ones show up inline. This store IS that diff (and the change log) — nothing is
+ * written to disk until the user exports. Every edit (sell/bookmark a relic,
+ * add/delete/rename/overwrite a loadout, reset vessels/loadouts) lives here.
  *
  * Keyed by save-slot index (the selected profile). Backed by sessionStorage so it
  * survives SPA navigation (the save File itself is held separately in saveFile.ts
@@ -37,10 +38,16 @@ export type PendingLoadoutOp =
   | { id: string; kind: "reset_vessels" }
   | { id: string; kind: "reset_presets" }
 
+/** Display label for a relic edit, so the change log can name it without a lookup. */
+export type RelicMeta = { name: string; isDeep?: boolean; murk?: number }
+
 export type SlotPending = {
   sells: number[] // ga_handles to sell
   favorites: Record<number, boolean> // ga_handle -> desired bookmark state
   loadoutOps: PendingLoadoutOp[]
+  // Label cache keyed by ga_handle (relic name / murk value) for the change log.
+  // Purely cosmetic; pruned to the handles still referenced by sells/favorites.
+  meta: Record<number, RelicMeta>
 }
 
 type State = Record<number, SlotPending>
@@ -48,13 +55,21 @@ type State = Record<number, SlotPending>
 const STORAGE_KEY = "pendingChanges"
 
 function emptySlot(): SlotPending {
-  return { sells: [], favorites: {}, loadoutOps: [] }
+  return { sells: [], favorites: {}, loadoutOps: [], meta: {} }
 }
 
 function load(): State {
   try {
     const raw = sessionStorage.getItem(STORAGE_KEY)
-    return raw ? (JSON.parse(raw) as State) : {}
+    if (!raw) return {}
+    const parsed = JSON.parse(raw) as State
+    // Normalize so every slot has the full shape (sessions saved before `meta`
+    // was added would otherwise read back without it and crash raw-state readers).
+    const out: State = {}
+    for (const [k, v] of Object.entries(parsed)) {
+      out[Number(k)] = { ...emptySlot(), ...v }
+    }
+    return out
   } catch {
     return {}
   }
@@ -83,11 +98,25 @@ function subscribe(cb: () => void) {
 }
 
 function getSlot(state: State, slot: number): SlotPending {
-  return state[slot] ?? emptySlot()
+  // Spread defaults so slots restored from older sessionStorage (no `meta`) are safe.
+  return { ...emptySlot(), ...state[slot] }
+}
+
+/** Drop label-cache entries no longer referenced by a sell or bookmark change. */
+function pruneMeta(s: SlotPending): SlotPending {
+  const live = new Set<number>([
+    ...s.sells,
+    ...Object.keys(s.favorites).map(Number),
+  ])
+  const meta: Record<number, RelicMeta> = {}
+  for (const [k, v] of Object.entries(s.meta)) {
+    if (live.has(Number(k))) meta[Number(k)] = v
+  }
+  return { ...s, meta }
 }
 
 function updateSlot(slot: number, fn: (s: SlotPending) => SlotPending) {
-  const next = { ...state, [slot]: fn(getSlot(state, slot)) }
+  const next = { ...state, [slot]: pruneMeta(fn(getSlot(state, slot))) }
   // Drop the slot entry entirely if it became empty (keeps counts clean).
   const s = next[slot]
   if (
@@ -108,7 +137,7 @@ function nextId(): string {
 
 // --- mutators --------------------------------------------------------------
 
-export function toggleSell(slot: number, gaHandle: number) {
+export function toggleSell(slot: number, gaHandle: number, meta?: RelicMeta) {
   updateSlot(slot, (s) => {
     const has = s.sells.includes(gaHandle)
     return {
@@ -116,6 +145,7 @@ export function toggleSell(slot: number, gaHandle: number) {
       sells: has
         ? s.sells.filter((h) => h !== gaHandle)
         : [...s.sells, gaHandle],
+      meta: meta ? { ...s.meta, [gaHandle]: meta } : s.meta,
     }
   })
 }
@@ -124,12 +154,17 @@ export function setFavorite(
   slot: number,
   gaHandle: number,
   desired: boolean | null,
+  meta?: RelicMeta,
 ) {
   updateSlot(slot, (s) => {
     const favorites = { ...s.favorites }
     if (desired === null) delete favorites[gaHandle]
     else favorites[gaHandle] = desired
-    return { ...s, favorites }
+    return {
+      ...s,
+      favorites,
+      meta: meta ? { ...s.meta, [gaHandle]: meta } : s.meta,
+    }
   })
 }
 
@@ -164,20 +199,11 @@ export function clearSlot(slot: number) {
   setState(next)
 }
 
-/** Clear only the relic edits (sells + bookmarks) for a slot, keeping loadout ops. */
-export function clearSlotRelics(slot: number) {
-  updateSlot(slot, (s) => ({ ...s, sells: [], favorites: {} }))
-}
-
 export function clearAll() {
   setState({})
 }
 
 // --- selectors / hooks -----------------------------------------------------
-
-export function slotCount(s: SlotPending): number {
-  return s.sells.length + Object.keys(s.favorites).length + s.loadoutOps.length
-}
 
 /** Reactive snapshot of one slot's pending changes. */
 export function usePendingSlot(slot: number | null | undefined): SlotPending {
@@ -185,12 +211,9 @@ export function usePendingSlot(slot: number | null | undefined): SlotPending {
   return slot == null ? emptySlot() : getSlot(snap, slot)
 }
 
-/** Reactive total count across all slots (for the navbar badge). */
-export function usePendingTotal(): { count: number; slots: number[] } {
-  const snap = useSyncExternalStore(subscribe, () => state)
-  const slots = Object.keys(snap).map(Number)
-  const count = slots.reduce((sum, k) => sum + slotCount(snap[k]), 0)
-  return { count, slots }
+/** Reactive snapshot of the whole diff across all slots (for the change log). */
+export function usePendingAll(): State {
+  return useSyncExternalStore(subscribe, () => state)
 }
 
 /** Non-reactive read of a slot (for export handlers). */

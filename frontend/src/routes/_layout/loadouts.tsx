@@ -1,13 +1,6 @@
 import { useQuery, useSuspenseQuery } from "@tanstack/react-query"
 import { createFileRoute } from "@tanstack/react-router"
-import {
-  ChevronDown,
-  ChevronUp,
-  Pencil,
-  RotateCcw,
-  Trash2,
-  X,
-} from "lucide-react"
+import { ChevronDown, ChevronUp, Pencil, RotateCcw, Trash2 } from "lucide-react"
 import { type ReactNode, Suspense, useMemo, useState } from "react"
 
 import { GameService, type ParsedLoadoutData, SavesService } from "@/client"
@@ -129,9 +122,7 @@ function LoadoutCard({
   gaHandles,
   relicByHandle,
   effectMap,
-  badges,
   actions,
-  tone = "default",
 }: {
   name: ReactNode
   vesselName: string
@@ -139,19 +130,11 @@ function LoadoutCard({
   gaHandles: number[]
   relicByHandle: Map<number, SlotRelic>
   effectMap: Map<number, string>
-  badges?: ReactNode
   actions?: ReactNode
-  tone?: "default" | "pending" | "danger"
 }) {
   const [expanded, setExpanded] = useState(true)
-  const toneClass =
-    tone === "pending"
-      ? "border-primary/40 bg-primary/5"
-      : tone === "danger"
-        ? "border-destructive/40 bg-destructive/5 opacity-70"
-        : undefined
   return (
-    <Card className={toneClass}>
+    <Card>
       <CardHeader className="pb-3">
         <div className="flex items-start justify-between gap-2">
           <button
@@ -161,7 +144,6 @@ function LoadoutCard({
           >
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
               <CardTitle className="text-base">{name}</CardTitle>
-              {badges}
             </div>
             <p className="mt-0.5 text-xs text-muted-foreground">{vesselName}</p>
           </button>
@@ -206,6 +188,19 @@ function LoadoutCard({
 
 // --- shared manager UI ------------------------------------------------------
 
+// A loadout as shown in the live list: an existing in-game preset (with any
+// rename/overwrite already applied) or a not-yet-saved new one.
+type DisplayLoadout = {
+  key: string
+  character: string
+  name: string
+  vesselName: string
+  gaHandles: number[]
+  cumulative?: ParsedLoadoutData["cumulative_effects"]
+  source: { kind: "existing"; index: number; rawName: string } | { kind: "add" }
+  opId?: string // for adds — remove op on delete
+}
+
 function LoadoutManager({
   loadouts,
   relicByHandle,
@@ -218,13 +213,19 @@ function LoadoutManager({
   slotIndex: number
 }) {
   const pending = usePendingSlot(slotIndex)
-  const [renaming, setRenaming] = useState<ParsedLoadoutData | null>(null)
+  const [renaming, setRenaming] = useState<{
+    index: number
+    name: string
+  } | null>(null)
   const [renameDraft, setRenameDraft] = useState("")
 
   // Bucket this slot's pending loadout ops by kind/index.
   const renameByIndex = new Map<number, { id: string; name: string }>()
   const deleteByIndex = new Map<number, string>()
-  const overwriteByIndex = new Map<number, string>()
+  const overwriteByIndex = new Map<
+    number,
+    { id: string; ga_handles: number[]; name?: string }
+  >()
   const adds: Array<{
     id: string
     name: string
@@ -238,7 +239,12 @@ function LoadoutManager({
     if (op.kind === "rename")
       renameByIndex.set(op.index, { id: op.id, name: op.name })
     else if (op.kind === "delete") deleteByIndex.set(op.index, op.id)
-    else if (op.kind === "overwrite") overwriteByIndex.set(op.index, op.id)
+    else if (op.kind === "overwrite")
+      overwriteByIndex.set(op.index, {
+        id: op.id,
+        ga_handles: op.ga_handles,
+        name: op.name,
+      })
     else if (op.kind === "add")
       adds.push({
         id: op.id,
@@ -262,30 +268,97 @@ function LoadoutManager({
     ? adds.length
     : loadouts.length + adds.length - deleteByIndex.size
 
-  const grouped = useMemo(() => {
-    const m = new Map<string, ParsedLoadoutData[]>()
-    for (const l of loadouts) {
-      const list = m.get(l.character) ?? []
-      list.push(l)
-      m.set(l.character, list)
-    }
-    return [...m.entries()].sort((a, b) => a[0].localeCompare(b[0]))
-  }, [loadouts])
+  // New/overwritten setups have relic sets the backend never scored — compute
+  // their cumulative bonuses live so they render identically to saved loadouts.
+  // (Rebuilt each render from the ops above; the useQuery below memoizes the
+  // actual network call by ga_handle signature.)
+  const dynamic: Array<{ id: string; ga_handles: number[] }> = []
+  for (const a of adds)
+    dynamic.push({ id: `add-${a.id}`, ga_handles: a.ga_handles })
+  for (const [index, ov] of overwriteByIndex)
+    dynamic.push({ id: `ov-${index}`, ga_handles: ov.ga_handles })
 
-  function toggleDelete(l: ParsedLoadoutData) {
-    const id = deleteByIndex.get(l.index)
-    if (id) {
-      removeLoadoutOp(slotIndex, id)
-    } else {
-      const ren = renameByIndex.get(l.index)
-      if (ren) removeLoadoutOp(slotIndex, ren.id)
-      addLoadoutOp(slotIndex, { kind: "delete", index: l.index, name: l.name })
+  const dynamicGroups = dynamic.map(({ ga_handles }) => {
+    const ids: number[] = []
+    for (const h of ga_handles) {
+      const r = relicByHandle.get(h)
+      if (r) ids.push(...r.effects, ...r.curses)
+    }
+    return ids
+  })
+  const dynamicSig = JSON.stringify(dynamic.map((d) => d.ga_handles))
+  const { data: dynamicCumulative } = useQuery({
+    queryKey: ["cumulative-dynamic", slotIndex, dynamicSig],
+    queryFn: () =>
+      GameService.cumulativeEffects({
+        requestBody: { effect_id_groups: dynamicGroups },
+      }),
+    enabled: dynamic.length > 0,
+    staleTime: Number.POSITIVE_INFINITY,
+  })
+  const cumulativeById = new Map<
+    string,
+    ParsedLoadoutData["cumulative_effects"]
+  >()
+  dynamic.forEach((d, i) => {
+    if (dynamicCumulative?.[i]) cumulativeById.set(d.id, dynamicCumulative[i])
+  })
+
+  // Build the live list: existing presets (deleted ones dropped, renames and
+  // overwrites applied) plus the new ones, all looking like real loadouts.
+  const display: DisplayLoadout[] = []
+  if (!resetPresets) {
+    for (const l of loadouts) {
+      if (deleteByIndex.has(l.index)) continue
+      const ov = overwriteByIndex.get(l.index)
+      display.push({
+        key: `idx-${l.index}`,
+        character: l.character,
+        name: renameByIndex.get(l.index)?.name ?? l.name,
+        vesselName: l.vessel_name,
+        gaHandles: ov ? ov.ga_handles : (l.ga_handles ?? []),
+        cumulative: ov
+          ? cumulativeById.get(`ov-${l.index}`)
+          : l.cumulative_effects,
+        source: { kind: "existing", index: l.index, rawName: l.name },
+      })
     }
   }
+  for (const a of adds) {
+    display.push({
+      key: `add-${a.id}`,
+      character: a.character,
+      name: a.name,
+      vesselName: a.vesselName ?? "",
+      gaHandles: a.ga_handles,
+      cumulative: cumulativeById.get(`add-${a.id}`),
+      source: { kind: "add" },
+      opId: a.id,
+    })
+  }
 
-  function openRename(l: ParsedLoadoutData) {
-    setRenaming(l)
-    setRenameDraft(renameByIndex.get(l.index)?.name ?? l.name)
+  const groupedMap = new Map<string, DisplayLoadout[]>()
+  for (const d of display) {
+    const list = groupedMap.get(d.character) ?? []
+    list.push(d)
+    groupedMap.set(d.character, list)
+  }
+  const grouped = [...groupedMap.entries()].sort((a, b) =>
+    a[0].localeCompare(b[0]),
+  )
+
+  function deleteExisting(index: number, rawName: string) {
+    const ren = renameByIndex.get(index)
+    if (ren) removeLoadoutOp(slotIndex, ren.id)
+    const ov = overwriteByIndex.get(index)
+    if (ov) removeLoadoutOp(slotIndex, ov.id)
+    addLoadoutOp(slotIndex, { kind: "delete", index, name: rawName })
+  }
+
+  function openRename(d: DisplayLoadout) {
+    if (d.source.kind !== "existing") return
+    setRenaming({ index: d.source.index, name: d.source.rawName })
+    setRenameDraft(renameByIndex.get(d.source.index)?.name ?? d.source.rawName)
   }
 
   function saveRename() {
@@ -321,7 +394,7 @@ function LoadoutManager({
     addLoadoutOp(slotIndex, { kind: "reset_presets" })
   }
 
-  const empty = loadouts.length === 0 && adds.length === 0
+  const empty = display.length === 0
 
   return (
     <div className="space-y-5">
@@ -337,8 +410,9 @@ function LoadoutManager({
 
       {empty && (
         <p className="py-8 text-center text-muted-foreground">
-          This character has no saved relic loadouts. Optimize a build and use{" "}
-          <strong>Save as loadout</strong> to queue one.
+          {resetPresets
+            ? "All loadouts will be cleared on export — undo from the changes panel up top."
+            : "This character has no saved relic loadouts. Optimize a build and use Save as loadout to add one."}
         </p>
       )}
 
@@ -346,49 +420,29 @@ function LoadoutManager({
         <section key={character} className="space-y-2">
           <SectionHeader title={character} count={list.length} />
           <div className="grid gap-2">
-            {list.map((l) => {
-              const pendingDelete = deleteByIndex.has(l.index)
-              const ren = renameByIndex.get(l.index)
-              const pendingOverwrite = overwriteByIndex.has(l.index)
-              const dimmed = pendingDelete || resetPresets
-              return (
-                <LoadoutCard
-                  key={l.index}
-                  name={
-                    <span className={dimmed ? "line-through" : ""}>
-                      {ren?.name ??
-                        (l.name || (
-                          <span className="italic text-muted-foreground">
-                            (unnamed)
-                          </span>
-                        ))}
+            {list.map((d) => (
+              <LoadoutCard
+                key={d.key}
+                name={
+                  d.name || (
+                    <span className="italic text-muted-foreground">
+                      (unnamed)
                     </span>
-                  }
-                  vesselName={l.vessel_name}
-                  cumulative={l.cumulative_effects}
-                  gaHandles={l.ga_handles ?? []}
-                  relicByHandle={relicByHandle}
-                  effectMap={effectMap}
-                  tone={dimmed ? "danger" : "default"}
-                  badges={
-                    <>
-                      {ren && <Badge variant="outline">renamed</Badge>}
-                      {pendingOverwrite && (
-                        <Badge variant="outline">replaced</Badge>
-                      )}
-                      {pendingDelete && (
-                        <Badge variant="destructive">will delete</Badge>
-                      )}
-                    </>
-                  }
-                  actions={
+                  )
+                }
+                vesselName={d.vesselName}
+                cumulative={d.cumulative}
+                gaHandles={d.gaHandles}
+                relicByHandle={relicByHandle}
+                effectMap={effectMap}
+                actions={
+                  d.source.kind === "existing" ? (
                     <>
                       <Button
                         variant="ghost"
                         size="sm"
                         className="px-1.5"
-                        disabled={resetPresets || pendingDelete}
-                        onClick={() => openRename(l)}
+                        onClick={() => openRename(d)}
                       >
                         <Pencil className="h-3.5 w-3.5" />
                       </Button>
@@ -396,68 +450,32 @@ function LoadoutManager({
                         variant="ghost"
                         size="sm"
                         className="px-1.5"
-                        disabled={resetPresets}
-                        onClick={() => toggleDelete(l)}
+                        onClick={() =>
+                          d.source.kind === "existing" &&
+                          deleteExisting(d.source.index, d.source.rawName)
+                        }
                       >
-                        <Trash2
-                          className={`h-3.5 w-3.5 ${pendingDelete ? "text-destructive" : ""}`}
-                        />
+                        <Trash2 className="h-3.5 w-3.5" />
                       </Button>
                     </>
-                  }
-                />
-              )
-            })}
-          </div>
-        </section>
-      ))}
-
-      {adds.length > 0 && (
-        <section className="space-y-2">
-          <SectionHeader
-            title="Pending new loadouts"
-            count={adds.length}
-            accent
-          />
-          <div className="grid gap-2">
-            {adds.map((a) => (
-              <LoadoutCard
-                key={a.id}
-                name={
-                  a.name || (
-                    <span className="italic text-muted-foreground">
-                      (unnamed)
-                    </span>
+                  ) : (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="px-1.5"
+                      onClick={() =>
+                        d.opId && removeLoadoutOp(slotIndex, d.opId)
+                      }
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
                   )
-                }
-                vesselName={`${a.character}${a.vesselName ? ` · ${a.vesselName}` : ""}`}
-                gaHandles={a.ga_handles}
-                relicByHandle={relicByHandle}
-                effectMap={effectMap}
-                tone="pending"
-                badges={<Badge variant="outline">pending</Badge>}
-                actions={
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="px-1.5"
-                    onClick={() => removeLoadoutOp(slotIndex, a.id)}
-                  >
-                    <X className="h-3.5 w-3.5" />
-                  </Button>
                 }
               />
             ))}
           </div>
         </section>
-      )}
-
-      {!empty && (
-        <p className="text-xs text-muted-foreground">
-          Changes are queued — review and download from the “Export save” button
-          in the top bar.
-        </p>
-      )}
+      ))}
 
       {/* Rename dialog */}
       <Dialog
@@ -482,7 +500,7 @@ function LoadoutManager({
             <Button variant="outline" onClick={() => setRenaming(null)}>
               Cancel
             </Button>
-            <Button onClick={saveRename}>Queue rename</Button>
+            <Button onClick={saveRename}>Rename</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -490,22 +508,10 @@ function LoadoutManager({
   )
 }
 
-function SectionHeader({
-  title,
-  count,
-  accent,
-}: {
-  title: string
-  count: number
-  accent?: boolean
-}) {
+function SectionHeader({ title, count }: { title: string; count: number }) {
   return (
     <div className="flex items-center gap-3 pt-1">
-      <h3
-        className={`text-base font-bold tracking-tight ${accent ? "text-primary" : ""}`}
-      >
-        {title}
-      </h3>
+      <h3 className="text-base font-bold tracking-tight">{title}</h3>
       <span className="text-xs text-muted-foreground">
         {count} loadout{count !== 1 ? "s" : ""}
       </span>
@@ -543,7 +549,7 @@ function GlobalControls({
           onClick={onToggleVessels}
         >
           <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
-          {resetVessels ? "Reset vessels (queued)" : "Reset all vessels"}
+          {resetVessels ? "Vessels reset — undo" : "Reset all vessels"}
         </Button>
         {hasLoadouts && (
           <Button
@@ -553,12 +559,14 @@ function GlobalControls({
             onClick={onTogglePresets}
             title={
               !resetPresets && !canResetPresets
-                ? "Clear other queued loadout edits first"
+                ? "Undo your other loadout edits first"
                 : undefined
             }
           >
             <Trash2 className="mr-1.5 h-3.5 w-3.5" />
-            {resetPresets ? "Clear all (queued)" : "Reset all loadouts"}
+            {resetPresets
+              ? "All loadouts cleared — undo"
+              : "Reset all loadouts"}
           </Button>
         )}
       </div>

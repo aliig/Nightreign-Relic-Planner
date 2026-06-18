@@ -278,8 +278,9 @@ function InventoryPage() {
       <div>
         <h1 className="text-2xl font-semibold">Relic Inventory</h1>
         <p className="text-muted-foreground mt-1">
-          Browse relics, bookmark keepers, and sell unused relics back into a
-          new save file.
+          Browse relics, bookmark keepers, and trash unused ones for Murk.
+          Changes apply here instantly — export from the Changes panel when
+          you're done.
         </p>
       </div>
       <Suspense fallback={<Skeleton className="h-48 w-full" />}>

@@ -724,7 +724,7 @@ function SaveLoadoutDialog({
         vesselName: vessel.vessel_name,
       })
       showSuccessToast(
-        `Queued new loadout "${name.trim()}" — export from the top bar when ready.`,
+        `Added loadout "${name.trim()}" — export from the Changes panel to save it.`,
       )
     } else {
       const ex = existing.find((e) => String(e.index) === overwriteIndex)
@@ -737,7 +737,7 @@ function SaveLoadoutDialog({
         targetName: ex?.name ?? "",
       })
       showSuccessToast(
-        `Queued replacement of "${ex?.name || "loadout"}" — export from the top bar when ready.`,
+        `Replaced "${ex?.name || "loadout"}" — export from the Changes panel to save it.`,
       )
     }
     onOpenChange(false)
@@ -751,9 +751,10 @@ function SaveLoadoutDialog({
         <DialogHeader>
           <DialogTitle>Save as in-game loadout</DialogTitle>
           <DialogDescription>
-            Queues a loadout for <strong>{target.character}</strong> on{" "}
-            <strong>{vessel.vessel_name}</strong>. Review and download it from
-            the “Export save” button in the top bar.
+            Adds a loadout for <strong>{target.character}</strong> on{" "}
+            <strong>{vessel.vessel_name}</strong>. It shows up on the Loadouts
+            page right away; export from the Changes panel to write it to your
+            save.
           </DialogDescription>
         </DialogHeader>
 
@@ -809,7 +810,7 @@ function SaveLoadoutDialog({
             Cancel
           </Button>
           <Button onClick={doQueue} disabled={!valid}>
-            Add to pending changes
+            {mode === "add" ? "Add loadout" : "Replace loadout"}
           </Button>
         </DialogFooter>
       </DialogContent>
