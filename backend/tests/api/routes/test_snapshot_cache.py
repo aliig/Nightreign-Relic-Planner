@@ -110,6 +110,24 @@ def _create_build(client: TestClient, headers: dict[str, str]) -> dict:
 
 @pytest.mark.usefixtures("override_game_data")
 class TestSnapshotCache:
+    def test_create_sets_build_hash(
+        self,
+        client: TestClient,
+        normal_user_token_headers: dict[str, str],
+        db: Session,
+    ) -> None:
+        """A freshly created build must carry a non-NULL build_hash, or every
+        snapshot for it is permanently stale (build_hash != NULL is always
+        true) and the inventory usage count silently under-reports.  Guards
+        the legacy gap that migration a3b4c5d6e7f8 backfilled."""
+        created = _create_build(client, normal_user_token_headers)
+        row = db.get(Build, uuid.UUID(created["id"]))
+        assert row is not None
+        assert row.build_hash is not None, (
+            "create_build must set build_hash; a NULL hash makes every "
+            "snapshot for this build look stale forever"
+        )
+
     def test_clone_sets_build_hash(
         self,
         client: TestClient,
