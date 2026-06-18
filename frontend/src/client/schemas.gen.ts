@@ -57,6 +57,33 @@ export const Body_login_login_access_tokenSchema = {
     title: 'Body_login-login_access_token'
 } as const;
 
+export const Body_saves_export_saveSchema = {
+    properties: {
+        file: {
+            type: 'string',
+            format: 'binary',
+            title: 'File'
+        },
+        slot_index: {
+            type: 'integer',
+            title: 'Slot Index'
+        },
+        ga_handles: {
+            type: 'string',
+            title: 'Ga Handles',
+            default: '[]'
+        },
+        favorite_changes: {
+            type: 'string',
+            title: 'Favorite Changes',
+            default: '{}'
+        }
+    },
+    type: 'object',
+    required: ['file', 'slot_index'],
+    title: 'Body_saves-export_save'
+} as const;
+
 export const Body_saves_upload_saveSchema = {
     properties: {
         file: {
@@ -1317,6 +1344,11 @@ export const ParsedProfileDataSchema = {
             type: 'array',
             title: 'Relics'
         },
+        murks: {
+            type: 'integer',
+            title: 'Murks',
+            default: 0
+        },
         id: {
             anyOf: [
                 {
@@ -1388,6 +1420,16 @@ export const ParsedRelicDataSchema = {
         tier: {
             type: 'string',
             title: 'Tier'
+        },
+        is_favorite: {
+            type: 'boolean',
+            title: 'Is Favorite',
+            default: false
+        },
+        equipped: {
+            type: 'boolean',
+            title: 'Equipped',
+            default: false
         }
     },
     type: 'object',
@@ -1440,6 +1482,11 @@ export const ProfilePublicSchema = {
         name: {
             type: 'string',
             title: 'Name'
+        },
+        murks: {
+            type: 'integer',
+            title: 'Murks',
+            default: 0
         }
     },
     type: 'object',
@@ -1547,6 +1594,16 @@ export const RelicPublicSchema = {
         tier: {
             type: 'string',
             title: 'Tier'
+        },
+        is_favorite: {
+            type: 'boolean',
+            title: 'Is Favorite',
+            default: false
+        },
+        equipped: {
+            type: 'boolean',
+            title: 'Equipped',
+            default: false
         }
     },
     type: 'object',

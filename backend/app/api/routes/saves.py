@@ -7,9 +7,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, UploadFile
+from fastapi import APIRouter, Form, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from sqlmodel import Session, col, select
 
 from app.api.deps import (
@@ -40,10 +40,17 @@ from app.models import (
     UploadResponse,
 )
 from nrplanner import (
+    LoadoutHandler,
     RelicInventory,
     discover_characters,
     decrypt_sl2,
+    delete_relics,
     parse_relics,
+    read_favorite_handles,
+    read_murks,
+    repack_sl2,
+    sell_value,
+    set_favorites,
     split_memory_dat,
 )
 from nrplanner.changes import (
@@ -332,8 +339,16 @@ def _parse_save_to_profiles(
             if not char_name:
                 continue
             data = userdata_path.read_bytes()
-            raw_relics, _ = parse_relics(data)
+            raw_relics, items_end = parse_relics(data)
             inventory = RelicInventory(raw_relics, items_json, ds)
+
+            # Sell-protection: relics equipped in a loadout/preset or bookmarked
+            # in-game cannot be sold.
+            favorite_handles = read_favorite_handles(data, items_end)
+            murks = read_murks(data, items_end)
+            loadout = LoadoutHandler(ds)
+            loadout.parse(data)
+            equipped_handles = set(loadout.relic_ga_hero_map.keys())
 
             relics_data = [
                 ParsedRelicData(
@@ -350,6 +365,8 @@ def _parse_save_to_profiles(
                     is_deep=r.is_deep,
                     name=r.name,
                     tier=r.tier,
+                    is_favorite=r.ga_handle in favorite_handles,
+                    equipped=r.ga_handle in equipped_handles,
                 )
                 for r in inventory.relics
             ]
@@ -363,6 +380,7 @@ def _parse_save_to_profiles(
                     name=char_name,
                     relic_count=len(relics_data),
                     relics=relics_data,
+                    murks=murks,
                 )
             )
 
@@ -475,6 +493,7 @@ async def upload_save(
             slot_index=prof_data.slot_index,
             name=prof_data.name,
             relics_hash=relics_signature_from_fingerprints(fps),
+            murks=prof_data.murks,
         )
         session.add(profile)
         session.flush()
@@ -496,6 +515,8 @@ async def upload_save(
                 is_deep=r.is_deep,
                 name=r.name,
                 tier=r.tier,
+                is_favorite=r.is_favorite,
+                equipped=r.equipped,
             ))
 
         # Attach DB id to response data
@@ -729,6 +750,7 @@ async def upload_save_stream(
             slot_index=prof_data.slot_index,
             name=prof_data.name,
             relics_hash=relics_signature_from_fingerprints(fps),
+            murks=prof_data.murks,
         )
         session.add(profile)
         session.flush()
@@ -751,6 +773,8 @@ async def upload_save_stream(
                 is_deep=r.is_deep,
                 name=r.name,
                 tier=r.tier,
+                is_favorite=r.is_favorite,
+                equipped=r.equipped,
             ))
 
         prof_data.id = profile.id
@@ -948,4 +972,200 @@ def get_profile_relics(
     return RelicsPublic(
         data=[RelicPublic.model_validate(r) for r in relics],
         count=len(relics),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Save export (sell/delete relics, credit Murk, re-encrypt)
+# ---------------------------------------------------------------------------
+
+def _edited_filename(filename: str) -> str:
+    """NR0000.sl2 -> NR0000_edited.sl2."""
+    p = Path(filename)
+    return f"{p.stem}_edited{p.suffix or '.sl2'}"
+
+
+def _export_modified_save(
+    file_bytes: bytes,
+    filename: str,
+    slot_index: int,
+    ga_handles: set[int],
+    favorite_changes: dict[int, bool],
+    ds: Any,
+    items_json: dict,
+) -> tuple[bytes, dict]:
+    """Decrypt one character slot, apply bookmark changes + sell relics, re-encrypt.
+
+    Bookmark changes are applied first so a relic can be un-bookmarked and sold
+    in the same export. Returns (new_save_bytes, summary). Raises HTTPException
+    on validation errors. The embedded Steam ID is left unchanged (same-account
+    re-import only).
+    """
+    platform = _detect_platform(filename)
+    if platform != "PC":
+        raise HTTPException(
+            status_code=422,
+            detail="Save export currently supports PC (.sl2) saves only.",
+        )
+    if file_bytes[:4] != b"BND4":
+        raise HTTPException(
+            status_code=422,
+            detail="Not a valid PC .sl2 save file (missing BND4 header).",
+        )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        save_path = tmp_path / Path(filename).name
+        save_path.write_bytes(file_bytes)
+        decrypt_dir = tmp_path / "decrypted"
+        decrypt_dir.mkdir()
+
+        try:
+            decrypt_sl2(save_path, decrypt_dir)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=422, detail=f"Failed to decrypt save file: {exc}"
+            ) from exc
+
+        userdata_path = decrypt_dir / f"USERDATA_{slot_index:02d}"
+        if not userdata_path.exists():
+            raise HTTPException(
+                status_code=404,
+                detail=f"Character slot {slot_index} not found in this save file.",
+            )
+        blob = userdata_path.read_bytes()
+
+        raw_relics, items_end = parse_relics(blob)
+        inventory = RelicInventory(raw_relics, items_json, ds)
+        owned = {r.ga_handle: r for r in inventory.relics}
+        loadout = LoadoutHandler(ds)
+        loadout.parse(blob)
+        equipped = set(loadout.relic_ga_hero_map.keys())
+
+        # --- validate that all referenced relics exist in this save --------
+        referenced = ga_handles | set(favorite_changes)
+        missing = sorted(h for h in referenced if h not in owned)
+        if missing:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error": "unknown_relics",
+                    "message": "Some selected relics are not in this save file. "
+                               "Make sure you uploaded the same save the inventory came from.",
+                    "ga_handles": missing,
+                },
+            )
+
+        # --- apply bookmark changes first ----------------------------------
+        fav_changed = 0
+        if favorite_changes:
+            blob, fav_result = set_favorites(blob, favorite_changes)
+            fav_changed = len(fav_result.changed_handles)
+
+        # Re-read favorites from the (possibly updated) blob so an un-bookmark
+        # in this same request unlocks the relic for selling.
+        favorites = read_favorite_handles(blob, items_end)
+
+        # --- validate sells against current protection state ---------------
+        blocked_equipped = sorted(h for h in ga_handles if h in equipped)
+        blocked_favorite = sorted(h for h in ga_handles if h in favorites)
+        if blocked_equipped or blocked_favorite:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error": "protected_relics",
+                    "message": "Cannot sell equipped or bookmarked relics.",
+                    "equipped": blocked_equipped,
+                    "favorite": blocked_favorite,
+                },
+            )
+
+        # --- sell + repack -------------------------------------------------
+        murk_credit = sum(
+            sell_value(owned[h].effect_count, owned[h].is_deep) for h in ga_handles
+        )
+        new_blob, del_result = delete_relics(blob, ga_handles, murk_credit=murk_credit)
+        new_save = repack_sl2(file_bytes, {slot_index: new_blob})
+
+    summary = {
+        "removed": len(del_result.removed_handles),
+        "favorites_changed": fav_changed,
+        "murk_credit": murk_credit,
+        "murks_before": del_result.murks_before,
+        "murks_after": del_result.murks_after,
+    }
+    return new_save, summary
+
+
+@router.post("/export")
+async def export_save(
+    file: UploadFile,
+    ds: GameDataDep,
+    current_user: OptionalUser,
+    slot_index: int = Form(...),
+    ga_handles: str = Form("[]"),
+    favorite_changes: str = Form("{}"),
+) -> Response:
+    """Apply inventory edits to one character slot and return a modified .sl2
+    the user can re-import into their own game.
+
+    - ``ga_handles``: JSON array of relic ga_handles to sell (delete + credit Murk).
+    - ``favorite_changes``: JSON object mapping ga_handle -> bool to
+      bookmark/unbookmark relics.
+
+    Stateless: the original save is provided in the request (we do not persist
+    raw saves). Works for anonymous and authenticated users alike.
+    """
+    items_json = get_items_json()
+
+    try:
+        handles = {int(h) for h in json.loads(ga_handles)}
+    except (ValueError, TypeError, json.JSONDecodeError) as exc:
+        raise HTTPException(
+            status_code=422,
+            detail="ga_handles must be a JSON array of integers.",
+        ) from exc
+
+    try:
+        fav_changes = {int(k): bool(v) for k, v in json.loads(favorite_changes).items()}
+    except (ValueError, TypeError, AttributeError, json.JSONDecodeError) as exc:
+        raise HTTPException(
+            status_code=422,
+            detail="favorite_changes must be a JSON object of {ga_handle: bool}.",
+        ) from exc
+
+    if not handles and not fav_changes:
+        raise HTTPException(status_code=422, detail="No changes selected.")
+
+    file_bytes = await file.read()
+    if not file_bytes:
+        raise HTTPException(status_code=422, detail="Empty save file.")
+    filename = file.filename or "save.sl2"
+
+    new_save, summary = await run_in_threadpool(
+        _export_modified_save,
+        file_bytes,
+        filename,
+        slot_index,
+        handles,
+        fav_changes,
+        ds,
+        items_json,
+    )
+
+    out_name = _edited_filename(filename)
+    return Response(
+        content=new_save,
+        media_type="application/octet-stream",
+        headers={
+            "Content-Disposition": f'attachment; filename="{out_name}"',
+            "X-Relics-Removed": str(summary["removed"]),
+            "X-Favorites-Changed": str(summary["favorites_changed"]),
+            "X-Murks-Credited": str(summary["murk_credit"]),
+            "X-Murks-Total": str(summary["murks_after"]),
+            "Access-Control-Expose-Headers": (
+                "Content-Disposition, X-Relics-Removed, X-Favorites-Changed, "
+                "X-Murks-Credited, X-Murks-Total"
+            ),
+        },
     )

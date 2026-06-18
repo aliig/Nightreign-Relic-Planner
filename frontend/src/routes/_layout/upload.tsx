@@ -25,6 +25,7 @@ import {
   relicSummary,
 } from "@/lib/buildChange"
 import { computeOverallPct, optimizingLabel } from "@/lib/optimizeProgress"
+import { rememberSaveFile } from "@/lib/saveFile"
 import { formatRelativeTime, handleError } from "@/utils"
 
 export const Route = createFileRoute("/_layout/upload")({
@@ -342,6 +343,9 @@ function UploadPage() {
       showErrorToast("Please upload a .sl2 (PC) or memory.dat (PS4) file.")
       return
     }
+    // Keep the original file in-session so the inventory page can export an
+    // edited copy without re-uploading (raw saves are never persisted).
+    rememberSaveFile(file)
     if (isLoggedIn()) {
       handleStreamUpload(file)
     } else {

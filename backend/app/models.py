@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from pydantic import EmailStr
-from sqlalchemy import BigInteger, Column, DateTime, JSON, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, Column, DateTime, JSON, UniqueConstraint
 from sqlmodel import Field, Relationship, SQLModel
 
 from nrplanner.models import BuildChange
@@ -122,6 +122,11 @@ class Profile(SQLModel, table=True):
     slot_index: int
     name: str = Field(max_length=100)
     relics_hash: str | None = Field(default=None, max_length=64)
+    # Current in-game Murk (currency) for this character slot.
+    murks: int = Field(
+        default=0,
+        sa_column=Column(BigInteger(), nullable=False, server_default="0"),
+    )
 
     save_upload: Optional["SaveUpload"] = Relationship(back_populates="profiles")
     relics: list["Relic"] = Relationship(
@@ -134,6 +139,7 @@ class ProfilePublic(SQLModel):
     save_upload_id: uuid.UUID
     slot_index: int
     name: str
+    murks: int = 0
 
 
 class ProfilesPublic(SQLModel):
@@ -167,6 +173,15 @@ class Relic(SQLModel, table=True):
     is_deep: bool
     name: str = Field(max_length=255)
     tier: str = Field(max_length=20)  # "Grand" | "Polished" | "Delicate"
+    # Sell-protection flags (parsed from the save; the game forbids selling these)
+    is_favorite: bool = Field(
+        default=False,
+        sa_column=Column(Boolean, nullable=False, server_default="false"),
+    )
+    equipped: bool = Field(
+        default=False,
+        sa_column=Column(Boolean, nullable=False, server_default="false"),
+    )
 
     profile: Optional["Profile"] = Relationship(back_populates="relics")
 
@@ -187,6 +202,8 @@ class RelicPublic(SQLModel):
     is_deep: bool
     name: str
     tier: str
+    is_favorite: bool = False
+    equipped: bool = False
 
 
 class RelicsPublic(SQLModel):
@@ -440,6 +457,8 @@ class ParsedRelicData(SQLModel):
     is_deep: bool
     name: str
     tier: str
+    is_favorite: bool = False
+    equipped: bool = False
 
 
 class ParsedProfileData(SQLModel):
@@ -447,6 +466,7 @@ class ParsedProfileData(SQLModel):
     name: str
     relic_count: int
     relics: list[ParsedRelicData]
+    murks: int = 0
     # Populated for authenticated users after DB persistence
     id: uuid.UUID | None = None
 

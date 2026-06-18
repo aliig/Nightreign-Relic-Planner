@@ -74,7 +74,9 @@ def _upload_sl2(
     with (
         patch("app.api.routes.saves.decrypt_sl2"),
         patch("app.api.routes.saves.discover_characters", side_effect=_discover_side_effect),
-        patch("app.api.routes.saves.parse_relics", return_value=(raw, None)),
+        # second value = items_end_offset (used to locate the ItemEntry favorite
+        # flags); 0 is fine for the tiny dummy blob — the table read bounds out.
+        patch("app.api.routes.saves.parse_relics", return_value=(raw, 0)),
     ):
         return client.post("/api/v1/saves/upload", **kwargs)
 

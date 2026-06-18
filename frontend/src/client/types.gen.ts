@@ -9,6 +9,13 @@ export type Body_login_login_access_token = {
     client_secret?: (string | null);
 };
 
+export type Body_saves_export_save = {
+    file: (Blob | File);
+    slot_index: number;
+    ga_handles?: string;
+    favorite_changes?: string;
+};
+
 export type Body_saves_upload_save = {
     file: (Blob | File);
 };
@@ -304,6 +311,7 @@ export type ParsedProfileData = {
     name: string;
     relic_count: number;
     relics: Array<ParsedRelicData>;
+    murks?: number;
     id?: (string | null);
 };
 
@@ -324,6 +332,8 @@ export type ParsedRelicData = {
     is_deep: boolean;
     name: string;
     tier: string;
+    is_favorite?: boolean;
+    equipped?: boolean;
 };
 
 export type PrivateUserCreate = {
@@ -338,6 +348,7 @@ export type ProfilePublic = {
     save_upload_id: string;
     slot_index: number;
     name: string;
+    murks?: number;
 };
 
 export type ProfilesPublic = {
@@ -369,6 +380,8 @@ export type RelicPublic = {
     is_deep: boolean;
     name: string;
     tier: string;
+    is_favorite?: boolean;
+    equipped?: boolean;
 };
 
 /**
@@ -723,6 +736,12 @@ export type SavesGetProfileRelicsData = {
 };
 
 export type SavesGetProfileRelicsResponse = (RelicsPublic);
+
+export type SavesExportSaveData = {
+    formData: Body_saves_export_save;
+};
+
+export type SavesExportSaveResponse = (unknown);
 
 export type UsersReadUsersData = {
     limit?: number;
