@@ -134,6 +134,7 @@ type BuildApiData = {
   excluded_stacking_categories: number[]
   effect_limits: Record<number, number>
   family_limits: Record<string, number>
+  family_weight_floors: Record<string, number>
 }
 
 // ---------------------------------------------------------------------------
@@ -157,11 +158,15 @@ function WeightInput({
   onChange,
   className,
   title,
+  min = -100,
+  max = 100,
 }: {
   value: number
   onChange: (v: number) => void
   className?: string
   title?: string
+  min?: number
+  max?: number
 }) {
   const [draft, setDraft] = useState(String(value))
   const inputRef = useRef<HTMLInputElement>(null)
@@ -176,7 +181,7 @@ function WeightInput({
   function commit() {
     const n = Number(draft)
     if (!Number.isNaN(n) && n !== value) {
-      onChange(Math.max(-100, Math.min(100, n)))
+      onChange(Math.max(min, Math.min(max, n)))
     } else {
       setDraft(String(value)) // revert invalid input
     }
@@ -186,8 +191,8 @@ function WeightInput({
     <input
       ref={inputRef}
       type="number"
-      min={-100}
-      max={100}
+      min={min}
+      max={max}
       value={draft}
       onChange={(e) => setDraft(e.target.value)}
       onBlur={commit}
@@ -663,6 +668,7 @@ interface EditorUIProps {
   stackingCategories: StackingCategory[]
   effectLimits: Record<number, number>
   familyLimits: Record<string, number>
+  familyWeightFloors: Record<string, number>
   saving: boolean
   effects: EffectMeta[]
   families: FamilyMeta[]
@@ -680,6 +686,7 @@ interface EditorUIProps {
   onExcludedStackingCategoriesChange: (ids: number[]) => void
   onEffectLimitsChange: (limits: Record<number, number>) => void
   onFamilyLimitsChange: (limits: Record<string, number>) => void
+  onFamilyWeightFloorsChange: (floors: Record<string, number>) => void
   onRename: (newName: string) => void
   onChangeCharacter: (character: string) => void
 }
@@ -711,8 +718,10 @@ function BuildEditorUI({
   onExcludedStackingCategoriesChange,
   effectLimits,
   familyLimits,
+  familyWeightFloors,
   onEffectLimitsChange,
   onFamilyLimitsChange,
+  onFamilyWeightFloorsChange,
   onRename,
   onChangeCharacter,
 }: EditorUIProps) {
@@ -1177,6 +1186,39 @@ function BuildEditorUI({
                             {group.families.map((familyName) => {
                               const famTiers =
                                 familyByName.get(familyName)?.tiers
+                              const floor = familyWeightFloors[familyName] ?? 0
+                              const fracMin = famTiers?.length
+                                ? Math.min(
+                                    ...famTiers.map((t) => t.weight_fraction),
+                                  )
+                                : 0
+                              // Live preview mirror of nrplanner
+                              // _rescale_to_floor (Math.round vs backend int()).
+                              const tierWeight = (frac: number): number => {
+                                const W = group.weight
+                                if (
+                                  !(floor > 0) ||
+                                  !(W > 0) ||
+                                  1 - fracMin <= 0
+                                )
+                                  return Math.round(W * frac)
+                                const naturalMin = W * fracMin
+                                const fEff = Math.min(
+                                  Math.max(floor, naturalMin),
+                                  W,
+                                )
+                                return Math.round(
+                                  fEff +
+                                    ((W - fEff) * (frac - fracMin)) /
+                                      (1 - fracMin),
+                                )
+                              }
+                              const setFloor = (v: number) => {
+                                const next = { ...familyWeightFloors }
+                                if (!v || v <= 0) delete next[familyName]
+                                else next[familyName] = v
+                                onFamilyWeightFloorsChange(next)
+                              }
                               return (
                                 <div
                                   key={`family:${familyName}`}
@@ -1217,41 +1259,70 @@ function BuildEditorUI({
                                   {famTiers &&
                                     famTiers.length > 0 &&
                                     group.weight !== 0 && (
-                                      <Tooltip>
-                                        <TooltipTrigger asChild>
+                                      <Dialog>
+                                        <DialogTrigger asChild>
                                           <button
                                             type="button"
                                             className="text-muted-foreground hover:text-foreground shrink-0"
-                                            aria-label={`Per-tier weights for ${familyName}`}
+                                            aria-label={`Tier weighting for ${familyName}`}
+                                            title="Tier weighting"
                                           >
                                             <Info className="h-3.5 w-3.5" />
                                           </button>
-                                        </TooltipTrigger>
-                                        <TooltipContent
-                                          side="right"
-                                          className="space-y-1"
-                                        >
-                                          <p className="text-xs font-medium">
-                                            Tier weights · family {group.weight}
-                                          </p>
-                                          {[...famTiers].reverse().map((t) => (
-                                            <div
-                                              key={t.name}
-                                              className="flex justify-between gap-3 text-xs"
-                                            >
-                                              <span className="text-muted-foreground">
-                                                {t.name}
+                                        </DialogTrigger>
+                                        <DialogContent className="max-w-xs">
+                                          <DialogHeader>
+                                            <DialogTitle className="text-sm">
+                                              {familyName}
+                                            </DialogTitle>
+                                          </DialogHeader>
+                                          <div className="space-y-3">
+                                            <p className="text-xs text-muted-foreground">
+                                              Family weight{" "}
+                                              <span className="font-mono text-foreground">
+                                                {group.weight}
                                               </span>
-                                              <span className="font-mono">
-                                                {Math.round(
-                                                  group.weight *
-                                                    t.weight_fraction,
-                                                )}
-                                              </span>
+                                              . Tiers scale by their in-game
+                                              magnitude; a floor lifts the
+                                              weakest tiers.
+                                            </p>
+                                            {group.weight > 0 && (
+                                              <div className="flex items-center justify-between gap-2">
+                                                <Label className="text-xs">
+                                                  Minimum weighted value
+                                                </Label>
+                                                <WeightInput
+                                                  value={floor}
+                                                  onChange={setFloor}
+                                                  min={0}
+                                                  max={group.weight}
+                                                  className="w-16 text-xs text-center bg-transparent border border-border/60 rounded px-1 py-0.5 focus:border-primary focus:outline-none focus:ring-0 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                                  title="Lift the weakest tiers to at least this value (0 = no floor)"
+                                                />
+                                              </div>
+                                            )}
+                                            <div className="space-y-1">
+                                              {[...famTiers]
+                                                .reverse()
+                                                .map((t) => (
+                                                  <div
+                                                    key={t.name}
+                                                    className="flex justify-between gap-3 text-xs"
+                                                  >
+                                                    <span className="text-muted-foreground">
+                                                      {t.name}
+                                                    </span>
+                                                    <span className="font-mono">
+                                                      {tierWeight(
+                                                        t.weight_fraction,
+                                                      )}
+                                                    </span>
+                                                  </div>
+                                                ))}
                                             </div>
-                                          ))}
-                                        </TooltipContent>
-                                      </Tooltip>
+                                          </div>
+                                        </DialogContent>
+                                      </Dialog>
                                     )}
                                 </div>
                               )
@@ -1584,6 +1655,9 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
   const [familyLimits, setFamilyLimits] = useState<Record<string, number>>(
     () => build.family_limits ?? {},
   )
+  const [familyWeightFloors, setFamilyWeightFloors] = useState<
+    Record<string, number>
+  >(() => build.family_weight_floors ?? {})
 
   const nameRef = useRef(build.name)
   const characterRef = useRef(character)
@@ -1597,6 +1671,7 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
   const excludedStackingCategoriesRef = useRef(excludedStackingCategories)
   const effectLimitsRef = useRef(effectLimits)
   const familyLimitsRef = useRef(familyLimits)
+  const familyWeightFloorsRef = useRef(familyWeightFloors)
   characterRef.current = character
   groupsRef.current = groups
   excludedEffectsRef.current = excludedEffects
@@ -1608,6 +1683,7 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
   excludedStackingCategoriesRef.current = excludedStackingCategories
   effectLimitsRef.current = effectLimits
   familyLimitsRef.current = familyLimits
+  familyWeightFloorsRef.current = familyWeightFloors
 
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -1664,6 +1740,7 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
     setExcludedStackingCategories(build.excluded_stacking_categories ?? [])
     setEffectLimits(build.effect_limits ?? {})
     setFamilyLimits(build.family_limits ?? {})
+    setFamilyWeightFloors(build.family_weight_floors ?? {})
   }, [build, build.character]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const saveMutation = useMutation({
@@ -1685,6 +1762,7 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
           pinned_relics: pinnedRelicsRef.current,
           effect_limits: effectLimitsRef.current,
           family_limits: familyLimitsRef.current,
+          family_weight_floors: familyWeightFloorsRef.current,
           // Cast bridges Record<number, ...> state to the generated
           // Record<string, ...> JSON type — same wire format.
         } as unknown as BuildUpdate,
@@ -1770,12 +1848,17 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
       }}
       effectLimits={effectLimits}
       familyLimits={familyLimits}
+      familyWeightFloors={familyWeightFloors}
       onEffectLimitsChange={(limits) => {
         setEffectLimits(limits)
         scheduleAutoSave()
       }}
       onFamilyLimitsChange={(limits) => {
         setFamilyLimits(limits)
+        scheduleAutoSave()
+      }}
+      onFamilyWeightFloorsChange={(floors) => {
+        setFamilyWeightFloors(floors)
         scheduleAutoSave()
       }}
       onRename={(name) => {
@@ -1869,6 +1952,9 @@ function LocalBuildEditorContent({ buildId }: { buildId: string }) {
   const [familyLimits, setFamilyLimits] = useState<Record<string, number>>(
     () => build?.family_limits ?? {},
   )
+  const [familyWeightFloors, setFamilyWeightFloors] = useState<
+    Record<string, number>
+  >(() => build?.family_weight_floors ?? {})
 
   const nameRef = useRef(build?.name ?? "")
   const characterRef = useRef(character)
@@ -1882,6 +1968,7 @@ function LocalBuildEditorContent({ buildId }: { buildId: string }) {
   const excludedStackingCategoriesRef = useRef(excludedStackingCategories)
   const effectLimitsRef = useRef(effectLimits)
   const familyLimitsRef = useRef(familyLimits)
+  const familyWeightFloorsRef = useRef(familyWeightFloors)
   characterRef.current = character
   groupsRef.current = groups
   excludedEffectsRef.current = excludedEffects
@@ -1893,6 +1980,7 @@ function LocalBuildEditorContent({ buildId }: { buildId: string }) {
   excludedStackingCategoriesRef.current = excludedStackingCategories
   effectLimitsRef.current = effectLimits
   familyLimitsRef.current = familyLimits
+  familyWeightFloorsRef.current = familyWeightFloors
 
   const updateRef = useRef(update)
   updateRef.current = update
@@ -1914,6 +2002,7 @@ function LocalBuildEditorContent({ buildId }: { buildId: string }) {
     pinned_relics: pinnedRelicsRef.current,
     effect_limits: effectLimitsRef.current,
     family_limits: familyLimitsRef.current,
+    family_weight_floors: familyWeightFloorsRef.current,
   })
 
   // Store flush function in ref so cleanup always calls latest version
@@ -2002,12 +2091,17 @@ function LocalBuildEditorContent({ buildId }: { buildId: string }) {
       }}
       effectLimits={effectLimits}
       familyLimits={familyLimits}
+      familyWeightFloors={familyWeightFloors}
       onEffectLimitsChange={(limits) => {
         setEffectLimits(limits)
         scheduleAutoSave()
       }}
       onFamilyLimitsChange={(limits) => {
         setFamilyLimits(limits)
+        scheduleAutoSave()
+      }}
+      onFamilyWeightFloorsChange={(floors) => {
+        setFamilyWeightFloors(floors)
         scheduleAutoSave()
       }}
       onRename={(name) => {

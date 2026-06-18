@@ -66,3 +66,78 @@ def test_families_list_exposes_weight_fractions(ds: SourceDataHandler):
     fracs = {t["name"]: t["weight_fraction"] for t in magic["tiers"]}
     assert fracs["Magic Attack Power Up"] == pytest.approx(0.375, abs=0.001)  # +0
     assert fracs["Magic Attack Power Up +4"] == 1.0
+
+
+# ---------------------------------------------------------------------------
+# Per-family weight floor (rescale-to-floor)
+# ---------------------------------------------------------------------------
+
+def test_rescale_to_floor_formula():
+    """Static helper maps [frac_min, 1] onto [f_eff, base] and reduces to default."""
+    r = SourceDataHandler._rescale_to_floor
+    # Strongest tier (frac == 1) always maps to the full family weight.
+    assert r(100, 1.0, 0.0, 50) == 100
+    # Weakest tier (frac == frac_min) maps exactly to the floor.
+    assert r(100, 0.0, 0.0, 50) == 50
+    assert r(100, 0.375, 0.375, 50) == 50
+    # Linear in between.
+    assert r(100, 0.5, 0.0, 50) == 75
+    # A floor at the natural minimum (base*frac_min) is a no-op == default base*frac.
+    assert r(100, 0.5, 0.375, 37) == 50   # f_eff clamps up to natural_min 37.5
+    assert r(100, 0.8, 0.375, 0) == 80    # == int(100 * 0.8)
+    # A floor cannot exceed the family weight.
+    assert r(100, 0.375, 0.375, 200) == 100
+    # Single-tier family (frac_min == 1.0): nothing to scale.
+    assert r(100, 1.0, 1.0, 50) == 100
+
+
+def test_floor_zero_is_noop(ds: SourceDataHandler):
+    """floor=0 reproduces the default proportional-to-top scaling exactly."""
+    fam = "Magic Attack Power Up"
+    default = {m: ds.get_family_magnitude_weight(_id(ds, fam, m), 100) for m in range(5)}
+    floored0 = {m: ds.get_family_magnitude_weight(_id(ds, fam, m), 100, 0) for m in range(5)}
+    assert default == {0: 37, 1: 45, 2: 54, 3: 87, 4: 100}
+    assert floored0 == default
+
+
+def test_floor_rescales_weakest_to_floor(ds: SourceDataHandler):
+    """floor=50: weakest tier -> 50, strongest stays 100, strictly increasing (no ties)."""
+    fam = "Magic Attack Power Up"
+    got = {m: ds.get_family_magnitude_weight(_id(ds, fam, m), 100, 50) for m in range(5)}
+    assert got[0] == 50          # weakest tier sits exactly on the floor
+    assert got[4] == 100         # strongest tier unchanged
+    vals = [got[m] for m in range(5)]
+    assert vals == sorted(vals)  # monotonic
+    assert len(set(vals)) == 5   # rescale spreads tiers — unlike a clamp, no ties
+    # a floor never lowers a tier below its natural value
+    default = {m: ds.get_family_magnitude_weight(_id(ds, fam, m), 100) for m in range(5)}
+    assert all(got[m] >= default[m] for m in range(5))
+
+
+def test_floor_below_natural_minimum_is_noop(ds: SourceDataHandler):
+    """A floor at/below the weakest tier's natural value changes nothing."""
+    fam = "Magic Attack Power Up"
+    default = {m: ds.get_family_magnitude_weight(_id(ds, fam, m), 100) for m in range(5)}
+    # +0 naturally scores 37; a floor of 20 is below that, so it is inert.
+    got = {m: ds.get_family_magnitude_weight(_id(ds, fam, m), 100, 20) for m in range(5)}
+    assert got == default
+
+
+def test_floor_ignored_for_negative_weight(ds: SourceDataHandler):
+    """Penalty (negative-weight) families ignore a positive points floor."""
+    fam = "Magic Attack Power Up"
+    for m in range(5):
+        eid = _id(ds, fam, m)
+        assert (ds.get_family_magnitude_weight(eid, -100, 50)
+                == ds.get_family_magnitude_weight(eid, -100, 0))
+
+
+def test_floor_on_uncurated_family(ds: SourceDataHandler):
+    """Rescale also applies to the rank/total fallback (uncurated families)."""
+    fam = "Improved Glintstone and Gravity Stone Damage"
+    members = ds._effect_families[fam]["members"]
+    weakest = sorted(members[0]["effect_ids"])[0]
+    strongest = sorted(members[-1]["effect_ids"])[0]
+    assert ds.get_effect_bonus_value(weakest) is None  # confirm uncurated
+    assert ds.get_family_magnitude_weight(weakest, 100, 60) == 60
+    assert ds.get_family_magnitude_weight(strongest, 100, 60) == 100

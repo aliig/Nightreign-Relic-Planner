@@ -24,4 +24,5 @@ def build_def_from_db(build: Build) -> BuildDefinition:
         excluded_stacking_categories=build.excluded_stacking_categories or [],
         effect_limits={int(k): v for k, v in (build.effect_limits or {}).items()},
         family_limits=build.family_limits or {},
+        family_weight_floors=build.family_weight_floors or {},
     )

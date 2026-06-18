@@ -221,6 +221,23 @@ class TestGroupsAndPinnedRelics:
         assert resp.status_code == 200
         assert resp.json()["pinned_relics"] == pinned
 
+    def test_update_family_weight_floors(
+        self, client: TestClient, superuser_token_headers: dict[str, str]
+    ) -> None:
+        b = _create_build(client, superuser_token_headers, name="FloorUpdate")
+        assert b["family_weight_floors"] == {}  # empty by default
+        floors = {"Fire Attack Power Up": 50}
+        resp = client.put(
+            f"/api/v1/builds/{b['id']}",
+            json={"family_weight_floors": floors},
+            headers=superuser_token_headers,
+        )
+        assert resp.status_code == 200
+        assert resp.json()["family_weight_floors"] == floors
+        # Persisted: a fresh GET returns the same floors.
+        got = client.get(f"/api/v1/builds/{b['id']}", headers=superuser_token_headers)
+        assert got.json()["family_weight_floors"] == floors
+
 
 class TestListBuilds:
     def test_pagination(

@@ -106,6 +106,7 @@ def list_featured_builds(
             excluded_stacking_categories=build.excluded_stacking_categories or [],
             effect_limits=build.effect_limits or {},
             family_limits=build.family_limits or {},
+            family_weight_floors=build.family_weight_floors or {},
             owner_name=full_name,
             created_at=build.created_at,
         )
@@ -216,6 +217,7 @@ def clone_build(
         excluded_stacking_categories=list(source.excluded_stacking_categories or []),
         effect_limits=dict(source.effect_limits or {}),
         family_limits=dict(source.family_limits or {}),
+        family_weight_floors=dict(source.family_weight_floors or {}),
         is_featured=False,
     )
     clone.build_hash = build_signature(build_def_from_db(clone))

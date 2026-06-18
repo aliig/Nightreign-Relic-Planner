@@ -76,6 +76,9 @@ export type BuildDefinition = {
     family_limits?: {
         [key: string]: (number);
     };
+    family_weight_floors?: {
+        [key: string]: (number);
+    };
 };
 
 export type BuildPublic = {
@@ -99,6 +102,9 @@ export type BuildPublic = {
         [key: string]: (number);
     };
     family_limits?: {
+        [key: string]: (number);
+    };
+    family_weight_floors?: {
         [key: string]: (number);
     };
     is_featured: boolean;
@@ -148,6 +154,9 @@ export type BuildUpdate = {
     family_limits?: ({
     [key: string]: (number);
 } | null);
+    family_weight_floors?: ({
+    [key: string]: (number);
+} | null);
 };
 
 /**
@@ -155,7 +164,8 @@ export type BuildUpdate = {
  *
  * Computed at serve time by nrplanner.cumulative.summarize_cumulative_effects
  * from the curated per-effect values in resources/json/effect_bonus_values.json.
- * Only clean, unconditional, self-stackable numeric effects produce a group.
+ * Self-stackable numeric effects (incl. family-less singletons) produce a group;
+ * conditional ones (e.g. "at low HP") set ``conditional`` so the UI can badge them.
  */
 export type CumulativeEffectGroup = {
     family: string;
@@ -212,6 +222,9 @@ export type FeaturedBuildPublic = {
         [key: string]: (number);
     };
     family_limits?: {
+        [key: string]: (number);
+    };
+    family_weight_floors?: {
         [key: string]: (number);
     };
     owner_name?: (string | null);

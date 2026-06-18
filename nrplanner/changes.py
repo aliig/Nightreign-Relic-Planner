@@ -109,6 +109,7 @@ def build_signature(build: BuildDefinition) -> str:
         "excluded_stacking_categories": list(build.excluded_stacking_categories),
         "effect_limits": {str(k): v for k, v in sorted(build.effect_limits.items())},
         "family_limits": dict(sorted(build.family_limits.items())),
+        "family_weight_floors": dict(sorted(build.family_weight_floors.items())),
     }
     return _sha(payload)
 

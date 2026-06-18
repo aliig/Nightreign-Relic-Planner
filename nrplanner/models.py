@@ -154,6 +154,9 @@ class BuildDefinition(BaseModel):
     excluded_stacking_categories: list[int] = Field(default_factory=list)  # compatibilityId values
     effect_limits: dict[int, int] = Field(default_factory=dict)   # effect_id → max_count
     family_limits: dict[str, int] = Field(default_factory=dict)   # family_name → max_count
+    # family_name → minimum weighted value (absolute points) for magnitude scaling.
+    # 0/absent = default proportional-to-top scaling (see get_family_magnitude_weight).
+    family_weight_floors: dict[str, int] = Field(default_factory=dict)
 
     def get_weight_for_effect(self, effect_id: int) -> tuple[str, int] | None:
         """Return (category, weight) for a direct effect ID lookup.

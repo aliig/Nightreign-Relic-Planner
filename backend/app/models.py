@@ -244,6 +244,10 @@ class Build(SQLModel, table=True):
         default_factory=dict,
         sa_column=Column(JSON, nullable=False, server_default="{}"),
     )
+    family_weight_floors: dict = Field(
+        default_factory=dict,
+        sa_column=Column(JSON, nullable=False, server_default="{}"),
+    )
     is_featured: bool = Field(default=False, index=True)
     build_hash: str | None = Field(default=None, max_length=64)
     created_at: datetime | None = Field(
@@ -279,6 +283,7 @@ class BuildUpdate(SQLModel):
     excluded_stacking_categories: list[int] | None = None
     effect_limits: dict[int, int] | None = None
     family_limits: dict[str, int] | None = None
+    family_weight_floors: dict[str, int] | None = None
 
 
 class BuildPublic(SQLModel):
@@ -298,6 +303,7 @@ class BuildPublic(SQLModel):
     excluded_stacking_categories: list[int] = Field(default_factory=list)
     effect_limits: dict[int, int] = Field(default_factory=dict)
     family_limits: dict[str, int] = Field(default_factory=dict)
+    family_weight_floors: dict[str, int] = Field(default_factory=dict)
     is_featured: bool
     created_at: datetime | None = None
     updated_at: datetime | None = None
@@ -324,6 +330,7 @@ class FeaturedBuildPublic(SQLModel):
     excluded_stacking_categories: list[int] = Field(default_factory=list)
     effect_limits: dict[int, int] = Field(default_factory=dict)
     family_limits: dict[str, int] = Field(default_factory=dict)
+    family_weight_floors: dict[str, int] = Field(default_factory=dict)
     owner_name: str | None = None
     created_at: datetime | None = None
 

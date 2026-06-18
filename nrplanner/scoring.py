@@ -42,6 +42,7 @@ class BuildScorer:
             tuple(build.excluded_stacking_categories),
             tuple(sorted(build.effect_limits.items())),
             tuple(sorted(build.family_limits.items())),
+            tuple(sorted(build.family_weight_floors.items())),
             build.default_curse_weight,
             build.curse_max,
         )
@@ -142,9 +143,11 @@ class BuildScorer:
                     if cat == "excluded":
                         result = (cat, 0)
                     else:
-                        # All families get magnitude weighting (positive and negative)
+                        # All families get magnitude weighting (positive and negative);
+                        # an optional per-family floor lifts the weakest tiers.
+                        floor = build.family_weight_floors.get(family, 0)
                         result = (cat, self.data_source.get_family_magnitude_weight(
-                            eff_id, base_w))
+                            eff_id, base_w, floor))
         if not result:
             result = (None, 0)
         self._resolve_memo[eff_id] = result

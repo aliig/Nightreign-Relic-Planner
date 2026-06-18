@@ -24,7 +24,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 // Types mirroring builds.$buildId.tsx (keep in sync if the API shape changes)
 // ---------------------------------------------------------------------------
 
-type FamilyMeta = { name: string; member_names: string[]; member_ids: number[] }
+type FamilyMeta = {
+  name: string
+  member_names: string[]
+  member_ids: number[]
+  tiers?: { name: string; weight_fraction: number }[]
+}
 type EffectMeta = { id: number; name: string; is_debuff?: boolean }
 
 // ---------------------------------------------------------------------------
@@ -234,6 +239,46 @@ describe("Effect Browser – family limit toggle", () => {
     // would disappear — and the group chip would read "Poise (group)" instead.
     expect(screen.getByText("Poise")).toBeInTheDocument()
     expect(screen.queryByText("Poise (group)")).not.toBeInTheDocument()
+  })
+})
+
+describe("Tier weighting – family weight floor", () => {
+  it("previews per-tier weights and rescales the weakest tier when a floor is set", () => {
+    mockFamilies = [
+      {
+        name: "Poise",
+        member_names: ["Poise +1", "Poise +2"],
+        member_ids: [1, 2],
+        tiers: [
+          { name: "Poise +1", weight_fraction: 0.5 },
+          { name: "Poise +2", weight_fraction: 1.0 },
+        ],
+      },
+    ]
+    mockEffects = [
+      { id: 1, name: "Poise +1" },
+      { id: 2, name: "Poise +2" },
+    ]
+
+    renderEditor()
+
+    // Assign the family to the highest-weight group (50) by clicking its row,
+    // then open the tier-weighting dialog from the chip's info button.
+    fireEvent.click(screen.getByText("Poise"))
+    fireEvent.click(screen.getByLabelText("Tier weighting for Poise"))
+
+    // Positive-weight family exposes the floor control.
+    expect(screen.getByText("Minimum weighted value")).toBeInTheDocument()
+    // Default proportional scaling: weakest tier +1 -> round(50 * 0.5) = 25.
+    expect(screen.getByText("25")).toBeInTheDocument()
+
+    // Setting a floor of 40 lifts the weakest tier from 25 to 40 (rescale).
+    const floorInput = screen.getByTitle(/Lift the weakest tiers/i)
+    fireEvent.change(floorInput, { target: { value: "40" } })
+    fireEvent.blur(floorInput)
+
+    expect(screen.queryByText("25")).not.toBeInTheDocument()
+    expect(screen.getByText("40")).toBeInTheDocument()
   })
 })
 

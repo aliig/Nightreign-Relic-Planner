@@ -40,6 +40,7 @@ export interface LocalBuild {
   excluded_stacking_categories?: number[]
   effect_limits?: Record<number, number>
   family_limits?: Record<string, number>
+  family_weight_floors?: Record<string, number>
   created_at: string
   updated_at: string
 }
@@ -222,6 +223,7 @@ export async function migrateLocalBuildsToDb(): Promise<number> {
         (build.excluded_stacking_categories ?? []).length > 0 ||
         Object.keys(build.effect_limits ?? {}).length > 0 ||
         Object.keys(build.family_limits ?? {}).length > 0 ||
+        Object.keys(build.family_weight_floors ?? {}).length > 0 ||
         build.include_deep !== false ||
         build.curse_max !== 1 ||
         (build.default_curse_weight ?? 0) !== 0
@@ -237,6 +239,7 @@ export async function migrateLocalBuildsToDb(): Promise<number> {
             excluded_stacking_categories: build.excluded_stacking_categories,
             effect_limits: build.effect_limits ?? {},
             family_limits: build.family_limits ?? {},
+            family_weight_floors: build.family_weight_floors ?? {},
             include_deep: build.include_deep,
             curse_max: build.curse_max,
             default_curse_weight: build.default_curse_weight ?? 0,

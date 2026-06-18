@@ -732,7 +732,8 @@ class SourceDataHandler:
             return info[0] if info else None
         return None
 
-    def get_family_magnitude_weight(self, effect_id: int, base_weight: int) -> int:
+    def get_family_magnitude_weight(self, effect_id: int, base_weight: int,
+                                    floor: int = 0) -> int:
         """Scale a family weight down to one of its tiers.
 
         Proportional-to-top: a tier's weight is its real in-game bonus magnitude
@@ -740,6 +741,13 @@ class SourceDataHandler:
         the top its bonus represents, e.g. Magic Attack +0 -> 37.5% of +4's
         weight). Falls back to the old linear rank/total for families that have
         no curated bonus values in effect_bonus_values.json.
+
+        ``floor`` (absolute points, default 0) sets a minimum weighted value for
+        the family.  When positive (and ``base_weight`` is positive) the per-tier
+        scale is rescaled so the family's *weakest* tier maps to ``floor`` and its
+        strongest still maps to ``base_weight`` (see ``_rescale_to_floor``).  A
+        floor of 0 — or at/below a tier's natural value — leaves the default
+        proportional scaling byte-for-byte unchanged.
         """
         self._ensure_families()
         info = self._effect_id_to_family.get(effect_id)
@@ -753,11 +761,17 @@ class SourceDataHandler:
 
         bonus = self.get_effect_bonus_value(effect_id)
         if bonus is not None:
-            self._ensure_family_top_magnitude()
+            self._ensure_family_magnitude_bounds()
             top = self._family_top_mag.get(family, 0.0)
             if top > 0:
+                if floor > 0 and base_weight > 0:
+                    frac = self._bonus_magnitude(bonus) / top
+                    frac_min = self._family_min_mag.get(family, 0.0) / top
+                    return self._rescale_to_floor(base_weight, frac, frac_min, floor)
                 return int(base_weight * self._bonus_magnitude(bonus) / top)
         # Fallback: linear rank within the family (uncurated families).
+        if floor > 0 and base_weight > 0:
+            return self._rescale_to_floor(base_weight, rank / total, 1.0 / total, floor)
         return int(base_weight * rank / total)
 
     def get_family_effect_ids(self, family_name: str) -> set[int]:
@@ -780,7 +794,7 @@ class SourceDataHandler:
         rank/total for families without curated bonus values.
         """
         self._ensure_families()
-        self._ensure_family_top_magnitude()
+        self._ensure_family_magnitude_bounds()
         results = []
         for base, fam in self._effect_families.items():
             members = fam["members"]
@@ -849,13 +863,14 @@ class SourceDataHandler:
             return bonus["value"] - 1.0
         return bonus["value"]  # additive flat amount, or reduction fraction
 
-    def _ensure_family_top_magnitude(self) -> None:
-        """Lazily map family base name -> max bonus magnitude across its tiers."""
+    def _ensure_family_magnitude_bounds(self) -> None:
+        """Lazily map family base name -> max/min bonus magnitude across its tiers."""
         if hasattr(self, "_family_top_mag"):
             return
         self._ensure_bonus_values()
         self._ensure_families()
         top: dict[str, float] = {}
+        bottom: dict[str, float] = {}
         for eid, bonus in self._bonus_values.items():
             info = self._effect_id_to_family.get(eid)
             if not info:
@@ -864,7 +879,30 @@ class SourceDataHandler:
             mag = self._bonus_magnitude(bonus)
             if mag > top.get(fam, 0.0):
                 top[fam] = mag
+            if fam not in bottom or mag < bottom[fam]:
+                bottom[fam] = mag
         self._family_top_mag = top
+        self._family_min_mag = bottom
+
+    @staticmethod
+    def _rescale_to_floor(base_weight: int, frac: float, frac_min: float,
+                          floor: int) -> int:
+        """Rescale a per-tier fraction so the weakest tier sits at ``floor``.
+
+        Maps the family's fraction range [frac_min, 1.0] onto the weighted range
+        [f_eff, base_weight], where f_eff is ``floor`` clamped into
+        [base_weight*frac_min, base_weight] — a floor can never drag a tier
+        *below* its natural proportional value, nor above the family weight.
+        At f_eff == base_weight*frac_min this reduces algebraically to the
+        default ``base_weight * frac``, so a floor at/below the natural minimum
+        is a no-op.
+        """
+        span = 1.0 - frac_min
+        if span <= 0:  # single-tier family — nothing to scale
+            return int(base_weight)
+        natural_min = base_weight * frac_min
+        f_eff = min(max(float(floor), natural_min), float(base_weight))
+        return int(f_eff + (base_weight - f_eff) * (frac - frac_min) / span)
 
     # ------------------------------------------------------------------
     # Pool queries

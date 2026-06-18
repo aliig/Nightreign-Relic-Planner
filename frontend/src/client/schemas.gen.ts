@@ -320,6 +320,13 @@ export const BuildDefinitionSchema = {
             },
             type: 'object',
             title: 'Family Limits'
+        },
+        family_weight_floors: {
+            additionalProperties: {
+                type: 'integer'
+            },
+            type: 'object',
+            title: 'Family Weight Floors'
         }
     },
     type: 'object',
@@ -423,6 +430,13 @@ export const BuildPublicSchema = {
             },
             type: 'object',
             title: 'Family Limits'
+        },
+        family_weight_floors: {
+            additionalProperties: {
+                type: 'integer'
+            },
+            type: 'object',
+            title: 'Family Weight Floors'
         },
         is_featured: {
             type: 'boolean',
@@ -694,6 +708,20 @@ export const BuildUpdateSchema = {
                 }
             ],
             title: 'Family Limits'
+        },
+        family_weight_floors: {
+            anyOf: [
+                {
+                    additionalProperties: {
+                        type: 'integer'
+                    },
+                    type: 'object'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Family Weight Floors'
         }
     },
     type: 'object',
@@ -784,7 +812,8 @@ export const CumulativeEffectGroupSchema = {
 
 Computed at serve time by nrplanner.cumulative.summarize_cumulative_effects
 from the curated per-effect values in resources/json/effect_bonus_values.json.
-Only clean, unconditional, self-stackable numeric effects produce a group.`
+Self-stackable numeric effects (incl. family-less singletons) produce a group;
+conditional ones (e.g. "at low HP") set \`\`conditional\`\` so the UI can badge them.`
 } as const;
 
 export const CumulativeEffectTierSchema = {
@@ -961,6 +990,13 @@ export const FeaturedBuildPublicSchema = {
             },
             type: 'object',
             title: 'Family Limits'
+        },
+        family_weight_floors: {
+            additionalProperties: {
+                type: 'integer'
+            },
+            type: 'object',
+            title: 'Family Weight Floors'
         },
         owner_name: {
             anyOf: [
