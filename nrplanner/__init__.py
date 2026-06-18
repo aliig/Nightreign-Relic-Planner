@@ -32,6 +32,18 @@ from nrplanner.writer import (
     sell_value,
     set_favorites,
 )
+from nrplanner.vessel_writer import (
+    PresetRecord,
+    VesselWriteError,
+    add_preset,
+    delete_preset,
+    now_filetime,
+    overwrite_preset,
+    parse_presets,
+    rename_preset,
+    reset_all_presets,
+    reset_all_vessels,
+)
 
 __all__ = [
     # Save parsing
@@ -57,4 +69,8 @@ __all__ = [
     # Save write-back
     "DeleteResult", "FavoriteResult", "delete_relics", "read_favorite_handles",
     "read_murks", "repack_sl2", "sell_value", "set_favorites",
+    # Loadout / vessel write-back
+    "PresetRecord", "VesselWriteError", "add_preset", "delete_preset",
+    "now_filetime", "overwrite_preset", "parse_presets", "rename_preset",
+    "reset_all_presets", "reset_all_vessels",
 ]

@@ -1,4 +1,4 @@
-import { Home, Layers, Package, Upload, Users } from "lucide-react"
+import { BookMarked, Home, Layers, Package, Upload, Users } from "lucide-react"
 
 import { Logo } from "@/components/Common/Logo"
 import {
@@ -15,6 +15,7 @@ const baseItems: Item[] = [
   { icon: Home, title: "Dashboard", path: "/" },
   { icon: Upload, title: "Upload", path: "/upload" },
   { icon: Package, title: "Inventory", path: "/inventory" },
+  { icon: BookMarked, title: "Loadouts", path: "/loadouts" },
   { icon: Layers, title: "Builds", path: "/builds" },
 ]
 

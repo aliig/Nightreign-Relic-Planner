@@ -1,4 +1,6 @@
 import {
+  AlertTriangle,
+  BookMarked,
   CheckCircle2,
   ChevronDown,
   ChevronUp,
@@ -23,6 +25,22 @@ import { COLOR_HEX, RelicNameCell } from "@/components/RelicDisplay"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { Separator } from "@/components/ui/separator"
 import useCustomToast from "@/hooks/useCustomToast"
 import {
@@ -30,6 +48,11 @@ import {
   rawScoreTooltip,
   relicSummary,
 } from "@/lib/buildChange"
+import {
+  exportModifiedLoadouts,
+  LoadoutExportError,
+} from "@/lib/exportLoadouts"
+import { getSaveFile, getSaveFileMeta, rememberSaveFile } from "@/lib/saveFile"
 
 // --- Types ---
 
@@ -417,6 +440,7 @@ export function VesselCard({
   effectMap = new Map(),
   enteredFingerprints,
   inventorySource,
+  loadoutTarget,
 }: {
   vessel: VesselResult
   defaultExpanded?: boolean
@@ -427,9 +451,18 @@ export function VesselCard({
   /** When provided, enables the per-relic "strike" (X) controls. Omit to render
    *  a plain, read-only result card. */
   inventorySource?: InventorySource
+  /** When provided, shows a "Save as loadout" action that writes this vessel's
+   *  relics into the save as an in-game relic loadout preset. ``existing`` lists
+   *  this character's current loadouts (for the overwrite option). */
+  loadoutTarget?: {
+    slotIndex: number
+    character: string
+    existing?: { index: number; name: string }[]
+  }
 }) {
   const { showErrorToast } = useCustomToast()
   const [expanded, setExpanded] = useState(defaultExpanded)
+  const [saveOpen, setSaveOpen] = useState(false)
   // Temporary, client-only strike state. Never persisted; reset whenever a fresh
   // optimization replaces the `vessel` prop (see effect below).
   const [workingVessel, setWorkingVessel] = useState<VesselResult>(vessel)
@@ -521,6 +554,20 @@ export function VesselCard({
             )}
           </div>
           <div className="flex items-center gap-2">
+            {loadoutTarget && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 px-2"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setSaveOpen(true)
+                }}
+              >
+                <BookMarked className="h-3.5 w-3.5 mr-1" />
+                Save as loadout
+              </Button>
+            )}
             {isModified && (
               <Button
                 variant="ghost"
@@ -594,7 +641,203 @@ export function VesselCard({
             )}
         </CardContent>
       )}
+      {loadoutTarget && (
+        <SaveLoadoutDialog
+          open={saveOpen}
+          onOpenChange={setSaveOpen}
+          vessel={workingVessel}
+          target={loadoutTarget}
+        />
+      )}
     </Card>
+  )
+}
+
+/** Dialog that writes the vessel's relics into the save as a new in-game relic
+ *  loadout preset (op=add). The user re-imports the downloaded .sl2 in-game. */
+function SaveLoadoutDialog({
+  open,
+  onOpenChange,
+  vessel,
+  target,
+}: {
+  open: boolean
+  onOpenChange: (v: boolean) => void
+  vessel: VesselResult
+  target: {
+    slotIndex: number
+    character: string
+    existing?: { index: number; name: string }[]
+  }
+}) {
+  const { showSuccessToast, showErrorToast } = useCustomToast()
+  const [mode, setMode] = useState<"add" | "overwrite">("add")
+  const [name, setName] = useState("")
+  const [overwriteIndex, setOverwriteIndex] = useState<string>("")
+  const [busy, setBusy] = useState(false)
+  const [, setFileTick] = useState(0)
+
+  const saveFile = getSaveFile()
+  const saveMeta = getSaveFileMeta()
+  const existing = target.existing ?? []
+
+  // Relics ordered by slot index (0..5), 0 for empty slots.
+  const gaHandles = [...vessel.assignments]
+    .sort((a, b) => a.slot_index - b.slot_index)
+    .map((a) => (a.relic as { ga_handle?: number } | null)?.ga_handle ?? 0)
+
+  const valid = mode === "add" ? name.trim().length > 0 : overwriteIndex !== ""
+
+  function onPickFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (file) {
+      rememberSaveFile(file)
+      setFileTick((t) => t + 1)
+    }
+  }
+
+  async function doSave() {
+    const file = getSaveFile()
+    if (!file || !valid) return
+    setBusy(true)
+    try {
+      const op =
+        mode === "add"
+          ? {
+              op: "add" as const,
+              character: target.character,
+              vessel_id: vessel.vessel_id,
+              ga_handles: gaHandles,
+              name: name.trim(),
+            }
+          : {
+              op: "overwrite" as const,
+              index: Number(overwriteIndex),
+              character: target.character,
+              vessel_id: vessel.vessel_id,
+              ga_handles: gaHandles,
+            }
+      const result = await exportModifiedLoadouts({
+        file,
+        slotIndex: target.slotIndex,
+        operations: [op],
+      })
+      onOpenChange(false)
+      setName("")
+      setOverwriteIndex("")
+      const what =
+        mode === "add" ? `loadout "${name.trim()}" added` : "loadout replaced"
+      showSuccessToast(
+        `Saved ${result.filename} — ${what} (${result.used}/100 used). Load it in-game, then re-import here to refresh.`,
+      )
+    } catch (err) {
+      showErrorToast(
+        err instanceof LoadoutExportError || err instanceof Error
+          ? err.message
+          : "Failed to save loadout",
+      )
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Save as in-game loadout</DialogTitle>
+          <DialogDescription asChild>
+            <div className="space-y-2 pt-1">
+              <div className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-amber-700 dark:text-amber-400">
+                <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+                <span>
+                  Back up your original save first. This writes a loadout for{" "}
+                  <strong>{target.character}</strong> on{" "}
+                  <strong>{vessel.vessel_name}</strong> and downloads a modified
+                  copy — close the game, then replace your save with it.
+                </span>
+              </div>
+            </div>
+          </DialogDescription>
+        </DialogHeader>
+
+        {existing.length > 0 && (
+          <div className="flex gap-2">
+            <Button
+              variant={mode === "add" ? "default" : "outline"}
+              size="sm"
+              onClick={() => setMode("add")}
+            >
+              Create new
+            </Button>
+            <Button
+              variant={mode === "overwrite" ? "default" : "outline"}
+              size="sm"
+              onClick={() => setMode("overwrite")}
+            >
+              Replace existing
+            </Button>
+          </div>
+        )}
+
+        {mode === "add" ? (
+          <div className="space-y-1">
+            <Input
+              placeholder="Loadout name"
+              value={name}
+              maxLength={18}
+              onChange={(e) => setName(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && saveFile && doSave()}
+            />
+            <div className="text-xs text-muted-foreground">
+              {name.length}/18
+            </div>
+          </div>
+        ) : (
+          <Select value={overwriteIndex} onValueChange={setOverwriteIndex}>
+            <SelectTrigger>
+              <SelectValue placeholder="Choose a loadout to replace" />
+            </SelectTrigger>
+            <SelectContent>
+              {existing.map((l) => (
+                <SelectItem key={l.index} value={String(l.index)}>
+                  {l.name || "(unnamed)"}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
+
+        {!saveFile && (
+          <div className="space-y-1 text-sm">
+            <p className="text-muted-foreground">
+              {saveMeta
+                ? `Re-select your save file (${saveMeta.name}) to export — it must be the same save the optimizer ran on.`
+                : "Select your save file (.sl2) to export."}
+            </p>
+            <input
+              type="file"
+              accept=".sl2"
+              onChange={onPickFile}
+              className="text-sm"
+            />
+          </div>
+        )}
+
+        <DialogFooter>
+          <Button
+            variant="outline"
+            onClick={() => onOpenChange(false)}
+            disabled={busy}
+          >
+            Cancel
+          </Button>
+          <Button onClick={doSave} disabled={busy || !saveFile || !valid}>
+            {busy ? "Saving…" : "Download modified save"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 

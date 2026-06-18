@@ -19,6 +19,7 @@ import { Route as AuthCallbackRouteImport } from './routes/auth/callback'
 import { Route as LayoutUploadRouteImport } from './routes/_layout/upload'
 import { Route as LayoutSettingsRouteImport } from './routes/_layout/settings'
 import { Route as LayoutOptimizeRouteImport } from './routes/_layout/optimize'
+import { Route as LayoutLoadoutsRouteImport } from './routes/_layout/loadouts'
 import { Route as LayoutInventoryRouteImport } from './routes/_layout/inventory'
 import { Route as LayoutBuildsRouteImport } from './routes/_layout/builds'
 import { Route as LayoutAdminRouteImport } from './routes/_layout/admin'
@@ -76,6 +77,11 @@ const LayoutOptimizeRoute = LayoutOptimizeRouteImport.update({
   path: '/optimize',
   getParentRoute: () => LayoutRoute,
 } as any)
+const LayoutLoadoutsRoute = LayoutLoadoutsRouteImport.update({
+  id: '/loadouts',
+  path: '/loadouts',
+  getParentRoute: () => LayoutRoute,
+} as any)
 const LayoutInventoryRoute = LayoutInventoryRouteImport.update({
   id: '/inventory',
   path: '/inventory',
@@ -123,6 +129,7 @@ export interface FileRoutesByFullPath {
   '/admin': typeof LayoutAdminRoute
   '/builds': typeof LayoutBuildsRouteWithChildren
   '/inventory': typeof LayoutInventoryRoute
+  '/loadouts': typeof LayoutLoadoutsRoute
   '/optimize': typeof LayoutOptimizeRoute
   '/settings': typeof LayoutSettingsRoute
   '/upload': typeof LayoutUploadRoute
@@ -140,6 +147,7 @@ export interface FileRoutesByTo {
   '/admin': typeof LayoutAdminRoute
   '/builds': typeof LayoutBuildsRouteWithChildren
   '/inventory': typeof LayoutInventoryRoute
+  '/loadouts': typeof LayoutLoadoutsRoute
   '/optimize': typeof LayoutOptimizeRoute
   '/settings': typeof LayoutSettingsRoute
   '/upload': typeof LayoutUploadRoute
@@ -159,6 +167,7 @@ export interface FileRoutesById {
   '/_layout/admin': typeof LayoutAdminRoute
   '/_layout/builds': typeof LayoutBuildsRouteWithChildren
   '/_layout/inventory': typeof LayoutInventoryRoute
+  '/_layout/loadouts': typeof LayoutLoadoutsRoute
   '/_layout/optimize': typeof LayoutOptimizeRoute
   '/_layout/settings': typeof LayoutSettingsRoute
   '/_layout/upload': typeof LayoutUploadRoute
@@ -180,6 +189,7 @@ export interface FileRouteTypes {
     | '/admin'
     | '/builds'
     | '/inventory'
+    | '/loadouts'
     | '/optimize'
     | '/settings'
     | '/upload'
@@ -197,6 +207,7 @@ export interface FileRouteTypes {
     | '/admin'
     | '/builds'
     | '/inventory'
+    | '/loadouts'
     | '/optimize'
     | '/settings'
     | '/upload'
@@ -215,6 +226,7 @@ export interface FileRouteTypes {
     | '/_layout/admin'
     | '/_layout/builds'
     | '/_layout/inventory'
+    | '/_layout/loadouts'
     | '/_layout/optimize'
     | '/_layout/settings'
     | '/_layout/upload'
@@ -307,6 +319,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LayoutOptimizeRouteImport
       parentRoute: typeof LayoutRoute
     }
+    '/_layout/loadouts': {
+      id: '/_layout/loadouts'
+      path: '/loadouts'
+      fullPath: '/loadouts'
+      preLoaderRoute: typeof LayoutLoadoutsRouteImport
+      parentRoute: typeof LayoutRoute
+    }
     '/_layout/inventory': {
       id: '/_layout/inventory'
       path: '/inventory'
@@ -390,6 +409,7 @@ interface LayoutRouteChildren {
   LayoutAdminRoute: typeof LayoutAdminRoute
   LayoutBuildsRoute: typeof LayoutBuildsRouteWithChildren
   LayoutInventoryRoute: typeof LayoutInventoryRoute
+  LayoutLoadoutsRoute: typeof LayoutLoadoutsRoute
   LayoutOptimizeRoute: typeof LayoutOptimizeRoute
   LayoutSettingsRoute: typeof LayoutSettingsRoute
   LayoutUploadRoute: typeof LayoutUploadRoute
@@ -400,6 +420,7 @@ const LayoutRouteChildren: LayoutRouteChildren = {
   LayoutAdminRoute: LayoutAdminRoute,
   LayoutBuildsRoute: LayoutBuildsRouteWithChildren,
   LayoutInventoryRoute: LayoutInventoryRoute,
+  LayoutLoadoutsRoute: LayoutLoadoutsRoute,
   LayoutOptimizeRoute: LayoutOptimizeRoute,
   LayoutSettingsRoute: LayoutSettingsRoute,
   LayoutUploadRoute: LayoutUploadRoute,

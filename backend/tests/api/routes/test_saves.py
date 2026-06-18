@@ -301,3 +301,96 @@ class TestHandleRemapOnReupload:
         updated = db.get(Build, build.id)
         assert updated is not None
         assert updated.pinned_relics == [MOCK_RELIC.ga_handle]
+
+
+# ---------------------------------------------------------------------------
+# POST /saves/export-loadouts
+# ---------------------------------------------------------------------------
+
+_FIXTURE = Path(__file__).parents[2] / "fixtures" / "NR0000.sl2"
+
+
+def _export_loadouts(client, *, slot_index=0, operations="[]", file_bytes=None,
+                     filename="NR0000.sl2"):
+    raw = file_bytes if file_bytes is not None else b"\x00" * 32
+    files = {"file": (filename, io.BytesIO(raw), "application/octet-stream")}
+    data = {"slot_index": str(slot_index), "operations": operations}
+    return client.post("/api/v1/saves/export-loadouts", files=files, data=data)
+
+
+@pytest.mark.usefixtures("override_game_data")
+class TestExportLoadouts:
+    def test_invalid_operations_json_returns_422(self, client: TestClient) -> None:
+        resp = _export_loadouts(client, operations="not json")
+        assert resp.status_code == 422
+
+    def test_unknown_op_kind_returns_422(self, client: TestClient) -> None:
+        resp = _export_loadouts(client, operations='[{"op": "explode"}]')
+        assert resp.status_code == 422
+
+    def test_empty_operations_returns_422(self, client: TestClient) -> None:
+        resp = _export_loadouts(client, operations="[]")
+        assert resp.status_code == 422
+
+    @pytest.mark.skipif(not _FIXTURE.exists(), reason="real .sl2 fixture absent")
+    def test_rename_real_fixture(self, client: TestClient) -> None:
+        ops = '[{"op": "rename", "index": 0, "name": "via api"}]'
+        resp = _export_loadouts(client, operations=ops, file_bytes=_FIXTURE.read_bytes())
+        assert resp.status_code == 200
+        assert resp.headers["X-Loadouts-Renamed"] == "1"
+        assert int(resp.headers["X-Loadouts-Used"]) > 0
+        assert resp.content[:4] == b"BND4"
+
+    @pytest.mark.skipif(not _FIXTURE.exists(), reason="real .sl2 fixture absent")
+    def test_add_succeeds_into_empty_slot(self, client: TestClient) -> None:
+        # Section 3 is a fixed 100-slot array with empty slots after the actives,
+        # so a net-new add writes into the first empty slot in place (no downstream
+        # shift). It succeeds on a pristine save and bumps the loadout count by one.
+        before = int(_export_loadouts(
+            client, operations='[{"op": "rename", "index": 0, "name": "x"}]',
+            file_bytes=_FIXTURE.read_bytes()).headers["X-Loadouts-Used"])
+        ops = ('[{"op": "add", "character": "Wylder", "vessel_id": 1002, '
+               '"name": "api add", "ga_handles": [0, 0, 0, 0, 0, 0]}]')
+        resp = _export_loadouts(client, operations=ops, file_bytes=_FIXTURE.read_bytes())
+        assert resp.status_code == 200
+        assert resp.headers["X-Loadouts-Added"] == "1"
+        assert int(resp.headers["X-Loadouts-Used"]) == before + 1
+        assert resp.content[:4] == b"BND4"
+
+    @pytest.mark.skipif(not _FIXTURE.exists(), reason="real .sl2 fixture absent")
+    def test_overwrite_real_fixture(self, client: TestClient) -> None:
+        # preset[0] is hero_type 6 == Revenant (1-based), vessel 6002
+        ops = ('[{"op": "overwrite", "index": 0, "character": "Revenant", '
+               '"vessel_id": 6002, "name": "via api", "ga_handles": [0,0,0,0,0,0]}]')
+        resp = _export_loadouts(client, operations=ops, file_bytes=_FIXTURE.read_bytes())
+        assert resp.status_code == 200
+        assert resp.headers["X-Loadouts-Overwritten"] == "1"
+        assert resp.content[:4] == b"BND4"
+
+    @pytest.mark.skipif(not _FIXTURE.exists(), reason="real .sl2 fixture absent")
+    def test_reset_vessels_real_fixture(self, client: TestClient) -> None:
+        resp = _export_loadouts(client, operations='[{"op": "reset_vessels"}]',
+                                file_bytes=_FIXTURE.read_bytes())
+        assert resp.status_code == 200
+        assert resp.headers["X-Vessels-Reset"] == "1"
+
+    @pytest.mark.skipif(not _FIXTURE.exists(), reason="real .sl2 fixture absent")
+    def test_name_too_long_rejected(self, client: TestClient) -> None:
+        ops = ('[{"op": "add", "character": "Wylder", "vessel_id": 1002, '
+               '"name": "%s", "ga_handles": []}]' % ("x" * 19))
+        resp = _export_loadouts(client, operations=ops, file_bytes=_FIXTURE.read_bytes())
+        assert resp.status_code == 422
+
+    @pytest.mark.skipif(not _FIXTURE.exists(), reason="real .sl2 fixture absent")
+    def test_bad_vessel_for_hero_rejected(self, client: TestClient) -> None:
+        # vessel 2002 belongs to Ironeye, not Wylder
+        ops = ('[{"op": "add", "character": "Wylder", "vessel_id": 2002, '
+               '"name": "bad", "ga_handles": []}]')
+        resp = _export_loadouts(client, operations=ops, file_bytes=_FIXTURE.read_bytes())
+        assert resp.status_code == 422
+
+    @pytest.mark.skipif(not _FIXTURE.exists(), reason="real .sl2 fixture absent")
+    def test_reset_presets_cannot_combine(self, client: TestClient) -> None:
+        ops = ('[{"op": "reset_presets"}, {"op": "rename", "index": 0, "name": "x"}]')
+        resp = _export_loadouts(client, operations=ops, file_bytes=_FIXTURE.read_bytes())
+        assert resp.status_code == 422

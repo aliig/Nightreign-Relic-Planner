@@ -1,8 +1,9 @@
 import uuid
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Annotated, Literal, Optional, Union
 
-from pydantic import EmailStr
+from pydantic import BaseModel, EmailStr
+from pydantic import Field as PydanticField
 from sqlalchemy import BigInteger, Boolean, Column, DateTime, JSON, UniqueConstraint
 from sqlmodel import Field, Relationship, SQLModel
 
@@ -126,6 +127,12 @@ class Profile(SQLModel, table=True):
     murks: int = Field(
         default=0,
         sa_column=Column(BigInteger(), nullable=False, server_default="0"),
+    )
+    # In-game relic loadout presets parsed from the save (list of ParsedLoadoutData
+    # dicts). Display cache tied to the last upload; replaced on every re-upload.
+    loadouts: list = Field(
+        default_factory=list,
+        sa_column=Column(JSON, nullable=False, server_default="[]"),
     )
 
     save_upload: Optional["SaveUpload"] = Relationship(back_populates="profiles")
@@ -461,12 +468,88 @@ class ParsedRelicData(SQLModel):
     equipped: bool = False
 
 
+class ParsedLoadoutData(SQLModel):
+    """An in-game relic loadout preset, enriched for display.
+
+    ``index`` is the preset's position in the save's preset chain (blob order) and
+    is the stable key used to address it in write operations. ``ga_handles`` are the
+    6 relic handles (0 = empty slot); the client joins them against the slot's relics.
+    """
+    index: int
+    hero_type: int
+    character: str
+    name: str
+    vessel_id: int
+    vessel_name: str
+    slot_colors: list[str] = Field(default_factory=list)
+    ga_handles: list[int] = Field(default_factory=list)
+
+
+class LoadoutsPublic(SQLModel):
+    data: list[ParsedLoadoutData]
+    count: int
+    used: int
+    capacity: int = 100
+
+
+# --- loadout write operations (POST /saves/export-loadouts) -----------------
+# A batched, discriminated union of edits applied to one save slot's vessel data.
+# ``character`` is the hero name (resolved server-side to the 1-based hero_type);
+# ``ga_handles`` are up to 6 relic handles (0 = empty slot).
+
+class ResetVesselsOp(BaseModel):
+    op: Literal["reset_vessels"]
+
+
+class ResetPresetsOp(BaseModel):
+    op: Literal["reset_presets"]
+
+
+class DeleteLoadoutOp(BaseModel):
+    op: Literal["delete"]
+    index: int
+
+
+class RenameLoadoutOp(BaseModel):
+    op: Literal["rename"]
+    index: int
+    name: str
+
+
+class OverwriteLoadoutOp(BaseModel):
+    op: Literal["overwrite"]
+    index: int
+    character: str
+    vessel_id: int
+    ga_handles: list[int]
+    name: str | None = None
+
+
+class AddLoadoutOp(BaseModel):
+    op: Literal["add"]
+    character: str
+    vessel_id: int
+    ga_handles: list[int]
+    name: str
+
+
+LoadoutOp = Annotated[
+    Union[
+        ResetVesselsOp, ResetPresetsOp, DeleteLoadoutOp,
+        RenameLoadoutOp, OverwriteLoadoutOp, AddLoadoutOp,
+    ],
+    PydanticField(discriminator="op"),
+]
+
+
 class ParsedProfileData(SQLModel):
     slot_index: int
     name: str
     relic_count: int
     relics: list[ParsedRelicData]
     murks: int = 0
+    presets: list[ParsedLoadoutData] = Field(default_factory=list)
+    presets_used: int = 0
     # Populated for authenticated users after DB persistence
     id: uuid.UUID | None = None
 

@@ -9,6 +9,12 @@ export type Body_login_login_access_token = {
     client_secret?: (string | null);
 };
 
+export type Body_saves_export_loadouts = {
+    file: (Blob | File);
+    slot_index: number;
+    operations?: string;
+};
+
 export type Body_saves_export_save = {
     file: (Blob | File);
     slot_index: number;
@@ -247,6 +253,13 @@ export type HTTPValidationError = {
     detail?: Array<ValidationError>;
 };
 
+export type LoadoutsPublic = {
+    data: Array<ParsedLoadoutData>;
+    count: number;
+    used: number;
+    capacity?: number;
+};
+
 /**
  * A relic frozen in its exact slot during a single-slot re-optimization.
  */
@@ -306,12 +319,32 @@ export type OwnedRelic_Output = {
     readonly all_effects: Array<(number)>;
 };
 
+/**
+ * An in-game relic loadout preset, enriched for display.
+ *
+ * ``index`` is the preset's position in the save's preset chain (blob order) and
+ * is the stable key used to address it in write operations. ``ga_handles`` are the
+ * 6 relic handles (0 = empty slot); the client joins them against the slot's relics.
+ */
+export type ParsedLoadoutData = {
+    index: number;
+    hero_type: number;
+    character: string;
+    name: string;
+    vessel_id: number;
+    vessel_name: string;
+    slot_colors?: Array<(string)>;
+    ga_handles?: Array<(number)>;
+};
+
 export type ParsedProfileData = {
     slot_index: number;
     name: string;
     relic_count: number;
     relics: Array<ParsedRelicData>;
     murks?: number;
+    presets?: Array<ParsedLoadoutData>;
+    presets_used?: number;
     id?: (string | null);
 };
 
@@ -737,11 +770,23 @@ export type SavesGetProfileRelicsData = {
 
 export type SavesGetProfileRelicsResponse = (RelicsPublic);
 
+export type SavesGetProfileLoadoutsData = {
+    profileId: string;
+};
+
+export type SavesGetProfileLoadoutsResponse = (LoadoutsPublic);
+
 export type SavesExportSaveData = {
     formData: Body_saves_export_save;
 };
 
 export type SavesExportSaveResponse = (unknown);
+
+export type SavesExportLoadoutsData = {
+    formData: Body_saves_export_loadouts;
+};
+
+export type SavesExportLoadoutsResponse = (unknown);
 
 export type UsersReadUsersData = {
     limit?: number;

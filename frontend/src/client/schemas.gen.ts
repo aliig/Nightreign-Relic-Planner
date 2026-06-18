@@ -57,6 +57,28 @@ export const Body_login_login_access_tokenSchema = {
     title: 'Body_login-login_access_token'
 } as const;
 
+export const Body_saves_export_loadoutsSchema = {
+    properties: {
+        file: {
+            type: 'string',
+            format: 'binary',
+            title: 'File'
+        },
+        slot_index: {
+            type: 'integer',
+            title: 'Slot Index'
+        },
+        operations: {
+            type: 'string',
+            title: 'Operations',
+            default: '[]'
+        }
+    },
+    type: 'object',
+    required: ['file', 'slot_index'],
+    title: 'Body_saves-export_loadouts'
+} as const;
+
 export const Body_saves_export_saveSchema = {
     properties: {
         file: {
@@ -1087,6 +1109,34 @@ export const HTTPValidationErrorSchema = {
     title: 'HTTPValidationError'
 } as const;
 
+export const LoadoutsPublicSchema = {
+    properties: {
+        data: {
+            items: {
+                '$ref': '#/components/schemas/ParsedLoadoutData'
+            },
+            type: 'array',
+            title: 'Data'
+        },
+        count: {
+            type: 'integer',
+            title: 'Count'
+        },
+        used: {
+            type: 'integer',
+            title: 'Used'
+        },
+        capacity: {
+            type: 'integer',
+            title: 'Capacity',
+            default: 100
+        }
+    },
+    type: 'object',
+    required: ['data', 'count', 'used'],
+    title: 'LoadoutsPublic'
+} as const;
+
 export const LockedSlotSchema = {
     properties: {
         slot_index: {
@@ -1323,6 +1373,57 @@ export const OwnedRelic_OutputSchema = {
     description: 'A relic owned by the player, parsed from save data.'
 } as const;
 
+export const ParsedLoadoutDataSchema = {
+    properties: {
+        index: {
+            type: 'integer',
+            title: 'Index'
+        },
+        hero_type: {
+            type: 'integer',
+            title: 'Hero Type'
+        },
+        character: {
+            type: 'string',
+            title: 'Character'
+        },
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        vessel_id: {
+            type: 'integer',
+            title: 'Vessel Id'
+        },
+        vessel_name: {
+            type: 'string',
+            title: 'Vessel Name'
+        },
+        slot_colors: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Slot Colors'
+        },
+        ga_handles: {
+            items: {
+                type: 'integer'
+            },
+            type: 'array',
+            title: 'Ga Handles'
+        }
+    },
+    type: 'object',
+    required: ['index', 'hero_type', 'character', 'name', 'vessel_id', 'vessel_name'],
+    title: 'ParsedLoadoutData',
+    description: `An in-game relic loadout preset, enriched for display.
+
+\`\`index\`\` is the preset's position in the save's preset chain (blob order) and
+is the stable key used to address it in write operations. \`\`ga_handles\`\` are the
+6 relic handles (0 = empty slot); the client joins them against the slot's relics.`
+} as const;
+
 export const ParsedProfileDataSchema = {
     properties: {
         slot_index: {
@@ -1347,6 +1448,18 @@ export const ParsedProfileDataSchema = {
         murks: {
             type: 'integer',
             title: 'Murks',
+            default: 0
+        },
+        presets: {
+            items: {
+                '$ref': '#/components/schemas/ParsedLoadoutData'
+            },
+            type: 'array',
+            title: 'Presets'
+        },
+        presets_used: {
+            type: 'integer',
+            title: 'Presets Used',
             default: 0
         },
         id: {

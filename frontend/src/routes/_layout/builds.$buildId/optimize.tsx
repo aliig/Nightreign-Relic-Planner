@@ -74,6 +74,13 @@ function AuthOptimizeForm({ buildId }: { buildId: string }) {
 
   const [profileId, setProfileId] = useState(profiles[0]?.id ?? "")
 
+  const { data: loadoutsData } = useQuery({
+    queryKey: ["loadouts", profileId],
+    queryFn: () => SavesService.getProfileLoadouts({ profileId }),
+    enabled: !!profileId,
+    staleTime: 5 * 60 * 1000,
+  })
+
   const pinnedHandles = new Set<number>(selectedBuild?.pinned_relics ?? [])
   const key = cacheKey(
     "auth",
@@ -249,6 +256,17 @@ function AuthOptimizeForm({ buildId }: { buildId: string }) {
                 index === 0 ? enteredKeys(change) : undefined
               }
               inventorySource={{ build_id: buildId, profile_id: profileId }}
+              loadoutTarget={(() => {
+                const p = profiles.find((pr) => pr.id === profileId)
+                if (!p || !selectedBuild?.character) return undefined
+                return {
+                  slotIndex: p.slot_index,
+                  character: selectedBuild.character,
+                  existing: (loadoutsData?.data ?? [])
+                    .filter((l) => l.character === selectedBuild.character)
+                    .map((l) => ({ index: l.index, name: l.name })),
+                }
+              })()}
             />
           ))}
         </div>
@@ -508,6 +526,21 @@ function AnonOptimizeForm({ buildId }: { buildId: string }) {
               }
               inventorySource={
                 inlineBuild ? { build: inlineBuild, relics } : undefined
+              }
+              loadoutTarget={
+                profile?.slot_index != null && build?.character
+                  ? {
+                      slotIndex: Number(profile.slot_index),
+                      character: build.character,
+                      existing: (((profile as any)?.presets ?? []) as Array<{
+                        index: number
+                        name: string
+                        character: string
+                      }>)
+                        .filter((p) => p.character === build.character)
+                        .map((p) => ({ index: p.index, name: p.name })),
+                    }
+                  : undefined
               }
             />
           ))}

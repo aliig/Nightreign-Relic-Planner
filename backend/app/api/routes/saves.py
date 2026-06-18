@@ -25,10 +25,13 @@ from app.core.db import engine
 from app.core.game_data import game_data_version, get_items_json
 from app.models import (
     Build,
+    LoadoutOp,
+    LoadoutsPublic,
     OptimizationSnapshot,
     ProfilePublic,
     ProfilesPublic,
     Profile,
+    ParsedLoadoutData,
     ParsedProfileData,
     ParsedRelicData,
     Relic,
@@ -42,17 +45,25 @@ from app.models import (
 from nrplanner import (
     LoadoutHandler,
     RelicInventory,
+    VesselWriteError,
+    add_preset,
+    delete_preset,
     discover_characters,
     decrypt_sl2,
     delete_relics,
+    overwrite_preset,
     parse_relics,
     read_favorite_handles,
     read_murks,
+    rename_preset,
     repack_sl2,
+    reset_all_presets,
+    reset_all_vessels,
     sell_value,
     set_favorites,
     split_memory_dat,
 )
+from nrplanner.constants import CHARACTER_NAMES
 from nrplanner.changes import (
     build_signature,
     diff_results,
@@ -292,6 +303,31 @@ def _detect_platform(filename: str) -> str:
     )
 
 
+def _character_for_hero_type(hero_type: int) -> str:
+    """Map a 1-based save hero_type (Wylder=1..Undertaker=10) to its name."""
+    if 1 <= hero_type <= len(CHARACTER_NAMES):
+        return CHARACTER_NAMES[hero_type - 1]
+    return f"Hero {hero_type}"
+
+
+def _parsed_loadouts(loadout: LoadoutHandler, ds: Any) -> list[ParsedLoadoutData]:
+    """Build display-enriched loadout presets from a parsed LoadoutHandler."""
+    out: list[ParsedLoadoutData] = []
+    for p in loadout.all_presets:
+        vessel = ds.get_vessel_data(p["vessel_id"]) or {}
+        out.append(ParsedLoadoutData(
+            index=p["index"],
+            hero_type=p["hero_type"],
+            character=_character_for_hero_type(p["hero_type"]),
+            name=p["name"],
+            vessel_id=p["vessel_id"],
+            vessel_name=vessel.get("Name", f"Vessel {p['vessel_id']}"),
+            slot_colors=list(vessel.get("Colors", [])),
+            ga_handles=list(p["relics"]),
+        ))
+    return out
+
+
 def _parse_save_to_profiles(
     file_bytes: bytes,
     filename: str,
@@ -374,6 +410,8 @@ def _parse_save_to_profiles(
             # Extract slot index from filename (USERDATA_00 → 0)
             slot_index = int(userdata_path.stem.rsplit("_", 1)[-1])
 
+            presets = _parsed_loadouts(loadout, ds)
+
             profiles.append(
                 ParsedProfileData(
                     slot_index=slot_index,
@@ -381,6 +419,8 @@ def _parse_save_to_profiles(
                     relic_count=len(relics_data),
                     relics=relics_data,
                     murks=murks,
+                    presets=presets,
+                    presets_used=len(presets),
                 )
             )
 
@@ -494,6 +534,7 @@ async def upload_save(
             name=prof_data.name,
             relics_hash=relics_signature_from_fingerprints(fps),
             murks=prof_data.murks,
+            loadouts=[pl.model_dump() for pl in prof_data.presets],
         )
         session.add(profile)
         session.flush()
@@ -751,6 +792,7 @@ async def upload_save_stream(
             name=prof_data.name,
             relics_hash=relics_signature_from_fingerprints(fps),
             murks=prof_data.murks,
+            loadouts=[pl.model_dump() for pl in prof_data.presets],
         )
         session.add(profile)
         session.flush()
@@ -975,6 +1017,28 @@ def get_profile_relics(
     )
 
 
+@router.get("/profiles/{profile_id}/loadouts", response_model=LoadoutsPublic)
+def get_profile_loadouts(
+    profile_id: uuid.UUID,
+    session: SessionDep,
+    current_user: CurrentUser,
+) -> LoadoutsPublic:
+    """Get the in-game relic loadout presets parsed from a saved profile."""
+    profile = session.get(Profile, profile_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if profile.owner_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not enough permissions")
+
+    loadouts = [ParsedLoadoutData.model_validate(p) for p in (profile.loadouts or [])]
+    return LoadoutsPublic(
+        data=loadouts,
+        count=len(loadouts),
+        used=len(loadouts),
+        capacity=100,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Save export (sell/delete relics, credit Murk, re-encrypt)
 # ---------------------------------------------------------------------------
@@ -1166,6 +1230,258 @@ async def export_save(
             "Access-Control-Expose-Headers": (
                 "Content-Disposition, X-Relics-Removed, X-Favorites-Changed, "
                 "X-Murks-Credited, X-Murks-Total"
+            ),
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# Loadout export (add/delete/rename/overwrite presets, reset vessels/presets)
+# ---------------------------------------------------------------------------
+
+_MAX_PRESETS = 100
+_NAME_MAX_UNITS = 18
+
+
+def _resolve_hero_type(character: str) -> int:
+    """Map a hero name to the 1-based save hero_type (Wylder=1 .. Undertaker=10)."""
+    try:
+        idx = list(CHARACTER_NAMES).index(character)
+    except ValueError:
+        raise HTTPException(status_code=422, detail=f"Unknown character '{character}'.")
+    if idx >= len(CHARACTER_NAMES) - 1:  # "All" sentinel — not a real hero
+        raise HTTPException(
+            status_code=422,
+            detail="Loadouts must target a specific character, not 'All'.",
+        )
+    return idx + 1
+
+
+def _decrypt_slot_blob(file_bytes: bytes, filename: str, slot_index: int) -> bytes:
+    """Decrypt one PC character slot and return its USERDATA blob. Stateless."""
+    platform = _detect_platform(filename)
+    if platform != "PC":
+        raise HTTPException(
+            status_code=422,
+            detail="Loadout export currently supports PC (.sl2) saves only.",
+        )
+    if file_bytes[:4] != b"BND4":
+        raise HTTPException(
+            status_code=422,
+            detail="Not a valid PC .sl2 save file (missing BND4 header).",
+        )
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        save_path = tmp_path / Path(filename).name
+        save_path.write_bytes(file_bytes)
+        decrypt_dir = tmp_path / "decrypted"
+        decrypt_dir.mkdir()
+        try:
+            decrypt_sl2(save_path, decrypt_dir)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=422, detail=f"Failed to decrypt save file: {exc}"
+            ) from exc
+        userdata_path = decrypt_dir / f"USERDATA_{slot_index:02d}"
+        if not userdata_path.exists():
+            raise HTTPException(
+                status_code=404,
+                detail=f"Character slot {slot_index} not found in this save file.",
+            )
+        return userdata_path.read_bytes()
+
+
+def _validate_name(name: str) -> None:
+    if len(name.encode("utf-16-le")) > _NAME_MAX_UNITS * 2:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Loadout name too long (max {_NAME_MAX_UNITS} characters).",
+        )
+
+
+def _validate_loadout_relics(ga_handles, owned: set[int]) -> None:
+    if len(ga_handles) > 6:
+        raise HTTPException(status_code=422, detail="A loadout has at most 6 relics.")
+    missing = sorted(h for h in ga_handles if h != 0 and h not in owned)
+    if missing:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "unknown_relics",
+                "message": "Some relics in this loadout are not in the uploaded save.",
+                "ga_handles": missing,
+            },
+        )
+
+
+def _export_modified_loadouts(
+    file_bytes: bytes,
+    filename: str,
+    slot_index: int,
+    operations: list,
+    ds: Any,
+    items_json: dict,
+) -> tuple[bytes, dict]:
+    """Apply a batch of loadout/vessel edits to one character slot and re-encrypt.
+
+    Ops are applied in a deterministic order so that index-based edits stay
+    well-defined: renames + overwrites (index-stable) first, then deletes in
+    descending index order, then adds. Resets touch independent regions.
+    """
+    blob = _decrypt_slot_blob(file_bytes, filename, slot_index)
+
+    raw_relics, _ = parse_relics(blob)
+    inventory = RelicInventory(raw_relics, items_json, ds)
+    owned = {r.ga_handle for r in inventory.relics}
+    loadout = LoadoutHandler(ds)
+    loadout.parse(blob)
+    n_presets = len(loadout.all_presets)
+
+    # --- categorise + validate ------------------------------------------------
+    reset_vessels_op = False
+    reset_presets_op = False
+    renames, overwrites, deletes, adds = [], [], [], []
+    for op in operations:
+        kind = op.op
+        if kind == "reset_vessels":
+            reset_vessels_op = True
+        elif kind == "reset_presets":
+            reset_presets_op = True
+        elif kind == "rename":
+            _validate_name(op.name)
+            renames.append(op)
+        elif kind == "overwrite":
+            _validate_name(op.name or "")
+            _validate_loadout_relics(op.ga_handles, owned)
+            overwrites.append(op)
+        elif kind == "delete":
+            deletes.append(op)
+        elif kind == "add":
+            _validate_name(op.name)
+            _validate_loadout_relics(op.ga_handles, owned)
+            adds.append(op)
+
+    if reset_presets_op and (renames or overwrites or deletes or adds):
+        raise HTTPException(
+            status_code=422,
+            detail="'Reset all loadouts' cannot be combined with other loadout edits.",
+        )
+    if n_presets + len(adds) - len(deletes) > _MAX_PRESETS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"That would exceed the {_MAX_PRESETS}-loadout limit.",
+        )
+    for op in (*renames, *overwrites, *deletes):
+        if not 0 <= op.index < n_presets:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Loadout index {op.index} is out of range (0..{n_presets - 1}).",
+            )
+    for op in (*overwrites, *adds):
+        hero_type = _resolve_hero_type(op.character)
+        valid = {v["vessel_id"] for v in ds.get_all_vessels_for_hero(hero_type)}
+        if op.vessel_id not in valid:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Vessel {op.vessel_id} is not valid for {op.character}.",
+            )
+
+    summary = {"added": 0, "deleted": 0, "renamed": 0, "overwritten": 0,
+               "vessels_reset": False, "presets_reset": False}
+
+    # --- apply (deterministic order) -----------------------------------------
+    try:
+        if reset_vessels_op:
+            blob, rv = reset_all_vessels(blob)
+            summary["vessels_reset"] = True
+
+        if reset_presets_op:
+            blob, rp = reset_all_presets(blob)
+            summary["presets_reset"] = True
+        else:
+            for op in renames:
+                blob, _ = rename_preset(blob, op.index, op.name)
+                summary["renamed"] += 1
+            for op in overwrites:
+                blob, _ = overwrite_preset(
+                    blob, op.index, vessel_id=op.vessel_id, ga_handles=op.ga_handles,
+                    hero_type=_resolve_hero_type(op.character), name=op.name)
+                summary["overwritten"] += 1
+            for op in sorted(deletes, key=lambda o: o.index, reverse=True):
+                blob, _ = delete_preset(blob, op.index)
+                summary["deleted"] += 1
+            for op in adds:
+                blob, _ = add_preset(
+                    blob, hero_type=_resolve_hero_type(op.character), name=op.name,
+                    vessel_id=op.vessel_id, ga_handles=op.ga_handles)
+                summary["added"] += 1
+    except VesselWriteError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    new_save = repack_sl2(file_bytes, {slot_index: blob})
+
+    # final loadout count for the client
+    final = LoadoutHandler(ds)
+    final.parse(blob)
+    summary["used"] = len(final.all_presets)
+    return new_save, summary
+
+
+@router.post("/export-loadouts")
+async def export_loadouts(
+    file: UploadFile,
+    ds: GameDataDep,
+    current_user: OptionalUser,
+    slot_index: int = Form(...),
+    operations: str = Form("[]"),
+) -> Response:
+    """Apply in-game relic-loadout edits to one character slot and return a
+    modified .sl2 the user can re-import into their own game.
+
+    ``operations`` is a JSON array of discriminated-union ops (add / delete /
+    rename / overwrite / reset_vessels / reset_presets). Stateless: the original
+    save is provided in the request. Works for anonymous and authenticated users.
+    """
+    from pydantic import TypeAdapter, ValidationError
+
+    try:
+        ops = TypeAdapter(list[LoadoutOp]).validate_python(json.loads(operations))
+    except (json.JSONDecodeError, ValidationError, TypeError) as exc:
+        raise HTTPException(
+            status_code=422, detail=f"Invalid operations payload: {exc}"
+        ) from exc
+
+    if not ops:
+        raise HTTPException(status_code=422, detail="No loadout changes selected.")
+
+    file_bytes = await file.read()
+    if not file_bytes:
+        raise HTTPException(status_code=422, detail="Empty save file.")
+    filename = file.filename or "save.sl2"
+
+    items_json = get_items_json()
+    new_save, summary = await run_in_threadpool(
+        _export_modified_loadouts,
+        file_bytes, filename, slot_index, ops, ds, items_json,
+    )
+
+    out_name = _edited_filename(filename)
+    return Response(
+        content=new_save,
+        media_type="application/octet-stream",
+        headers={
+            "Content-Disposition": f'attachment; filename="{out_name}"',
+            "X-Loadouts-Added": str(summary["added"]),
+            "X-Loadouts-Deleted": str(summary["deleted"]),
+            "X-Loadouts-Renamed": str(summary["renamed"]),
+            "X-Loadouts-Overwritten": str(summary["overwritten"]),
+            "X-Vessels-Reset": "1" if summary["vessels_reset"] else "0",
+            "X-Presets-Reset": "1" if summary["presets_reset"] else "0",
+            "X-Loadouts-Used": str(summary["used"]),
+            "Access-Control-Expose-Headers": (
+                "Content-Disposition, X-Loadouts-Added, X-Loadouts-Deleted, "
+                "X-Loadouts-Renamed, X-Loadouts-Overwritten, X-Vessels-Reset, "
+                "X-Presets-Reset, X-Loadouts-Used"
             ),
         },
     )
