@@ -3,7 +3,7 @@
 import type { CancelablePromise } from './core/CancelablePromise';
 import { OpenAPI } from './core/OpenAPI';
 import { request as __request } from './core/request';
-import type { BuildsListBuildsData, BuildsListBuildsResponse, BuildsCreateBuildData, BuildsCreateBuildResponse, BuildsListFeaturedBuildsData, BuildsListFeaturedBuildsResponse, BuildsGetBuildData, BuildsGetBuildResponse, BuildsUpdateBuildData, BuildsUpdateBuildResponse, BuildsDeleteBuildData, BuildsDeleteBuildResponse, BuildsToggleFeaturedData, BuildsToggleFeaturedResponse, BuildsCloneBuildData, BuildsCloneBuildResponse, DebugExportDebugStateData, DebugExportDebugStateResponse, GameGetEffectsResponse, GameGetFamiliesResponse, GameGetCharactersResponse, GameGetVesselsData, GameGetVesselsResponse, GameGetStackingCategoriesResponse, GameGetColorsResponse, LoginLoginAccessTokenData, LoginLoginAccessTokenResponse, LoginTestTokenResponse, LoginRecoverPasswordData, LoginRecoverPasswordResponse, LoginResetPasswordData, LoginResetPasswordResponse, LoginRecoverPasswordHtmlContentData, LoginRecoverPasswordHtmlContentResponse, OauthLoginGoogleResponse, OauthGoogleCallbackData, OauthGoogleCallbackResponse, OptimizeRunOptimizeData, OptimizeRunOptimizeResponse, OptimizeRunOptimizeStreamData, OptimizeRunOptimizeStreamResponse, OptimizeOptimizeSlotAlternativeData, OptimizeOptimizeSlotAlternativeResponse, OptimizeGetSnapshotData, OptimizeGetSnapshotResponse, OptimizeListBuildSummariesResponse, OptimizeMarkChangeReviewedData, OptimizeMarkChangeReviewedResponse, PrivateCreateUserData, PrivateCreateUserResponse, SavesUploadSaveData, SavesUploadSaveResponse, SavesUploadSaveStreamData, SavesUploadSaveStreamResponse, SavesGetSaveStatusResponse, SavesListProfilesResponse, SavesGetProfileRelicsData, SavesGetProfileRelicsResponse, SavesGetProfileLoadoutsData, SavesGetProfileLoadoutsResponse, SavesExportSaveData, SavesExportSaveResponse, SavesExportLoadoutsData, SavesExportLoadoutsResponse, UsersReadUsersData, UsersReadUsersResponse, UsersCreateUserData, UsersCreateUserResponse, UsersReadUserMeResponse, UsersDeleteUserMeResponse, UsersUpdateUserMeData, UsersUpdateUserMeResponse, UsersUpdatePasswordMeData, UsersUpdatePasswordMeResponse, UsersRegisterUserData, UsersRegisterUserResponse, UsersReadUserByIdData, UsersReadUserByIdResponse, UsersUpdateUserData, UsersUpdateUserResponse, UsersDeleteUserData, UsersDeleteUserResponse, UtilsTestEmailData, UtilsTestEmailResponse, UtilsHealthCheckResponse } from './types.gen';
+import type { BuildsListBuildsData, BuildsListBuildsResponse, BuildsCreateBuildData, BuildsCreateBuildResponse, BuildsListFeaturedBuildsData, BuildsListFeaturedBuildsResponse, BuildsGetBuildData, BuildsGetBuildResponse, BuildsUpdateBuildData, BuildsUpdateBuildResponse, BuildsDeleteBuildData, BuildsDeleteBuildResponse, BuildsToggleFeaturedData, BuildsToggleFeaturedResponse, BuildsCloneBuildData, BuildsCloneBuildResponse, DebugExportDebugStateData, DebugExportDebugStateResponse, GameGetEffectsResponse, GameGetFamiliesResponse, GameGetCharactersResponse, GameGetVesselsData, GameGetVesselsResponse, GameGetStackingCategoriesResponse, GameGetColorsResponse, GameCumulativeEffectsData, GameCumulativeEffectsResponse, LoginLoginAccessTokenData, LoginLoginAccessTokenResponse, LoginTestTokenResponse, LoginRecoverPasswordData, LoginRecoverPasswordResponse, LoginResetPasswordData, LoginResetPasswordResponse, LoginRecoverPasswordHtmlContentData, LoginRecoverPasswordHtmlContentResponse, OauthLoginGoogleResponse, OauthGoogleCallbackData, OauthGoogleCallbackResponse, OptimizeRunOptimizeData, OptimizeRunOptimizeResponse, OptimizeRunOptimizeStreamData, OptimizeRunOptimizeStreamResponse, OptimizeOptimizeSlotAlternativeData, OptimizeOptimizeSlotAlternativeResponse, OptimizeGetSnapshotData, OptimizeGetSnapshotResponse, OptimizeListBuildSummariesResponse, OptimizeMarkChangeReviewedData, OptimizeMarkChangeReviewedResponse, PrivateCreateUserData, PrivateCreateUserResponse, SavesUploadSaveData, SavesUploadSaveResponse, SavesUploadSaveStreamData, SavesUploadSaveStreamResponse, SavesGetSaveStatusResponse, SavesListProfilesResponse, SavesGetProfileRelicsData, SavesGetProfileRelicsResponse, SavesGetProfileLoadoutsData, SavesGetProfileLoadoutsResponse, SavesExportSaveData, SavesExportSaveResponse, SavesExportLoadoutsData, SavesExportLoadoutsResponse, UsersReadUsersData, UsersReadUsersResponse, UsersCreateUserData, UsersCreateUserResponse, UsersReadUserMeResponse, UsersDeleteUserMeResponse, UsersUpdateUserMeData, UsersUpdateUserMeResponse, UsersUpdatePasswordMeData, UsersUpdatePasswordMeResponse, UsersRegisterUserData, UsersRegisterUserResponse, UsersReadUserByIdData, UsersReadUserByIdResponse, UsersUpdateUserData, UsersUpdateUserResponse, UsersDeleteUserData, UsersDeleteUserResponse, UtilsTestEmailData, UtilsTestEmailResponse, UtilsHealthCheckResponse } from './types.gen';
 
 export class BuildsService {
     /**
@@ -288,6 +288,29 @@ export class GameService {
         return __request(OpenAPI, {
             method: 'GET',
             url: '/api/v1/game/colors'
+        });
+    }
+    
+    /**
+     * Cumulative Effects
+     * Cumulative stacked-effect summary for each group of effect IDs.
+     *
+     * Stateless game-data computation (no auth) so anonymous loadouts can show the
+     * same % bonuses the optimizer does. Mirrors the optimizer's per-vessel summary.
+     * @param data The data for the request.
+     * @param data.requestBody
+     * @returns CumulativeEffectGroup Successful Response
+     * @throws ApiError
+     */
+    public static cumulativeEffects(data: GameCumulativeEffectsData): CancelablePromise<GameCumulativeEffectsResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/api/v1/game/cumulative-effects',
+            body: data.requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: 'Validation Error'
+            }
         });
     }
 }

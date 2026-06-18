@@ -64,6 +64,7 @@ from nrplanner import (
     split_memory_dat,
 )
 from nrplanner.constants import CHARACTER_NAMES
+from nrplanner.cumulative import summarize_cumulative_effects
 from nrplanner.changes import (
     build_signature,
     diff_results,
@@ -310,11 +311,24 @@ def _character_for_hero_type(hero_type: int) -> str:
     return f"Hero {hero_type}"
 
 
-def _parsed_loadouts(loadout: LoadoutHandler, ds: Any) -> list[ParsedLoadoutData]:
-    """Build display-enriched loadout presets from a parsed LoadoutHandler."""
+def _parsed_loadouts(
+    loadout: LoadoutHandler, ds: Any, inventory: Any
+) -> list[ParsedLoadoutData]:
+    """Build display-enriched loadout presets from a parsed LoadoutHandler.
+
+    Each preset is enriched with the cumulative stacked-effect summary (same
+    computation the optimizer uses) so the Loadouts page can show what bonuses a
+    saved loadout actually grants.
+    """
+    by_handle = {r.ga_handle: r for r in inventory.relics}
     out: list[ParsedLoadoutData] = []
     for p in loadout.all_presets:
         vessel = ds.get_vessel_data(p["vessel_id"]) or {}
+        effect_ids: list[int] = []
+        for h in p["relics"]:
+            r = by_handle.get(h)
+            if r is not None:
+                effect_ids.extend(r.all_effects)
         out.append(ParsedLoadoutData(
             index=p["index"],
             hero_type=p["hero_type"],
@@ -324,6 +338,7 @@ def _parsed_loadouts(loadout: LoadoutHandler, ds: Any) -> list[ParsedLoadoutData
             vessel_name=vessel.get("Name", f"Vessel {p['vessel_id']}"),
             slot_colors=list(vessel.get("Colors", [])),
             ga_handles=list(p["relics"]),
+            cumulative_effects=summarize_cumulative_effects(effect_ids, ds),
         ))
     return out
 
@@ -410,7 +425,7 @@ def _parse_save_to_profiles(
             # Extract slot index from filename (USERDATA_00 → 0)
             slot_index = int(userdata_path.stem.rsplit("_", 1)[-1])
 
-            presets = _parsed_loadouts(loadout, ds)
+            presets = _parsed_loadouts(loadout, ds, inventory)
 
             profiles.append(
                 ParsedProfileData(
@@ -1022,6 +1037,7 @@ def get_profile_loadouts(
     profile_id: uuid.UUID,
     session: SessionDep,
     current_user: CurrentUser,
+    ds: GameDataDep,
 ) -> LoadoutsPublic:
     """Get the in-game relic loadout presets parsed from a saved profile."""
     profile = session.get(Profile, profile_id)
@@ -1031,6 +1047,26 @@ def get_profile_loadouts(
         raise HTTPException(status_code=403, detail="Not enough permissions")
 
     loadouts = [ParsedLoadoutData.model_validate(p) for p in (profile.loadouts or [])]
+
+    # Backfill cumulative effects for loadouts stored before the field existed
+    # (deterministic from the loadout's relics — recompute rather than re-upload).
+    if any(not l.cumulative_effects for l in loadouts):
+        relics = session.exec(
+            select(Relic).where(Relic.profile_id == profile_id)
+        ).all()
+        eff_by_handle = {
+            r.ga_handle: [r.effect_1, r.effect_2, r.effect_3,
+                          r.curse_1, r.curse_2, r.curse_3]
+            for r in relics
+        }
+        for lo in loadouts:
+            if lo.cumulative_effects:
+                continue
+            ids: list[int] = []
+            for h in lo.ga_handles:
+                ids.extend(eff_by_handle.get(h, []))
+            lo.cumulative_effects = summarize_cumulative_effects(ids, ds)
+
     return LoadoutsPublic(
         data=loadouts,
         count=len(loadouts),

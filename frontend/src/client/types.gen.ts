@@ -203,6 +203,10 @@ export type CumulativeEffectTier = {
     count: number;
 };
 
+export type CumulativeRequest = {
+    effect_id_groups: Array<Array<(number)>>;
+};
+
 export type DebugExportRequest = {
     mode?: 'view' | 'full';
     build_id?: (string | null);
@@ -335,6 +339,7 @@ export type ParsedLoadoutData = {
     vessel_name: string;
     slot_colors?: Array<(string)>;
     ga_handles?: Array<(number)>;
+    cumulative_effects?: Array<CumulativeEffectGroup>;
 };
 
 export type ParsedProfileData = {
@@ -672,6 +677,12 @@ export type GameGetStackingCategoriesResponse = (Array<{
 export type GameGetColorsResponse = ({
     [key: string]: (string);
 });
+
+export type GameCumulativeEffectsData = {
+    requestBody: CumulativeRequest;
+};
+
+export type GameCumulativeEffectsResponse = (Array<Array<CumulativeEffectGroup>>);
 
 export type LoginLoginAccessTokenData = {
     formData: Body_login_login_access_token;

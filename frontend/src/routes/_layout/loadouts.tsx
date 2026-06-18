@@ -1,18 +1,25 @@
-import { useSuspenseQuery } from "@tanstack/react-query"
+import { useQuery, useSuspenseQuery } from "@tanstack/react-query"
 import { createFileRoute } from "@tanstack/react-router"
 import {
-  AlertTriangle,
-  Download,
+  ChevronDown,
+  ChevronUp,
   Pencil,
   RotateCcw,
   Trash2,
+  X,
 } from "lucide-react"
-import { Suspense, useMemo, useState } from "react"
+import { type ReactNode, Suspense, useMemo, useState } from "react"
 
-import { type ParsedLoadoutData, SavesService } from "@/client"
-import { COLOR_HEX } from "@/components/RelicDisplay"
+import { GameService, type ParsedLoadoutData, SavesService } from "@/client"
+import { CumulativeSummary } from "@/components/OptimizeResults"
+import {
+  buildEffectMap,
+  EMPTY_EFFECT,
+  RelicNameCell,
+} from "@/components/RelicDisplay"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import {
   Dialog,
   DialogContent,
@@ -31,13 +38,11 @@ import {
 } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 import useAuth from "@/hooks/useAuth"
-import useCustomToast from "@/hooks/useCustomToast"
 import {
-  exportModifiedLoadouts,
-  LoadoutExportError,
-  type LoadoutOp,
-} from "@/lib/exportLoadouts"
-import { getSaveFile, getSaveFileMeta, rememberSaveFile } from "@/lib/saveFile"
+  addLoadoutOp,
+  removeLoadoutOp,
+  usePendingSlot,
+} from "@/lib/pendingChanges"
 
 export const Route = createFileRoute("/_layout/loadouts")({
   component: LoadoutsPage,
@@ -57,38 +62,206 @@ type SlotRelic = {
   curses: number[]
 }
 
+// --- rich loadout card (mirrors the optimizer's vessel card, minus scoring) --
+
+function effectNames(ids: number[], effectMap: Map<number, string>): string[] {
+  const out: string[] = []
+  for (const id of ids) {
+    if (id === 0 || id === EMPTY_EFFECT) continue
+    const name = effectMap.get(id)
+    if (name) out.push(name)
+  }
+  return out
+}
+
+function RelicCell({
+  handle,
+  relic,
+  effectMap,
+}: {
+  handle: number
+  relic?: SlotRelic
+  effectMap: Map<number, string>
+}) {
+  if (handle === 0 || !relic) {
+    return (
+      <div className="rounded-md border p-3 text-xs italic text-muted-foreground">
+        {handle === 0 ? "No relic assigned" : "Relic not in current inventory"}
+      </div>
+    )
+  }
+  const effects = effectNames(relic.effects, effectMap)
+  const curses = effectNames(relic.curses, effectMap)
+  return (
+    <div className="space-y-1 rounded-md border p-3">
+      <RelicNameCell
+        name={relic.name}
+        color={relic.color}
+        tier={relic.tier}
+        isDeep={relic.isDeep}
+      />
+      {effects.length > 0 && (
+        <div className="mt-1 space-y-0.5">
+          {effects.map((n) => (
+            <div key={n} className="truncate text-xs">
+              {n}
+            </div>
+          ))}
+        </div>
+      )}
+      {curses.length > 0 && (
+        <div className="mt-1.5 space-y-0.5 border-t border-destructive/20 pt-1.5">
+          {curses.map((n) => (
+            <div key={n} className="truncate text-xs text-destructive/80">
+              {n}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function LoadoutCard({
+  name,
+  vesselName,
+  cumulative,
+  gaHandles,
+  relicByHandle,
+  effectMap,
+  badges,
+  actions,
+  tone = "default",
+}: {
+  name: ReactNode
+  vesselName: string
+  cumulative?: ParsedLoadoutData["cumulative_effects"]
+  gaHandles: number[]
+  relicByHandle: Map<number, SlotRelic>
+  effectMap: Map<number, string>
+  badges?: ReactNode
+  actions?: ReactNode
+  tone?: "default" | "pending" | "danger"
+}) {
+  const [expanded, setExpanded] = useState(true)
+  const toneClass =
+    tone === "pending"
+      ? "border-primary/40 bg-primary/5"
+      : tone === "danger"
+        ? "border-destructive/40 bg-destructive/5 opacity-70"
+        : undefined
+  return (
+    <Card className={toneClass}>
+      <CardHeader className="pb-3">
+        <div className="flex items-start justify-between gap-2">
+          <button
+            type="button"
+            className="min-w-0 flex-1 text-left"
+            onClick={() => setExpanded((v) => !v)}
+          >
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+              <CardTitle className="text-base">{name}</CardTitle>
+              {badges}
+            </div>
+            <p className="mt-0.5 text-xs text-muted-foreground">{vesselName}</p>
+          </button>
+          <div className="flex shrink-0 items-center gap-1">
+            {actions}
+            <Button
+              variant="ghost"
+              size="sm"
+              className="px-1.5"
+              aria-label={expanded ? "Collapse" : "Expand"}
+              onClick={() => setExpanded((v) => !v)}
+            >
+              {expanded ? (
+                <ChevronUp className="h-4 w-4 text-muted-foreground" />
+              ) : (
+                <ChevronDown className="h-4 w-4 text-muted-foreground" />
+              )}
+            </Button>
+          </div>
+        </div>
+      </CardHeader>
+      {cumulative && cumulative.length > 0 && (
+        <CumulativeSummary groups={cumulative} />
+      )}
+      {expanded && (
+        <CardContent className="pt-0">
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {gaHandles.map((h, i) => (
+              <RelicCell
+                key={`${i}-${h}`}
+                handle={h}
+                relic={relicByHandle.get(h)}
+                effectMap={effectMap}
+              />
+            ))}
+          </div>
+        </CardContent>
+      )}
+    </Card>
+  )
+}
+
 // --- shared manager UI ------------------------------------------------------
 
 function LoadoutManager({
   loadouts,
   relicByHandle,
+  effectMap,
   slotIndex,
 }: {
   loadouts: ParsedLoadoutData[]
   relicByHandle: Map<number, SlotRelic>
+  effectMap: Map<number, string>
   slotIndex: number
 }) {
-  const { showSuccessToast, showErrorToast } = useCustomToast()
-  const [renames, setRenames] = useState<Record<number, string>>({})
-  const [deletes, setDeletes] = useState<Set<number>>(new Set())
-  const [resetVessels, setResetVessels] = useState(false)
-  const [resetPresets, setResetPresets] = useState(false)
+  const pending = usePendingSlot(slotIndex)
   const [renaming, setRenaming] = useState<ParsedLoadoutData | null>(null)
   const [renameDraft, setRenameDraft] = useState("")
-  const [confirmOpen, setConfirmOpen] = useState(false)
-  const [busy, setBusy] = useState(false)
-  const [, setFileTick] = useState(0)
 
-  const saveFile = getSaveFile()
-  const saveMeta = getSaveFileMeta()
+  // Bucket this slot's pending loadout ops by kind/index.
+  const renameByIndex = new Map<number, { id: string; name: string }>()
+  const deleteByIndex = new Map<number, string>()
+  const overwriteByIndex = new Map<number, string>()
+  const adds: Array<{
+    id: string
+    name: string
+    character: string
+    vesselName?: string
+    ga_handles: number[]
+  }> = []
+  let resetVesselsId: string | undefined
+  let resetPresetsId: string | undefined
+  for (const op of pending.loadoutOps) {
+    if (op.kind === "rename")
+      renameByIndex.set(op.index, { id: op.id, name: op.name })
+    else if (op.kind === "delete") deleteByIndex.set(op.index, op.id)
+    else if (op.kind === "overwrite") overwriteByIndex.set(op.index, op.id)
+    else if (op.kind === "add")
+      adds.push({
+        id: op.id,
+        name: op.name,
+        character: op.character,
+        vesselName: op.vesselName,
+        ga_handles: op.ga_handles,
+      })
+    else if (op.kind === "reset_vessels") resetVesselsId = op.id
+    else if (op.kind === "reset_presets") resetPresetsId = op.id
+  }
+  const resetPresets = resetPresetsId !== undefined
+  const resetVessels = resetVesselsId !== undefined
+  const hasOtherLoadoutEdits =
+    renameByIndex.size +
+      deleteByIndex.size +
+      overwriteByIndex.size +
+      adds.length >
+    0
+  const used = resetPresets
+    ? adds.length
+    : loadouts.length + adds.length - deleteByIndex.size
 
-  const renameCount = Object.keys(renames).length
-  const deleteCount = deletes.size
-  const hasChanges =
-    renameCount > 0 || deleteCount > 0 || resetVessels || resetPresets
-  const used = loadouts.length - (resetPresets ? loadouts.length : deletes.size)
-
-  // Group loadouts by character (hero class), preserving chain order.
   const grouped = useMemo(() => {
     const m = new Map<string, ParsedLoadoutData[]>()
     for (const l of loadouts) {
@@ -99,166 +272,122 @@ function LoadoutManager({
     return [...m.entries()].sort((a, b) => a[0].localeCompare(b[0]))
   }, [loadouts])
 
-  function toggleDelete(index: number) {
-    setDeletes((prev) => {
-      const next = new Set(prev)
-      if (next.has(index)) next.delete(index)
-      else next.add(index)
-      return next
-    })
+  function toggleDelete(l: ParsedLoadoutData) {
+    const id = deleteByIndex.get(l.index)
+    if (id) {
+      removeLoadoutOp(slotIndex, id)
+    } else {
+      const ren = renameByIndex.get(l.index)
+      if (ren) removeLoadoutOp(slotIndex, ren.id)
+      addLoadoutOp(slotIndex, { kind: "delete", index: l.index, name: l.name })
+    }
   }
 
   function openRename(l: ParsedLoadoutData) {
     setRenaming(l)
-    setRenameDraft(renames[l.index] ?? l.name)
+    setRenameDraft(renameByIndex.get(l.index)?.name ?? l.name)
   }
 
   function saveRename() {
     if (!renaming) return
     const name = renameDraft.trim()
-    setRenames((prev) => {
-      const next = { ...prev }
-      if (name === renaming.name || name === "") delete next[renaming.index]
-      else next[renaming.index] = name
-      return next
-    })
+    const existing = renameByIndex.get(renaming.index)
+    if (existing) removeLoadoutOp(slotIndex, existing.id)
+    if (name && name !== renaming.name) {
+      addLoadoutOp(slotIndex, {
+        kind: "rename",
+        index: renaming.index,
+        name,
+        oldName: renaming.name,
+      })
+    }
     setRenaming(null)
   }
 
-  function clearAll() {
-    setRenames({})
-    setDeletes(new Set())
-    setResetVessels(false)
-    setResetPresets(false)
+  function toggleResetVessels() {
+    if (resetVesselsId) removeLoadoutOp(slotIndex, resetVesselsId)
+    else addLoadoutOp(slotIndex, { kind: "reset_vessels" })
   }
 
-  function buildOps(): LoadoutOp[] {
-    const ops: LoadoutOp[] = []
-    if (resetVessels) ops.push({ op: "reset_vessels" })
-    if (resetPresets) {
-      ops.push({ op: "reset_presets" })
-      return ops // reset_presets cannot combine with per-loadout edits
+  function toggleResetPresets() {
+    if (resetPresetsId) {
+      removeLoadoutOp(slotIndex, resetPresetsId)
+      return
     }
-    for (const [idx, name] of Object.entries(renames)) {
-      ops.push({ op: "rename", index: Number(idx), name })
+    // reset_presets cannot combine with other loadout edits — clear them first.
+    for (const op of pending.loadoutOps) {
+      if (op.kind !== "reset_vessels") removeLoadoutOp(slotIndex, op.id)
     }
-    for (const idx of deletes) ops.push({ op: "delete", index: idx })
-    return ops
+    addLoadoutOp(slotIndex, { kind: "reset_presets" })
   }
 
-  function onPickFile(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0]
-    if (file) {
-      rememberSaveFile(file)
-      setFileTick((t) => t + 1)
-    }
-  }
-
-  async function doExport() {
-    const file = getSaveFile()
-    if (!file) return
-    setBusy(true)
-    try {
-      const result = await exportModifiedLoadouts({
-        file,
-        slotIndex,
-        operations: buildOps(),
-      })
-      setConfirmOpen(false)
-      clearAll()
-      const parts: string[] = []
-      if (result.renamed) parts.push(`${result.renamed} renamed`)
-      if (result.deleted) parts.push(`${result.deleted} deleted`)
-      if (result.vesselsReset) parts.push("vessels reset")
-      if (result.presetsReset) parts.push("all loadouts cleared")
-      showSuccessToast(
-        `Saved ${result.filename} — ${parts.join(", ")}. Load it in-game, then re-import here to refresh.`,
-      )
-    } catch (err) {
-      showErrorToast(
-        err instanceof LoadoutExportError || err instanceof Error
-          ? err.message
-          : "Export failed",
-      )
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  if (loadouts.length === 0) {
-    return (
-      <div className="space-y-4">
-        <GlobalControls
-          used={0}
-          resetVessels={resetVessels}
-          setResetVessels={setResetVessels}
-          resetPresets={resetPresets}
-          setResetPresets={setResetPresets}
-          hasLoadouts={false}
-        />
-        <p className="text-muted-foreground py-8 text-center">
-          This character has no saved relic loadouts. Optimize a build and use{" "}
-          <strong>Save as loadout</strong> to create one.
-        </p>
-      </div>
-    )
-  }
+  const empty = loadouts.length === 0 && adds.length === 0
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-5">
       <GlobalControls
         used={used}
         resetVessels={resetVessels}
-        setResetVessels={setResetVessels}
         resetPresets={resetPresets}
-        setResetPresets={setResetPresets}
-        hasLoadouts={true}
+        onToggleVessels={toggleResetVessels}
+        onTogglePresets={toggleResetPresets}
+        canResetPresets={loadouts.length > 0 && !hasOtherLoadoutEdits}
+        hasLoadouts={loadouts.length > 0}
       />
 
+      {empty && (
+        <p className="py-8 text-center text-muted-foreground">
+          This character has no saved relic loadouts. Optimize a build and use{" "}
+          <strong>Save as loadout</strong> to queue one.
+        </p>
+      )}
+
       {grouped.map(([character, list]) => (
-        <div key={character} className="space-y-2">
-          <h3 className="text-sm font-semibold text-muted-foreground">
-            {character} — {list.length} loadout{list.length !== 1 ? "s" : ""}
-          </h3>
+        <section key={character} className="space-y-2">
+          <SectionHeader title={character} count={list.length} />
           <div className="grid gap-2">
             {list.map((l) => {
-              const pendingDelete = deletes.has(l.index)
-              const pendingName = renames[l.index]
+              const pendingDelete = deleteByIndex.has(l.index)
+              const ren = renameByIndex.get(l.index)
+              const pendingOverwrite = overwriteByIndex.has(l.index)
+              const dimmed = pendingDelete || resetPresets
               return (
-                <div
+                <LoadoutCard
                   key={l.index}
-                  className={`rounded-md border p-3 ${
-                    pendingDelete
-                      ? "border-destructive/50 bg-destructive/5 opacity-60"
-                      : resetPresets
-                        ? "opacity-50"
-                        : ""
-                  }`}
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="font-medium">
-                        {pendingName ??
-                          (l.name || (
-                            <span className="text-muted-foreground italic">
-                              (unnamed)
-                            </span>
-                          ))}
-                        {pendingName && (
-                          <Badge variant="outline" className="ml-2">
-                            renamed
-                          </Badge>
-                        )}
-                      </div>
-                      <div className="text-xs text-muted-foreground mt-0.5">
-                        {l.vessel_name}
-                      </div>
-                    </div>
-                    <div className="flex shrink-0 gap-1">
+                  name={
+                    <span className={dimmed ? "line-through" : ""}>
+                      {ren?.name ??
+                        (l.name || (
+                          <span className="italic text-muted-foreground">
+                            (unnamed)
+                          </span>
+                        ))}
+                    </span>
+                  }
+                  vesselName={l.vessel_name}
+                  cumulative={l.cumulative_effects}
+                  gaHandles={l.ga_handles ?? []}
+                  relicByHandle={relicByHandle}
+                  effectMap={effectMap}
+                  tone={dimmed ? "danger" : "default"}
+                  badges={
+                    <>
+                      {ren && <Badge variant="outline">renamed</Badge>}
+                      {pendingOverwrite && (
+                        <Badge variant="outline">replaced</Badge>
+                      )}
+                      {pendingDelete && (
+                        <Badge variant="destructive">will delete</Badge>
+                      )}
+                    </>
+                  }
+                  actions={
+                    <>
                       <Button
                         variant="ghost"
                         size="sm"
-                        disabled={resetPresets}
+                        className="px-1.5"
+                        disabled={resetPresets || pendingDelete}
                         onClick={() => openRename(l)}
                       >
                         <Pencil className="h-3.5 w-3.5" />
@@ -266,69 +395,68 @@ function LoadoutManager({
                       <Button
                         variant="ghost"
                         size="sm"
+                        className="px-1.5"
                         disabled={resetPresets}
-                        onClick={() => toggleDelete(l.index)}
+                        onClick={() => toggleDelete(l)}
                       >
                         <Trash2
                           className={`h-3.5 w-3.5 ${pendingDelete ? "text-destructive" : ""}`}
                         />
                       </Button>
-                    </div>
-                  </div>
-                  <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-3">
-                    {(l.ga_handles ?? []).map((h, i) => {
-                      const r = relicByHandle.get(h)
-                      return (
-                        <div
-                          key={`${l.index}-${i}`}
-                          className="text-xs truncate"
-                        >
-                          {h === 0 || !r ? (
-                            <span className="text-muted-foreground/50">
-                              {h === 0 ? "— empty —" : "(unknown relic)"}
-                            </span>
-                          ) : (
-                            <span
-                              style={{ color: COLOR_HEX[r.color] ?? "#aaa" }}
-                              title={r.name}
-                            >
-                              {r.name}
-                            </span>
-                          )}
-                        </div>
-                      )
-                    })}
-                  </div>
-                </div>
+                    </>
+                  }
+                />
               )
             })}
           </div>
-        </div>
+        </section>
       ))}
 
-      {/* Action bar */}
-      {hasChanges && (
-        <div className="sticky bottom-2 flex flex-wrap items-center justify-between gap-3 rounded-md border bg-background/95 p-3 shadow">
-          <div className="text-sm">
-            {[
-              renameCount && `${renameCount} renamed`,
-              deleteCount && `${deleteCount} to delete`,
-              resetVessels && "reset all vessels",
-              resetPresets && "clear all loadouts",
-            ]
-              .filter(Boolean)
-              .join(" · ")}
+      {adds.length > 0 && (
+        <section className="space-y-2">
+          <SectionHeader
+            title="Pending new loadouts"
+            count={adds.length}
+            accent
+          />
+          <div className="grid gap-2">
+            {adds.map((a) => (
+              <LoadoutCard
+                key={a.id}
+                name={
+                  a.name || (
+                    <span className="italic text-muted-foreground">
+                      (unnamed)
+                    </span>
+                  )
+                }
+                vesselName={`${a.character}${a.vesselName ? ` · ${a.vesselName}` : ""}`}
+                gaHandles={a.ga_handles}
+                relicByHandle={relicByHandle}
+                effectMap={effectMap}
+                tone="pending"
+                badges={<Badge variant="outline">pending</Badge>}
+                actions={
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="px-1.5"
+                    onClick={() => removeLoadoutOp(slotIndex, a.id)}
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </Button>
+                }
+              />
+            ))}
           </div>
-          <div className="flex items-center gap-2">
-            <Button variant="ghost" size="sm" onClick={clearAll}>
-              Clear
-            </Button>
-            <Button size="sm" onClick={() => setConfirmOpen(true)}>
-              <Download className="mr-1.5 h-4 w-4" />
-              Export modified save
-            </Button>
-          </div>
-        </div>
+        </section>
+      )}
+
+      {!empty && (
+        <p className="text-xs text-muted-foreground">
+          Changes are queued — review and download from the “Export save” button
+          in the top bar.
+        </p>
       )}
 
       {/* Rename dialog */}
@@ -354,64 +482,7 @@ function LoadoutManager({
             <Button variant="outline" onClick={() => setRenaming(null)}>
               Cancel
             </Button>
-            <Button onClick={saveRename}>Apply</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Export confirmation */}
-      <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Export modified save</DialogTitle>
-            <DialogDescription asChild>
-              <div className="space-y-2 pt-1">
-                <div className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-amber-700 dark:text-amber-400">
-                  <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
-                  <span>
-                    Back up your original save first. This downloads a modified
-                    copy — close the game, then replace your save with it.
-                  </span>
-                </div>
-                <ul className="text-sm list-disc pl-5">
-                  {renameCount > 0 && <li>Rename {renameCount} loadout(s).</li>}
-                  {deleteCount > 0 && <li>Delete {deleteCount} loadout(s).</li>}
-                  {resetVessels && (
-                    <li>Unequip all relics from all vessels.</li>
-                  )}
-                  {resetPresets && <li>Delete ALL saved loadouts.</li>}
-                </ul>
-              </div>
-            </DialogDescription>
-          </DialogHeader>
-
-          {!saveFile && (
-            <div className="space-y-1 text-sm">
-              <p className="text-muted-foreground">
-                {saveMeta
-                  ? `Re-select your save file (${saveMeta.name}) to export — it must be the same save the loadouts were loaded from.`
-                  : "Select your save file (.sl2) to export."}
-              </p>
-              <input
-                type="file"
-                accept=".sl2"
-                onChange={onPickFile}
-                className="text-sm"
-              />
-            </div>
-          )}
-
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setConfirmOpen(false)}
-              disabled={busy}
-            >
-              Cancel
-            </Button>
-            <Button onClick={doExport} disabled={busy || !saveFile}>
-              {busy ? "Exporting…" : "Download modified save"}
-            </Button>
+            <Button onClick={saveRename}>Queue rename</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -419,19 +490,45 @@ function LoadoutManager({
   )
 }
 
+function SectionHeader({
+  title,
+  count,
+  accent,
+}: {
+  title: string
+  count: number
+  accent?: boolean
+}) {
+  return (
+    <div className="flex items-center gap-3 pt-1">
+      <h3
+        className={`text-base font-bold tracking-tight ${accent ? "text-primary" : ""}`}
+      >
+        {title}
+      </h3>
+      <span className="text-xs text-muted-foreground">
+        {count} loadout{count !== 1 ? "s" : ""}
+      </span>
+      <div className="h-px flex-1 bg-border" />
+    </div>
+  )
+}
+
 function GlobalControls({
   used,
   resetVessels,
-  setResetVessels,
   resetPresets,
-  setResetPresets,
+  onToggleVessels,
+  onTogglePresets,
+  canResetPresets,
   hasLoadouts,
 }: {
   used: number
   resetVessels: boolean
-  setResetVessels: (v: boolean) => void
   resetPresets: boolean
-  setResetPresets: (v: boolean) => void
+  onToggleVessels: () => void
+  onTogglePresets: () => void
+  canResetPresets: boolean
   hasLoadouts: boolean
 }) {
   return (
@@ -443,19 +540,25 @@ function GlobalControls({
         <Button
           variant={resetVessels ? "destructive" : "outline"}
           size="sm"
-          onClick={() => setResetVessels(!resetVessels)}
+          onClick={onToggleVessels}
         >
           <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
-          {resetVessels ? "Reset vessels (pending)" : "Reset all vessels"}
+          {resetVessels ? "Reset vessels (queued)" : "Reset all vessels"}
         </Button>
         {hasLoadouts && (
           <Button
             variant={resetPresets ? "destructive" : "outline"}
             size="sm"
-            onClick={() => setResetPresets(!resetPresets)}
+            disabled={!resetPresets && !canResetPresets}
+            onClick={onTogglePresets}
+            title={
+              !resetPresets && !canResetPresets
+                ? "Clear other queued loadout edits first"
+                : undefined
+            }
           >
             <Trash2 className="mr-1.5 h-3.5 w-3.5" />
-            {resetPresets ? "Clear all (pending)" : "Reset all loadouts"}
+            {resetPresets ? "Clear all (queued)" : "Reset all loadouts"}
           </Button>
         )}
       </div>
@@ -487,9 +590,11 @@ function relicMapFromList(
 function AuthLoadoutsBody({
   profileId,
   slotIndex,
+  effectMap,
 }: {
   profileId: string
   slotIndex: number
+  effectMap: Map<number, string>
 }) {
   const { data: loadouts } = useSuspenseQuery({
     queryKey: ["loadouts", profileId],
@@ -511,6 +616,7 @@ function AuthLoadoutsBody({
     <LoadoutManager
       loadouts={loadouts.data ?? []}
       relicByHandle={relicByHandle}
+      effectMap={effectMap}
       slotIndex={slotIndex}
     />
   )
@@ -522,6 +628,15 @@ function AuthLoadouts() {
     queryFn: () => SavesService.listProfiles(),
     staleTime: 5 * 60 * 1000,
   })
+  const { data: effectsData } = useSuspenseQuery({
+    queryKey: ["game", "effects"],
+    queryFn: () => GameService.getEffects(),
+    staleTime: Number.POSITIVE_INFINITY,
+  })
+  const effectMap = useMemo(
+    () => buildEffectMap((effectsData ?? []) as unknown[]),
+    [effectsData],
+  )
   const [selectedId, setSelectedId] = useState<string | null>(
     profiles.data?.[0]?.id ?? null,
   )
@@ -548,6 +663,7 @@ function AuthLoadouts() {
           key={selected.id}
           profileId={selected.id}
           slotIndex={selected.slot_index}
+          effectMap={effectMap}
         />
       </Suspense>
     </div>
@@ -557,6 +673,16 @@ function AuthLoadouts() {
 // --- anonymous --------------------------------------------------------------
 
 function AnonLoadouts() {
+  const { data: effectsData } = useSuspenseQuery({
+    queryKey: ["game", "effects"],
+    queryFn: () => GameService.getEffects(),
+    staleTime: Number.POSITIVE_INFINITY,
+  })
+  const effectMap = useMemo(
+    () => buildEffectMap((effectsData ?? []) as unknown[]),
+    [effectsData],
+  )
+
   const allProfiles: Array<Record<string, any>> = JSON.parse(
     sessionStorage.getItem("parsedProfiles") ?? "[]",
   )
@@ -571,12 +697,35 @@ function AnonLoadouts() {
     defaultProfile?.slot_index ?? allProfiles[0]?.slot_index ?? null
   const [selectedSlot, setSelectedSlot] = useState<number | null>(defaultSlot)
 
-  if (allProfiles.length === 0) return <NoProfiles />
-
   const profile =
-    allProfiles.find((c) => c.slot_index === selectedSlot) ?? allProfiles[0]
+    allProfiles.find((c) => c.slot_index === selectedSlot) ??
+    allProfiles[0] ??
+    null
   const relicByHandle = relicMapFromList(profile?.relics ?? [])
   const loadouts = (profile?.presets ?? []) as ParsedLoadoutData[]
+
+  // Cumulative effects aren't stored in the anonymous (session-only) payload, so
+  // compute them via the stateless game endpoint — same % bonuses as the optimizer.
+  const effectGroups = loadouts.map((l) => {
+    const ids: number[] = []
+    for (const h of l.ga_handles ?? []) {
+      const r = relicByHandle.get(h)
+      if (r) ids.push(...r.effects, ...r.curses)
+    }
+    return ids
+  })
+  const { data: computed } = useQuery({
+    queryKey: ["cumulative", profile?.slot_index, loadouts.length],
+    queryFn: () =>
+      GameService.cumulativeEffects({
+        requestBody: { effect_id_groups: effectGroups },
+      }),
+    enabled: loadouts.length > 0,
+    staleTime: Number.POSITIVE_INFINITY,
+  })
+  const enriched = loadouts.map((l, i) =>
+    computed?.[i] ? { ...l, cumulative_effects: computed[i] } : l,
+  )
 
   const handleChange = (slotStr: string) => {
     const slot = Number(slotStr)
@@ -585,6 +734,8 @@ function AnonLoadouts() {
     if (picked)
       sessionStorage.setItem("selectedProfile", JSON.stringify(picked))
   }
+
+  if (allProfiles.length === 0) return <NoProfiles />
 
   return (
     <div className="space-y-4">
@@ -600,8 +751,9 @@ function AnonLoadouts() {
       />
       <LoadoutManager
         key={profile?.slot_index}
-        loadouts={loadouts}
+        loadouts={enriched}
         relicByHandle={relicByHandle}
+        effectMap={effectMap}
         slotIndex={Number(profile?.slot_index ?? 0)}
       />
     </div>
@@ -656,7 +808,7 @@ function ProfileSelector({
 
 function NoProfiles() {
   return (
-    <p className="text-muted-foreground py-8 text-center">
+    <p className="py-8 text-center text-muted-foreground">
       No save loaded.{" "}
       <a href="/upload" className="underline">
         Upload a save file
@@ -672,10 +824,11 @@ function LoadoutsPage() {
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-semibold">Relic Loadouts</h1>
-        <p className="text-muted-foreground mt-1">
+        <p className="mt-1 text-muted-foreground">
           View, rename, and delete the in-game relic loadout presets saved in
-          your character's save file. Create new ones from the optimizer with{" "}
-          <strong>Save as loadout</strong>.
+          your character's save file. Expand a loadout to see every relic's
+          effects and its cumulative bonuses. Create new ones from the optimizer
+          with <strong>Save as loadout</strong>.
         </p>
       </div>
       <Suspense fallback={<Skeleton className="h-48 w-full" />}>

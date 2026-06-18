@@ -5,9 +5,12 @@ All data is static and loaded once at startup via the SourceDataHandler singleto
 from typing import Any
 
 from fastapi import APIRouter
+from pydantic import BaseModel
 
 from app.api.deps import GameDataDep
 from nrplanner.constants import CHARACTER_NAME_ID, CHARACTER_NAMES, RELIC_COLOR_HEX
+from nrplanner.cumulative import summarize_cumulative_effects
+from nrplanner.models import CumulativeEffectGroup
 
 router = APIRouter(prefix="/game", tags=["game"])
 
@@ -50,3 +53,20 @@ def get_stacking_categories(ds: GameDataDep) -> list[dict[str, Any]]:
 def get_colors() -> dict[str, str]:
     """Relic color names mapped to their display hex codes."""
     return {k: v for k, v in RELIC_COLOR_HEX.items() if k is not None}
+
+
+class CumulativeRequest(BaseModel):
+    # One flat list of effect IDs (effects + curses, duplicates kept) per loadout.
+    effect_id_groups: list[list[int]]
+
+
+@router.post("/cumulative-effects")
+def cumulative_effects(
+    body: CumulativeRequest, ds: GameDataDep
+) -> list[list[CumulativeEffectGroup]]:
+    """Cumulative stacked-effect summary for each group of effect IDs.
+
+    Stateless game-data computation (no auth) so anonymous loadouts can show the
+    same % bonuses the optimizer does. Mirrors the optimizer's per-vessel summary.
+    """
+    return [summarize_cumulative_effects(ids, ds) for ids in body.effect_id_groups]

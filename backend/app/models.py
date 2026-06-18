@@ -7,7 +7,7 @@ from pydantic import Field as PydanticField
 from sqlalchemy import BigInteger, Boolean, Column, DateTime, JSON, UniqueConstraint
 from sqlmodel import Field, Relationship, SQLModel
 
-from nrplanner.models import BuildChange
+from nrplanner.models import BuildChange, CumulativeEffectGroup
 
 
 def get_datetime_utc() -> datetime:
@@ -483,6 +483,9 @@ class ParsedLoadoutData(SQLModel):
     vessel_name: str
     slot_colors: list[str] = Field(default_factory=list)
     ga_handles: list[int] = Field(default_factory=list)
+    # Cumulative stacked-effect summary (same computation as the optimizer), so the
+    # Loadouts page can show the % bonuses a saved loadout grants.
+    cumulative_effects: list[CumulativeEffectGroup] = Field(default_factory=list)
 
 
 class LoadoutsPublic(SQLModel):

@@ -264,7 +264,12 @@ function AuthOptimizeForm({ buildId }: { buildId: string }) {
                   character: selectedBuild.character,
                   existing: (loadoutsData?.data ?? [])
                     .filter((l) => l.character === selectedBuild.character)
-                    .map((l) => ({ index: l.index, name: l.name })),
+                    .map((l) => ({
+                      index: l.index,
+                      name: l.name,
+                      vessel_id: l.vessel_id,
+                      ga_handles: l.ga_handles ?? [],
+                    })),
                 }
               })()}
             />
@@ -532,13 +537,22 @@ function AnonOptimizeForm({ buildId }: { buildId: string }) {
                   ? {
                       slotIndex: Number(profile.slot_index),
                       character: build.character,
-                      existing: (((profile as any)?.presets ?? []) as Array<{
-                        index: number
-                        name: string
-                        character: string
-                      }>)
+                      existing: (
+                        ((profile as any)?.presets ?? []) as Array<{
+                          index: number
+                          name: string
+                          character: string
+                          vessel_id: number
+                          ga_handles: number[]
+                        }>
+                      )
                         .filter((p) => p.character === build.character)
-                        .map((p) => ({ index: p.index, name: p.name })),
+                        .map((p) => ({
+                          index: p.index,
+                          name: p.name,
+                          vessel_id: p.vessel_id,
+                          ga_handles: p.ga_handles ?? [],
+                        })),
                     }
                   : undefined
               }

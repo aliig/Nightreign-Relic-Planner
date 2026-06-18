@@ -886,6 +886,24 @@ export const CumulativeEffectTierSchema = {
     description: "One tier within a stacked-effect group (e.g. '+4' present 3 times)."
 } as const;
 
+export const CumulativeRequestSchema = {
+    properties: {
+        effect_id_groups: {
+            items: {
+                items: {
+                    type: 'integer'
+                },
+                type: 'array'
+            },
+            type: 'array',
+            title: 'Effect Id Groups'
+        }
+    },
+    type: 'object',
+    required: ['effect_id_groups'],
+    title: 'CumulativeRequest'
+} as const;
+
 export const DebugExportRequestSchema = {
     properties: {
         mode: {
@@ -1412,6 +1430,13 @@ export const ParsedLoadoutDataSchema = {
             },
             type: 'array',
             title: 'Ga Handles'
+        },
+        cumulative_effects: {
+            items: {
+                '$ref': '#/components/schemas/CumulativeEffectGroup'
+            },
+            type: 'array',
+            title: 'Cumulative Effects'
         }
     },
     type: 'object',

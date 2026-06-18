@@ -1,18 +1,10 @@
-import { AlertTriangle, Coins, Download, Lock, Star } from "lucide-react"
-import { useMemo, useRef, useState } from "react"
+import { Coins, Lock, Star } from "lucide-react"
+import { useMemo, useState } from "react"
 
 import { EffectList, RelicNameCell } from "@/components/RelicDisplay"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
 import {
   Select,
   SelectContent,
@@ -28,9 +20,12 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import useCustomToast from "@/hooks/useCustomToast"
-import { ExportError, exportModifiedSave } from "@/lib/exportSave"
-import { getSaveFile, getSaveFileMeta, rememberSaveFile } from "@/lib/saveFile"
+import {
+  clearSlotRelics,
+  setFavorite,
+  toggleSell,
+  usePendingSlot,
+} from "@/lib/pendingChanges"
 import { effectCountOf, formatMurks, sellValue } from "@/lib/sellValue"
 import {
   applyFilters,
@@ -49,7 +44,6 @@ export function RelicManager({
   usage,
   slotIndex,
   murks,
-  onExported,
 }: {
   relics: ManagedRelic[]
   effectsData: unknown[]
@@ -57,22 +51,13 @@ export function RelicManager({
   usage: Map<number, number>
   slotIndex: number
   murks: number
-  /** Called after a successful export so the caller can reset/refresh. */
-  onExported?: () => void
 }) {
-  const { showSuccessToast, showErrorToast } = useCustomToast()
-  const fileInputRef = useRef<HTMLInputElement>(null)
+  const pending = usePendingSlot(slotIndex)
+  const selected = useMemo(() => new Set(pending.sells), [pending.sells])
+  const favoriteChanges = pending.favorites
 
   const [filter, setFilter] = useState<FilterState>(EMPTY_FILTER)
   const [usageSort, setUsageSort] = useState<UsageSort>("name")
-  const [selected, setSelected] = useState<Set<number>>(new Set())
-  const [favoriteChanges, setFavoriteChanges] = useState<
-    Record<number, boolean>
-  >({})
-  const [confirmOpen, setConfirmOpen] = useState(false)
-  const [busy, setBusy] = useState(false)
-  // Bumped when the user (re-)selects a save file so we re-read getSaveFile().
-  const [, setFileTick] = useState(0)
 
   const effectiveFavorite = (r: ManagedRelic): boolean =>
     r.gaHandle in favoriteChanges ? favoriteChanges[r.gaHandle] : r.isFavorite
@@ -121,35 +106,22 @@ export function RelicManager({
   const favoriteEdits = Object.keys(favoriteChanges).length
   const hasChanges = selectedRelics.length > 0 || favoriteEdits > 0
 
-  const saveFile = getSaveFile()
-  const saveMeta = getSaveFileMeta()
-
   function toggleSelect(r: ManagedRelic) {
     if (!isSellable(r)) return
-    setSelected((prev) => {
-      const next = new Set(prev)
-      if (next.has(r.gaHandle)) next.delete(r.gaHandle)
-      else next.add(r.gaHandle)
-      return next
-    })
+    toggleSell(slotIndex, r.gaHandle)
   }
 
   function toggleFavorite(r: ManagedRelic) {
     const desired = !effectiveFavorite(r)
-    setFavoriteChanges((prev) => {
-      const next = { ...prev }
-      if (desired === r.isFavorite) delete next[r.gaHandle]
-      else next[r.gaHandle] = desired
-      return next
-    })
+    // null clears the pending change when it matches the saved state.
+    setFavorite(
+      slotIndex,
+      r.gaHandle,
+      desired === r.isFavorite ? null : desired,
+    )
     // Bookmarking a relic makes it unsellable — drop it from the sell set.
-    if (desired) {
-      setSelected((prev) => {
-        if (!prev.has(r.gaHandle)) return prev
-        const next = new Set(prev)
-        next.delete(r.gaHandle)
-        return next
-      })
+    if (desired && pending.sells.includes(r.gaHandle)) {
+      toggleSell(slotIndex, r.gaHandle)
     }
   }
 
@@ -158,60 +130,9 @@ export function RelicManager({
     const allSelected =
       sellableVisible.length > 0 &&
       sellableVisible.every((r) => selected.has(r.gaHandle))
-    setSelected((prev) => {
-      const next = new Set(prev)
-      if (allSelected) {
-        for (const r of sellableVisible) next.delete(r.gaHandle)
-      } else {
-        for (const r of sellableVisible) next.add(r.gaHandle)
-      }
-      return next
-    })
-  }
-
-  function onPickFile(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0]
-    if (file) {
-      rememberSaveFile(file)
-      setFileTick((t) => t + 1)
-    }
-  }
-
-  async function doExport() {
-    const file = getSaveFile()
-    if (!file) return
-    setBusy(true)
-    try {
-      const result = await exportModifiedSave({
-        file,
-        slotIndex,
-        gaHandles: selectedRelics.map((r) => r.gaHandle),
-        favoriteChanges,
-      })
-      setConfirmOpen(false)
-      setSelected(new Set())
-      setFavoriteChanges({})
-      const parts: string[] = []
-      if (result.removed > 0)
-        parts.push(
-          `sold ${result.removed} relic${result.removed !== 1 ? "s" : ""} (+${formatMurks(result.murkCredit)} Murk)`,
-        )
-      if (result.favoritesChanged > 0)
-        parts.push(
-          `${result.favoritesChanged} bookmark change${result.favoritesChanged !== 1 ? "s" : ""}`,
-        )
-      showSuccessToast(
-        `Saved ${result.filename} — ${parts.join(", ")}. Load it in-game, then re-import here to refresh.`,
-      )
-      onExported?.()
-    } catch (err) {
-      showErrorToast(
-        err instanceof ExportError || err instanceof Error
-          ? err.message
-          : "Export failed",
-      )
-    } finally {
-      setBusy(false)
+    for (const r of sellableVisible) {
+      const has = selected.has(r.gaHandle)
+      if (allSelected ? has : !has) toggleSell(slotIndex, r.gaHandle)
     }
   }
 
@@ -377,14 +298,15 @@ export function RelicManager({
         </Table>
       )}
 
-      {/* Action bar */}
+      {/* Pending summary — the actual export lives in the top-bar button. */}
       {hasChanges && (
         <div className="sticky bottom-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-card p-3 shadow-lg">
           <div className="text-sm">
             {selectedRelics.length > 0 && (
               <span>
                 <strong>{selectedRelics.length}</strong> to sell · +
-                {formatMurks(murkGain)} Murk
+                {formatMurks(murkGain)} Murk (new total{" "}
+                {formatMurks(projectedMurks)})
               </span>
             )}
             {selectedRelics.length > 0 && favoriteEdits > 0 && " · "}
@@ -394,91 +316,20 @@ export function RelicManager({
                 {favoriteEdits !== 1 ? "s" : ""}
               </span>
             )}
+            <span className="text-muted-foreground">
+              {" "}
+              — queued; export from the “Export save” button up top.
+            </span>
           </div>
-          <div className="flex items-center gap-2">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => {
-                setSelected(new Set())
-                setFavoriteChanges({})
-              }}
-            >
-              Clear
-            </Button>
-            <Button size="sm" onClick={() => setConfirmOpen(true)}>
-              <Download className="mr-1.5 h-4 w-4" />
-              Export modified save
-            </Button>
-          </div>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => clearSlotRelics(slotIndex)}
+          >
+            Clear
+          </Button>
         </div>
       )}
-
-      {/* Confirmation dialog */}
-      <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Export modified save</DialogTitle>
-            <DialogDescription asChild>
-              <div className="space-y-2 pt-1">
-                <div className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-amber-700 dark:text-amber-400">
-                  <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
-                  <span>
-                    Back up your original save first. This downloads a modified
-                    copy — close the game, then replace your save with it.
-                  </span>
-                </div>
-                <ul className="text-sm list-disc pl-5">
-                  {selectedRelics.length > 0 && (
-                    <li>
-                      Sell {selectedRelics.length} relic
-                      {selectedRelics.length !== 1 ? "s" : ""} for{" "}
-                      {formatMurks(murkGain)} Murk (new total{" "}
-                      {formatMurks(projectedMurks)}).
-                    </li>
-                  )}
-                  {favoriteEdits > 0 && (
-                    <li>
-                      Apply {favoriteEdits} bookmark change
-                      {favoriteEdits !== 1 ? "s" : ""}.
-                    </li>
-                  )}
-                </ul>
-              </div>
-            </DialogDescription>
-          </DialogHeader>
-
-          {!saveFile && (
-            <div className="space-y-1 text-sm">
-              <p className="text-muted-foreground">
-                {saveMeta
-                  ? `Re-select your save file (${saveMeta.name}) to export — it must be the same save the inventory was loaded from.`
-                  : "Select your save file (.sl2) to export."}
-              </p>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".sl2"
-                onChange={onPickFile}
-                className="text-sm"
-              />
-            </div>
-          )}
-
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setConfirmOpen(false)}
-              disabled={busy}
-            >
-              Cancel
-            </Button>
-            <Button onClick={doExport} disabled={busy || !saveFile}>
-              {busy ? "Exporting…" : "Download modified save"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   )
 }

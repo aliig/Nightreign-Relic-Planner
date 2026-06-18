@@ -1,5 +1,4 @@
 import {
-  AlertTriangle,
   BookMarked,
   CheckCircle2,
   ChevronDown,
@@ -12,7 +11,7 @@ import {
   XCircle,
   Zap,
 } from "lucide-react"
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 
 import {
   ApiError,
@@ -48,11 +47,7 @@ import {
   rawScoreTooltip,
   relicSummary,
 } from "@/lib/buildChange"
-import {
-  exportModifiedLoadouts,
-  LoadoutExportError,
-} from "@/lib/exportLoadouts"
-import { getSaveFile, getSaveFileMeta, rememberSaveFile } from "@/lib/saveFile"
+import { addLoadoutOp } from "@/lib/pendingChanges"
 
 // --- Types ---
 
@@ -371,16 +366,18 @@ function ConditionalBadge({ text }: { text: string }) {
  * Rendered outside the (clickable) CardHeader so it stays visible when collapsed
  * and its toggle never triggers the card's expand/collapse.
  */
-function CumulativeSummary({
+export function CumulativeSummary({
   groups,
+  className = "px-6 pb-3 text-xs",
 }: {
   groups: VesselResult["cumulative_effects"]
+  className?: string
 }) {
   const [open, setOpen] = useState(false)
   if (!groups || groups.length === 0) return null
   const top = groups.find((g) => g.is_top) ?? groups[0]
   return (
-    <div className="px-6 pb-3 text-xs">
+    <div className={className}>
       <div className="flex items-center justify-between gap-2">
         <span className="flex items-center gap-1.5 min-w-0">
           <Zap className="h-3.5 w-3.5 text-amber-500 shrink-0" />
@@ -457,7 +454,12 @@ export function VesselCard({
   loadoutTarget?: {
     slotIndex: number
     character: string
-    existing?: { index: number; name: string }[]
+    existing?: {
+      index: number
+      name: string
+      vessel_id: number
+      ga_handles: number[]
+    }[]
   }
 }) {
   const { showErrorToast } = useCustomToast()
@@ -479,6 +481,23 @@ export function VesselCard({
 
   const isModified = workingVessel !== vessel
   const canStrike = inventorySource !== undefined
+
+  // Does this exact setup (same vessel + same non-empty relics) already exist as
+  // a saved in-game loadout? Matched as a set so slot order doesn't matter.
+  const savedMatch = useMemo(() => {
+    const existing = loadoutTarget?.existing
+    if (!existing?.length) return undefined
+    const mine = new Set(
+      workingVessel.assignments
+        .map((a) => (a.relic as { ga_handle?: number } | null)?.ga_handle ?? 0)
+        .filter((h) => h !== 0),
+    )
+    return existing.find((e) => {
+      if (e.vessel_id !== workingVessel.vessel_id) return false
+      const theirs = (e.ga_handles ?? []).filter((h) => h !== 0)
+      return theirs.length === mine.size && theirs.every((h) => mine.has(h))
+    })
+  }, [loadoutTarget, workingVessel])
 
   const handleStrike = async (slotIndex: number) => {
     if (!inventorySource || strikingSlot !== null) return
@@ -550,6 +569,16 @@ export function VesselCard({
             {isModified && (
               <Badge variant="outline" className="text-[10px] px-1.5 py-0">
                 edited
+              </Badge>
+            )}
+            {savedMatch && (
+              <Badge
+                variant="secondary"
+                className="text-[10px] px-1.5 py-0 gap-1"
+                title={`Already saved in-game as "${savedMatch.name || "(unnamed)"}"`}
+              >
+                <BookMarked className="h-3 w-3" />
+                Saved{savedMatch.name ? `: ${savedMatch.name}` : ""}
               </Badge>
             )}
           </div>
@@ -670,15 +699,10 @@ function SaveLoadoutDialog({
     existing?: { index: number; name: string }[]
   }
 }) {
-  const { showSuccessToast, showErrorToast } = useCustomToast()
+  const { showSuccessToast } = useCustomToast()
   const [mode, setMode] = useState<"add" | "overwrite">("add")
   const [name, setName] = useState("")
   const [overwriteIndex, setOverwriteIndex] = useState<string>("")
-  const [busy, setBusy] = useState(false)
-  const [, setFileTick] = useState(0)
-
-  const saveFile = getSaveFile()
-  const saveMeta = getSaveFileMeta()
   const existing = target.existing ?? []
 
   // Relics ordered by slot index (0..5), 0 for empty slots.
@@ -688,57 +712,37 @@ function SaveLoadoutDialog({
 
   const valid = mode === "add" ? name.trim().length > 0 : overwriteIndex !== ""
 
-  function onPickFile(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0]
-    if (file) {
-      rememberSaveFile(file)
-      setFileTick((t) => t + 1)
-    }
-  }
-
-  async function doSave() {
-    const file = getSaveFile()
-    if (!file || !valid) return
-    setBusy(true)
-    try {
-      const op =
-        mode === "add"
-          ? {
-              op: "add" as const,
-              character: target.character,
-              vessel_id: vessel.vessel_id,
-              ga_handles: gaHandles,
-              name: name.trim(),
-            }
-          : {
-              op: "overwrite" as const,
-              index: Number(overwriteIndex),
-              character: target.character,
-              vessel_id: vessel.vessel_id,
-              ga_handles: gaHandles,
-            }
-      const result = await exportModifiedLoadouts({
-        file,
-        slotIndex: target.slotIndex,
-        operations: [op],
+  function doQueue() {
+    if (!valid) return
+    if (mode === "add") {
+      addLoadoutOp(target.slotIndex, {
+        kind: "add",
+        character: target.character,
+        vessel_id: vessel.vessel_id,
+        ga_handles: gaHandles,
+        name: name.trim(),
+        vesselName: vessel.vessel_name,
       })
-      onOpenChange(false)
-      setName("")
-      setOverwriteIndex("")
-      const what =
-        mode === "add" ? `loadout "${name.trim()}" added` : "loadout replaced"
       showSuccessToast(
-        `Saved ${result.filename} — ${what} (${result.used}/100 used). Load it in-game, then re-import here to refresh.`,
+        `Queued new loadout "${name.trim()}" — export from the top bar when ready.`,
       )
-    } catch (err) {
-      showErrorToast(
-        err instanceof LoadoutExportError || err instanceof Error
-          ? err.message
-          : "Failed to save loadout",
+    } else {
+      const ex = existing.find((e) => String(e.index) === overwriteIndex)
+      addLoadoutOp(target.slotIndex, {
+        kind: "overwrite",
+        index: Number(overwriteIndex),
+        character: target.character,
+        vessel_id: vessel.vessel_id,
+        ga_handles: gaHandles,
+        targetName: ex?.name ?? "",
+      })
+      showSuccessToast(
+        `Queued replacement of "${ex?.name || "loadout"}" — export from the top bar when ready.`,
       )
-    } finally {
-      setBusy(false)
     }
+    onOpenChange(false)
+    setName("")
+    setOverwriteIndex("")
   }
 
   return (
@@ -746,18 +750,10 @@ function SaveLoadoutDialog({
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Save as in-game loadout</DialogTitle>
-          <DialogDescription asChild>
-            <div className="space-y-2 pt-1">
-              <div className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-amber-700 dark:text-amber-400">
-                <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
-                <span>
-                  Back up your original save first. This writes a loadout for{" "}
-                  <strong>{target.character}</strong> on{" "}
-                  <strong>{vessel.vessel_name}</strong> and downloads a modified
-                  copy — close the game, then replace your save with it.
-                </span>
-              </div>
-            </div>
+          <DialogDescription>
+            Queues a loadout for <strong>{target.character}</strong> on{" "}
+            <strong>{vessel.vessel_name}</strong>. Review and download it from
+            the “Export save” button in the top bar.
           </DialogDescription>
         </DialogHeader>
 
@@ -787,7 +783,7 @@ function SaveLoadoutDialog({
               value={name}
               maxLength={18}
               onChange={(e) => setName(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && saveFile && doSave()}
+              onKeyDown={(e) => e.key === "Enter" && doQueue()}
             />
             <div className="text-xs text-muted-foreground">
               {name.length}/18
@@ -808,32 +804,12 @@ function SaveLoadoutDialog({
           </Select>
         )}
 
-        {!saveFile && (
-          <div className="space-y-1 text-sm">
-            <p className="text-muted-foreground">
-              {saveMeta
-                ? `Re-select your save file (${saveMeta.name}) to export — it must be the same save the optimizer ran on.`
-                : "Select your save file (.sl2) to export."}
-            </p>
-            <input
-              type="file"
-              accept=".sl2"
-              onChange={onPickFile}
-              className="text-sm"
-            />
-          </div>
-        )}
-
         <DialogFooter>
-          <Button
-            variant="outline"
-            onClick={() => onOpenChange(false)}
-            disabled={busy}
-          >
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button onClick={doSave} disabled={busy || !saveFile || !valid}>
-            {busy ? "Saving…" : "Download modified save"}
+          <Button onClick={doQueue} disabled={!valid}>
+            Add to pending changes
           </Button>
         </DialogFooter>
       </DialogContent>
