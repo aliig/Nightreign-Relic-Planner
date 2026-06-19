@@ -1,11 +1,14 @@
 import { useSuspenseQuery } from "@tanstack/react-query"
-import { createFileRoute } from "@tanstack/react-router"
+import { createFileRoute, Link } from "@tanstack/react-router"
+import { Package } from "lucide-react"
 import { Suspense, useMemo, useState } from "react"
 
 import { GameService, SavesService } from "@/client"
+import { EmptyState } from "@/components/Common/EmptyState"
 import { RelicManager } from "@/components/inventory/RelicManager"
 import type { ManagedRelic } from "@/components/inventory/types"
 import { buildEffectMap } from "@/components/RelicDisplay"
+import { Button } from "@/components/ui/button"
 import {
   Select,
   SelectContent,
@@ -99,13 +102,17 @@ function AuthInventory() {
 
   if (!profiles.data?.length) {
     return (
-      <p className="text-muted-foreground py-8 text-center">
-        No profiles found.{" "}
-        <a href="/upload" className="underline">
-          Upload a save file
-        </a>{" "}
-        first.
-      </p>
+      <EmptyState
+        icon={Package}
+        title="No save loaded"
+        action={
+          <Button asChild size="sm">
+            <Link to="/upload">Upload a save file</Link>
+          </Button>
+        }
+      >
+        Import your .sl2 or memory.dat to load your relic inventory.
+      </EmptyState>
     )
   }
 
@@ -202,13 +209,17 @@ function AnonInventory() {
 
   if (allProfiles.length === 0) {
     return (
-      <p className="text-muted-foreground py-8 text-center">
-        No inventory loaded.{" "}
-        <a href="/upload" className="underline">
-          Upload a save file
-        </a>{" "}
-        first.
-      </p>
+      <EmptyState
+        icon={Package}
+        title="No save loaded"
+        action={
+          <Button asChild size="sm">
+            <Link to="/upload">Upload a save file</Link>
+          </Button>
+        }
+      >
+        Import your .sl2 or memory.dat to load your relic inventory.
+      </EmptyState>
     )
   }
 

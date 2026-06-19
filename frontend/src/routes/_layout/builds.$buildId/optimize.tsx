@@ -176,9 +176,9 @@ function AuthOptimizeForm({ buildId }: { buildId: string }) {
       <div className="flex flex-wrap gap-3 items-end">
         {profiles.length > 1 && (
           <div className="space-y-1.5">
-            <label className="text-sm font-medium">Profile</label>
+            <span className="text-sm font-medium">Profile</span>
             <Select value={profileId} onValueChange={setProfileId}>
-              <SelectTrigger className="w-56">
+              <SelectTrigger className="w-56" aria-label="Profile">
                 <SelectValue placeholder="Select profile" />
               </SelectTrigger>
               <SelectContent>
@@ -457,12 +457,12 @@ function AnonOptimizeForm({ buildId }: { buildId: string }) {
       <div className="flex flex-wrap gap-3 items-end">
         {allProfiles.length > 1 && (
           <div className="space-y-1.5">
-            <label className="text-sm font-medium">Profile</label>
+            <span className="text-sm font-medium">Profile</span>
             <Select
               value={String(profile?.slot_index ?? "")}
               onValueChange={handleProfileChange}
             >
-              <SelectTrigger className="w-56">
+              <SelectTrigger className="w-56" aria-label="Profile">
                 <SelectValue placeholder="Select profile" />
               </SelectTrigger>
               <SelectContent>

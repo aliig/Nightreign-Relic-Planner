@@ -14,6 +14,8 @@ export type Item = {
   icon: LucideIcon
   title: string
   path: string
+  /** One-line descriptor shown in the collapsed-sidebar tooltip. */
+  description?: string
 }
 
 interface MainProps {
@@ -43,7 +45,21 @@ export function Main({ items }: MainProps) {
             return (
               <SidebarMenuItem key={item.title}>
                 <SidebarMenuButton
-                  tooltip={item.title}
+                  tooltip={
+                    item.description
+                      ? {
+                          children: (
+                            <div className="space-y-0.5">
+                              <p className="font-medium">{item.title}</p>
+                              <p className="text-muted-foreground">
+                                {item.description}
+                              </p>
+                            </div>
+                          ),
+                          className: "max-w-[15rem]",
+                        }
+                      : item.title
+                  }
                   isActive={isActive}
                   asChild
                 >

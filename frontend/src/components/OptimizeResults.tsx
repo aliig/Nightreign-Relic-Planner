@@ -41,6 +41,11 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Separator } from "@/components/ui/separator"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import useCustomToast from "@/hooks/useCustomToast"
 import {
   describeBuildChange,
@@ -839,7 +844,18 @@ export function ChangeBanner({ change }: { change?: BuildChange | null }) {
         {d.relics ? ` — ${d.relics.verb} ${relicSummary(d.relics)}` : ""}.
       </span>
       {d.reliable === false && (
-        <span className="text-xs opacity-70">(approximate)</span>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="cursor-help text-xs underline decoration-dotted underline-offset-2 opacity-70">
+              (approximate)
+            </span>
+          </TooltipTrigger>
+          <TooltipContent className="max-w-[16rem]">
+            The optimizer hit its time limit, so this is the best layout it
+            found — not a proven optimum. The numbers may shift slightly on a
+            full re-run.
+          </TooltipContent>
+        </Tooltip>
       )}
     </div>
   )

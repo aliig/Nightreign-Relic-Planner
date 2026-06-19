@@ -48,6 +48,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog"
+import { InfoHint } from "@/components/ui/info-hint"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import {
@@ -225,7 +226,7 @@ function LimitToggleButton({
   onLimitChange,
   color,
   revealClass,
-  unsetTitle = "Click to limit how many slots can have this effect",
+  unsetTitle = "Click to cap how many slots may use this — cycles 1 → 2 → 3 → off",
 }: {
   limit?: number
   onLimitChange: (limit: number | undefined) => void
@@ -246,7 +247,7 @@ function LimitToggleButton({
       className={`text-[10px] leading-none px-1 rounded hover:opacity-70 ${
         limit !== undefined
           ? "border opacity-100"
-          : `border border-transparent opacity-0 ${revealClass}`
+          : `border border-dashed border-muted-foreground/40 opacity-50 ${revealClass}`
       }`}
       style={limit !== undefined && color ? { borderColor: color } : undefined}
       title={
@@ -360,6 +361,9 @@ function DraggableBrowserRow({
     data,
   })
   return (
+    // dnd-kit supplies role, tabIndex, and keyboard drag handlers via the spreads.
+    // biome-ignore lint/a11y/noStaticElementInteractions: role/tabIndex come from dnd-kit attributes
+    // biome-ignore lint/a11y/useKeyWithClickEvents: keyboard handled by dnd-kit listeners
     <div
       ref={setNodeRef}
       {...listeners}
@@ -972,9 +976,17 @@ function BuildEditorUI({
                 onCheckedChange={(v: boolean) => onIncludeDeepChange(v)}
               />
               <Label htmlFor="include-deep">Include deep relics</Label>
+              <InfoHint label="What are deep relics?">
+                Let the optimizer use Deep relics — the rarer, stronger tier
+                that also carries stronger curses.
+              </InfoHint>
             </div>
             <div className="flex items-center gap-2">
               <Label htmlFor="curse-max">Max curse stacks</Label>
+              <InfoHint label="What is max curse stacks?">
+                The most cursed relics a result may include. Each curse hurts;
+                this caps how many the optimizer will tolerate.
+              </InfoHint>
               <Input
                 id="curse-max"
                 type="number"
@@ -987,6 +999,11 @@ function BuildEditorUI({
             </div>
             <div className="flex items-center gap-2">
               <Label htmlFor="default-curse-weight">Curse penalty</Label>
+              <InfoHint label="What is curse penalty?">
+                A negative weight applied to every curse on a relic. The more
+                negative, the harder the optimizer avoids cursed relics. 0
+                ignores curses entirely.
+              </InfoHint>
               <Input
                 id="default-curse-weight"
                 type="number"
@@ -1004,6 +1021,10 @@ function BuildEditorUI({
           <div>
             <div className="flex items-center gap-2 flex-wrap">
               <span className="text-sm font-medium">Pinned Relics</span>
+              <InfoHint label="What are pinned relics?">
+                Force specific relics into every result, regardless of score —
+                handy for a relic you always want equipped.
+              </InfoHint>
               <span className="text-xs text-muted-foreground">
                 {pinnedRelics.length}/{maxPins}
               </span>
@@ -1081,6 +1102,11 @@ function BuildEditorUI({
                 <span className="text-sm font-medium">
                   Stacking Category Exclusions
                 </span>
+                <InfoHint label="What are stacking categories?">
+                  Some effects don't stack — e.g. two skills that overwrite each
+                  other. Exclude a category so the optimizer doesn't waste slots
+                  on effects that can't combine.
+                </InfoHint>
               </div>
               <p className="text-xs text-muted-foreground mb-2">
                 All effects in checked categories will be excluded unless
@@ -1094,8 +1120,12 @@ function BuildEditorUI({
                   return (
                     <Tooltip key={cat.compatibility_id}>
                       <TooltipTrigger asChild>
-                        <label className="flex items-center gap-2 text-sm py-0.5 cursor-pointer hover:bg-muted/20 rounded px-1 transition-colors">
+                        <label
+                          htmlFor={`stack-cat-${cat.compatibility_id}`}
+                          className="flex items-center gap-2 text-sm py-0.5 cursor-pointer hover:bg-muted/20 rounded px-1 transition-colors"
+                        >
                           <Checkbox
+                            id={`stack-cat-${cat.compatibility_id}`}
                             checked={checked}
                             onCheckedChange={(v: boolean) => {
                               if (v) {
@@ -1492,8 +1522,14 @@ function BuildEditorUI({
               {/* Family groups */}
               {filteredFamilies.length > 0 && (
                 <>
-                  <p className="text-xs font-medium text-muted-foreground px-2 pt-1">
+                  <p className="flex items-center gap-1 text-xs font-medium text-muted-foreground px-2 pt-1">
                     Groups (Weighted Effect Scaling)
+                    <InfoHint label="What is weighted effect scaling?">
+                      A family scales all its member effects together by
+                      magnitude — drag the family in to weight the whole group
+                      at once. Use individual effects below for flat, per-effect
+                      control.
+                    </InfoHint>
                   </p>
                   {filteredFamilies.map((family) => (
                     <DraggableBrowserRow

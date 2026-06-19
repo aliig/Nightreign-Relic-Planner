@@ -39,7 +39,13 @@ export type PendingLoadoutOp =
   | { id: string; kind: "reset_presets" }
 
 /** Display label for a relic edit, so the change log can name it without a lookup. */
-export type RelicMeta = { name: string; isDeep?: boolean; murk?: number }
+export type RelicMeta = {
+  name: string
+  isDeep?: boolean
+  murk?: number
+  /** How many builds use this relic — surfaced as a sell-impact warning. */
+  builds?: number
+}
 
 export type SlotPending = {
   sells: number[] // ga_handles to sell

@@ -40,7 +40,7 @@ import {
 export const Route = createFileRoute("/_layout/loadouts")({
   component: LoadoutsPage,
   head: () => ({
-    meta: [{ title: "Relic Loadouts - Nightreign Relic Planner" }],
+    meta: [{ title: "Game Loadouts - Nightreign Relic Planner" }],
   }),
 })
 
@@ -537,6 +537,7 @@ function GlobalControls({
   canResetPresets: boolean
   hasLoadouts: boolean
 }) {
+  const [confirmOpen, setConfirmOpen] = useState(false)
   return (
     <div className="flex flex-wrap items-center justify-between gap-3">
       <Badge variant="secondary">
@@ -552,22 +553,53 @@ function GlobalControls({
           {resetVessels ? "Vessels reset — undo" : "Reset all vessels"}
         </Button>
         {hasLoadouts && (
-          <Button
-            variant={resetPresets ? "destructive" : "outline"}
-            size="sm"
-            disabled={!resetPresets && !canResetPresets}
-            onClick={onTogglePresets}
-            title={
-              !resetPresets && !canResetPresets
-                ? "Undo your other loadout edits first"
-                : undefined
-            }
-          >
-            <Trash2 className="mr-1.5 h-3.5 w-3.5" />
-            {resetPresets
-              ? "All loadouts cleared — undo"
-              : "Reset all loadouts"}
-          </Button>
+          <>
+            <Button
+              variant={resetPresets ? "destructive" : "outline"}
+              size="sm"
+              disabled={!resetPresets && !canResetPresets}
+              onClick={() => {
+                if (resetPresets) onTogglePresets()
+                else setConfirmOpen(true)
+              }}
+              title={
+                !resetPresets && !canResetPresets
+                  ? "Undo your other loadout edits first"
+                  : undefined
+              }
+            >
+              <Trash2 className="mr-1.5 h-3.5 w-3.5" />
+              {resetPresets
+                ? "All loadouts cleared — undo"
+                : "Reset all loadouts"}
+            </Button>
+            <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Delete all loadout presets?</DialogTitle>
+                  <DialogDescription>
+                    This queues deletion of every loadout preset in this save.
+                    Nothing is written to your save until you export — and you
+                    can undo it from the Changes panel first.
+                  </DialogDescription>
+                </DialogHeader>
+                <DialogFooter>
+                  <Button variant="ghost" onClick={() => setConfirmOpen(false)}>
+                    Cancel
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    onClick={() => {
+                      onTogglePresets()
+                      setConfirmOpen(false)
+                    }}
+                  >
+                    Queue delete-all
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+          </>
         )}
       </div>
     </div>
@@ -831,7 +863,7 @@ function LoadoutsPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold">Relic Loadouts</h1>
+        <h1 className="text-2xl font-semibold">Game Loadouts</h1>
         <p className="mt-1 text-muted-foreground">
           View, rename, and delete the in-game relic loadout presets saved in
           your character's save file. Expand a loadout to see every relic's

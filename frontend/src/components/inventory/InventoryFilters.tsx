@@ -26,7 +26,10 @@ export type FilterState = {
   colorFilter: string
   tierFilter: string
   deepFilter: string
+  statusFilter: string
   effectFilter: number[]
+  /** How to match the selected effects: all (AND) / any (OR) / none (NOT). */
+  effectMode: "and" | "or" | "not"
 }
 
 export function applyFilters(
@@ -49,7 +52,12 @@ export function applyFilters(
       const relicEffectNames = r.effects
         .map((id) => effectMap.get(id))
         .filter(Boolean)
-      if (!selectedNames.every((name) => relicEffectNames.includes(name))) {
+      const has = (name: string | undefined) => relicEffectNames.includes(name)
+      if (f.effectMode === "or") {
+        if (!selectedNames.some(has)) return false
+      } else if (f.effectMode === "not") {
+        if (selectedNames.some(has)) return false
+      } else if (!selectedNames.every(has)) {
         return false
       }
     }
@@ -61,10 +69,14 @@ function EffectMultiSelect({
   effectsData,
   selectedEffects,
   onChange,
+  mode,
+  onModeChange,
 }: {
   effectsData: unknown[]
   selectedEffects: number[]
   onChange: (ids: number[]) => void
+  mode: "and" | "or" | "not"
+  onModeChange: (mode: "and" | "or" | "not") => void
 }) {
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState("")
@@ -98,8 +110,37 @@ function EffectMultiSelect({
       </DialogTrigger>
       <DialogContent className="max-w-md p-0 overflow-hidden">
         <DialogHeader className="p-4 pb-2">
-          <DialogTitle>Filter by Effects (AND)</DialogTitle>
+          <DialogTitle>Filter by Effects</DialogTitle>
         </DialogHeader>
+        <div className="px-4 pb-2">
+          <div className="flex gap-1 rounded-md bg-muted/50 p-0.5">
+            {(
+              [
+                ["and", "All"],
+                ["or", "Any"],
+                ["not", "None"],
+              ] as const
+            ).map(([m, label]) => (
+              <Button
+                key={m}
+                type="button"
+                size="sm"
+                variant={mode === m ? "secondary" : "ghost"}
+                className="h-7 flex-1 text-xs"
+                onClick={() => onModeChange(m)}
+              >
+                {label}
+              </Button>
+            ))}
+          </div>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Match relics with{" "}
+            <strong>
+              {mode === "or" ? "any" : mode === "not" ? "none" : "all"}
+            </strong>{" "}
+            of the selected effects.
+          </p>
+        </div>
         <div className="px-4 pb-2 relative">
           <Search className="absolute left-6 top-2.5 h-4 w-4 text-muted-foreground" />
           <Input
@@ -239,10 +280,27 @@ export function InventoryFilters({
           <SelectItem value="deep">Deep</SelectItem>
         </SelectContent>
       </Select>
+      <Select
+        value={filter.statusFilter}
+        onValueChange={(v) => patch({ statusFilter: v })}
+      >
+        <SelectTrigger className="w-36">
+          <SelectValue placeholder="Status" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="all">All status</SelectItem>
+          <SelectItem value="unused">Unused</SelectItem>
+          <SelectItem value="stale">Stale (equipped)</SelectItem>
+          <SelectItem value="bench">On the bench</SelectItem>
+          <SelectItem value="active">Active</SelectItem>
+        </SelectContent>
+      </Select>
       <EffectMultiSelect
         effectsData={effectsData}
         selectedEffects={filter.effectFilter}
         onChange={(ids) => patch({ effectFilter: ids })}
+        mode={filter.effectMode}
+        onModeChange={(m) => patch({ effectMode: m })}
       />
     </div>
   )
@@ -253,5 +311,7 @@ export const EMPTY_FILTER: FilterState = {
   colorFilter: "all",
   tierFilter: "all",
   deepFilter: "all",
+  statusFilter: "all",
   effectFilter: [],
+  effectMode: "and",
 }

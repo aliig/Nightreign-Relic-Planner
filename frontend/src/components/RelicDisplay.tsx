@@ -2,6 +2,11 @@
  * Shared constants and components for displaying relics and their
  * effects/curses consistently across inventory, optimizer, and other views.
  */
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 
 export const COLOR_HEX: Record<string, string> = {
   Red: "#FF4444",
@@ -15,6 +20,19 @@ export const DEEP_COLOR = "#8B6FC0"
 
 export const EMPTY_EFFECT = 4294967295
 
+/**
+ * Per-copy practical magnitude (e.g. "+15%") per effect id, populated as a side
+ * effect of buildEffectMap (which every effect-rendering surface calls). Lets
+ * the shared EffectPill show a magnitude tooltip without threading the data
+ * through every caller.
+ */
+const effectBonusById = new Map<number, string>()
+
+/** Per-copy magnitude string for an effect id, if the game data has one. */
+export function effectBonus(id: number): string | undefined {
+  return effectBonusById.get(id)
+}
+
 /** Build the effect ID → display name map, including alias IDs. */
 export function buildEffectMap(effectsData: unknown[]): Map<number, string> {
   const m = new Map<number, string>()
@@ -22,9 +40,14 @@ export function buildEffectMap(effectsData: unknown[]): Map<number, string> {
     const e = raw as Record<string, unknown>
     if (typeof e.id === "number" && typeof e.name === "string") {
       m.set(e.id, e.name)
+      const bonus = typeof e.bonus_display === "string" ? e.bonus_display : null
+      if (bonus) effectBonusById.set(e.id, bonus)
       if (Array.isArray(e.alias_ids)) {
         for (const aliasId of e.alias_ids as unknown[]) {
-          if (typeof aliasId === "number") m.set(aliasId, e.name)
+          if (typeof aliasId === "number") {
+            m.set(aliasId, e.name)
+            if (bonus) effectBonusById.set(aliasId, bonus)
+          }
         }
       }
     }
@@ -63,24 +86,37 @@ export function RelicNameCell({
   )
 }
 
-/** A single effect or curse pill. */
+/** A single effect or curse pill; shows its per-copy magnitude on hover. */
 export function EffectPill({
   name,
   isCurse,
+  bonus,
 }: {
   name: string
   isCurse: boolean
+  /** Per-copy practical magnitude (e.g. "+15%") — adds a hover tooltip. */
+  bonus?: string
 }) {
-  return (
+  const pill = (
     <span
       className={`inline-block rounded px-1.5 py-0.5 text-xs ${
         isCurse
           ? "bg-destructive/10 text-destructive"
           : "bg-muted text-muted-foreground"
-      }`}
+      } ${bonus ? "cursor-help underline decoration-dotted decoration-muted-foreground/40 underline-offset-2" : ""}`}
     >
       {name}
     </span>
+  )
+  if (!bonus) return pill
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{pill}</TooltipTrigger>
+      <TooltipContent>
+        <span className="font-medium">{bonus}</span>
+        <span className="text-muted-foreground"> per copy</span>
+      </TooltipContent>
+    </Tooltip>
   )
 }
 
@@ -94,17 +130,22 @@ export function EffectList({
   isCurse: boolean
   effectMap: Map<number, string>
 }) {
-  const names: string[] = []
+  const items: { id: number; name: string }[] = []
   for (const id of effectIds) {
     if (id === 0 || id === EMPTY_EFFECT) continue
     const name = effectMap.get(id)
-    if (name) names.push(name)
+    if (name) items.push({ id, name })
   }
-  if (names.length === 0) return null
+  if (items.length === 0) return null
   return (
     <div className="flex flex-col gap-1">
-      {names.map((name) => (
-        <EffectPill key={name} name={name} isCurse={isCurse} />
+      {items.map(({ id, name }, i) => (
+        <EffectPill
+          key={`${id}-${i}`}
+          name={name}
+          isCurse={isCurse}
+          bonus={effectBonus(id)}
+        />
       ))}
     </div>
   )

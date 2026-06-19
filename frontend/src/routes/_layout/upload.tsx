@@ -5,6 +5,7 @@ import { useRef, useState } from "react"
 
 import type { BuildChange } from "@/client"
 import { SavesService } from "@/client"
+import { OriginalBackupCard } from "@/components/OriginalBackupCard"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import {
@@ -25,6 +26,7 @@ import {
   relicSummary,
 } from "@/lib/buildChange"
 import { computeOverallPct, optimizingLabel } from "@/lib/optimizeProgress"
+import { storeOriginalBackup } from "@/lib/saveBackup"
 import { rememberSaveFile } from "@/lib/saveFile"
 import { formatRelativeTime, handleError } from "@/utils"
 
@@ -346,6 +348,12 @@ function UploadPage() {
     // Keep the original file in-session so the inventory page can export an
     // edited copy without re-uploading (raw saves are never persisted).
     rememberSaveFile(file)
+    // Also stash a durable, in-browser backup of the pristine original so the
+    // user can recover it later if their save ever gets corrupted.
+    void storeOriginalBackup(file)
+    showSuccessToast(
+      "Original save backed up in this browser — you can download it anytime from the Upload page.",
+    )
     if (isLoggedIn()) {
       handleStreamUpload(file)
     } else {
@@ -380,8 +388,14 @@ function UploadPage() {
 
       <SaveStatusBanner />
 
+      <OriginalBackupCard />
+
       {/* Drop zone */}
+      {/* biome-ignore lint/a11y/useSemanticElements: drop zone wraps a hidden file input (a <button> can't contain it); role/tabIndex/onKeyDown give it full keyboard a11y */}
       <div
+        role="button"
+        tabIndex={0}
+        aria-label="Upload a save file"
         onDragOver={(e) => {
           e.preventDefault()
           setDragging(true)
@@ -389,6 +403,12 @@ function UploadPage() {
         onDragLeave={() => setDragging(false)}
         onDrop={onDrop}
         onClick={() => fileInputRef.current?.click()}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault()
+            fileInputRef.current?.click()
+          }
+        }}
         className={`
           flex flex-col items-center justify-center rounded-lg border-2 border-dashed
           p-12 cursor-pointer transition-colors

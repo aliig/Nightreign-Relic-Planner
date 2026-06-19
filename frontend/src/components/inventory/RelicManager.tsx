@@ -1,3 +1,4 @@
+import { Link } from "@tanstack/react-router"
 import { Coins, Eye, EyeOff, Lock, RotateCcw, Star, Trash2 } from "lucide-react"
 import { useMemo, useState } from "react"
 
@@ -5,6 +6,11 @@ import { EffectList, RelicNameCell } from "@/components/RelicDisplay"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover"
 import {
   Select,
   SelectContent,
@@ -20,8 +26,16 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
+import type { RelicBuildRef } from "@/hooks/useRelicUsage"
 import { setFavorite, toggleSell, usePendingSlot } from "@/lib/pendingChanges"
+import { type RelicStatus, relicStatus } from "@/lib/relicStatus"
 import { effectCountOf, formatMurks, sellValue } from "@/lib/sellValue"
+import { cn } from "@/lib/utils"
 import {
   applyFilters,
   EMPTY_FILTER,
@@ -30,7 +44,33 @@ import {
 } from "./InventoryFilters"
 import type { ManagedRelic } from "./types"
 
-type UsageSort = "name" | "most" | "least" | "unused"
+type UsageSort = "name" | "most" | "least"
+
+const STATUS_META: Record<
+  RelicStatus,
+  { label: string; cls: string; hint: string }
+> = {
+  active: {
+    label: "Active",
+    cls: "border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+    hint: "Equipped in-game and used by one of your builds — keep it.",
+  },
+  stale: {
+    label: "Stale",
+    cls: "border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400",
+    hint: "Equipped in-game, but no current build uses it. A candidate to unequip or replace in-game.",
+  },
+  bench: {
+    label: "On the bench",
+    cls: "border-sky-500/30 bg-sky-500/10 text-sky-600 dark:text-sky-400",
+    hint: "A build wants this relic, but it isn't equipped in-game yet.",
+  },
+  unused: {
+    label: "Unused",
+    cls: "border-border bg-muted text-muted-foreground",
+    hint: "Not equipped and not used by any build — a candidate to sell.",
+  },
+}
 
 export function RelicManager({
   relics,
@@ -43,7 +83,7 @@ export function RelicManager({
   relics: ManagedRelic[]
   effectsData: unknown[]
   effectMap: Map<number, string>
-  usage: Map<number, number>
+  usage: Map<number, RelicBuildRef[]>
   slotIndex: number
   murks: number
 }) {
@@ -65,19 +105,26 @@ export function RelicManager({
   const isSellable = (r: ManagedRelic): boolean =>
     !r.equipped && !effectiveFavorite(r)
 
-  const usageOf = (r: ManagedRelic): number => usage.get(r.realId) ?? 0
+  const buildsOf = (r: ManagedRelic): RelicBuildRef[] =>
+    usage.get(r.realId) ?? []
+  const usageOf = (r: ManagedRelic): number => buildsOf(r).length
 
   const metaFor = (r: ManagedRelic) => ({
     name: r.name,
     isDeep: r.isDeep,
     murk: sellValue(effectCountOf(r.effects), r.isDeep),
+    builds: usageOf(r),
   })
 
   const visible = useMemo(() => {
-    const u = (r: ManagedRelic) => usage.get(r.realId) ?? 0
+    const u = (r: ManagedRelic) => usage.get(r.realId)?.length ?? 0
     let list = applyFilters(relics, filter, effectMap)
-    if (usageSort === "unused") {
-      list = list.filter((r) => u(r) === 0)
+    // Status is usage-derived (equipped + usage), so it's filtered here rather
+    // than in applyFilters, which only sees relic-intrinsic fields.
+    if (filter.statusFilter !== "all") {
+      list = list.filter(
+        (r) => relicStatus(r.equipped, u(r) > 0) === filter.statusFilter,
+      )
     }
     // Trashed relics are hidden by default — they've left the inventory.
     if (!showTrashed) {
@@ -203,7 +250,6 @@ export function RelicManager({
               <SelectItem value="name">Name (A–Z)</SelectItem>
               <SelectItem value="least">Least used</SelectItem>
               <SelectItem value="most">Most used</SelectItem>
-              <SelectItem value="unused">Unused only</SelectItem>
             </SelectContent>
           </Select>
           {trashedCount > 0 && (
@@ -248,7 +294,7 @@ export function RelicManager({
                 />
               </TableHead>
               <TableHead>Relic</TableHead>
-              <TableHead className="w-24">Setups</TableHead>
+              <TableHead className="w-32">Status</TableHead>
               <TableHead>Effects</TableHead>
               <TableHead>Curses</TableHead>
               <TableHead className="w-12 text-center">Mark</TableHead>
@@ -260,7 +306,9 @@ export function RelicManager({
               const fav = effectiveFavorite(relic)
               const sellable = isSellable(relic)
               const isTrashed = trashed.has(relic.gaHandle)
-              const count = usageOf(relic)
+              const builds = buildsOf(relic)
+              const count = builds.length
+              const status = relicStatus(relic.equipped, count > 0)
               const lockReason = relic.equipped
                 ? "Equipped — can't trash"
                 : fav
@@ -302,15 +350,56 @@ export function RelicManager({
                     </div>
                   </TableCell>
                   <TableCell>
-                    {count > 0 ? (
-                      <Badge variant="secondary" className="font-normal">
-                        {count} build{count !== 1 ? "s" : ""}
-                      </Badge>
-                    ) : (
-                      <span className="text-xs text-muted-foreground">
-                        Unused
-                      </span>
-                    )}
+                    <div className="flex flex-col items-start gap-1">
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Badge
+                            variant="outline"
+                            tabIndex={0}
+                            className={cn(
+                              "cursor-help font-normal focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                              STATUS_META[status].cls,
+                            )}
+                          >
+                            {STATUS_META[status].label}
+                          </Badge>
+                        </TooltipTrigger>
+                        <TooltipContent side="right" className="max-w-[15rem]">
+                          {STATUS_META[status].hint}
+                        </TooltipContent>
+                      </Tooltip>
+                      {count > 0 && (
+                        <Popover>
+                          <PopoverTrigger asChild>
+                            <button
+                              type="button"
+                              className="text-xs text-muted-foreground underline decoration-dotted underline-offset-2 hover:text-foreground"
+                            >
+                              {count} build{count !== 1 ? "s" : ""}
+                            </button>
+                          </PopoverTrigger>
+                          <PopoverContent side="right" className="w-56 p-2">
+                            <p className="mb-1.5 px-1.5 text-xs font-medium text-muted-foreground">
+                              Used by {count} build{count !== 1 ? "s" : ""} —
+                              open in the Optimizer:
+                            </p>
+                            <ul className="space-y-0.5">
+                              {builds.map((b) => (
+                                <li key={b.id}>
+                                  <Link
+                                    to="/builds/$buildId/optimize"
+                                    params={{ buildId: b.id }}
+                                    className="block truncate rounded px-1.5 py-1 text-sm hover:bg-accent hover:text-accent-foreground"
+                                  >
+                                    {b.name}
+                                  </Link>
+                                </li>
+                              ))}
+                            </ul>
+                          </PopoverContent>
+                        </Popover>
+                      )}
+                    </div>
                   </TableCell>
                   <TableCell>
                     {EffectList({
@@ -367,7 +456,12 @@ export function RelicManager({
                         type="button"
                         onClick={() => trash(relic)}
                         disabled={!sellable}
-                        title={lockReason ?? "Trash relic"}
+                        title={
+                          lockReason ??
+                          (count > 0
+                            ? `Used in ${count} build${count !== 1 ? "s" : ""} — trashing may change their best result`
+                            : "Trash relic")
+                        }
                         aria-label={`Trash ${relic.name}`}
                         className="inline-flex p-1 rounded hover:bg-accent disabled:opacity-30 disabled:cursor-not-allowed"
                       >

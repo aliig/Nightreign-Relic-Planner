@@ -23,6 +23,7 @@ import {
   toggleSell,
   usePendingAll,
 } from "@/lib/pendingChanges"
+import { downloadOriginalBackup, useOriginalBackup } from "@/lib/saveBackup"
 import { getSaveFile, getSaveFileMeta, rememberSaveFile } from "@/lib/saveFile"
 import { formatMurks } from "@/lib/sellValue"
 
@@ -47,11 +48,13 @@ type ChangeEntry = {
   id: string
   label: ReactNode
   sub?: string
+  warn?: string
   undo: () => void
 }
 
 export function PendingExportButton() {
   const state = usePendingAll()
+  const { meta: backupMeta } = useOriginalBackup()
   const { showSuccessToast, showErrorToast } = useCustomToast()
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -72,6 +75,9 @@ export function PendingExportButton() {
         id: `sell-${h}`,
         label: `Trash ${m?.name ?? `Relic #${h}`}`,
         sub: m?.murk ? `+${formatMurks(m.murk)} Murk` : undefined,
+        warn: m?.builds
+          ? `Used in ${m.builds} build${m.builds !== 1 ? "s" : ""} — may change their best result`
+          : undefined,
         undo: () => toggleSell(slot, h),
       })
     }
@@ -104,10 +110,17 @@ export function PendingExportButton() {
 
   function onPickFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
-    if (file) {
-      rememberSaveFile(file)
-      setFileTick((t) => t + 1)
+    if (!file) return
+    // Soft save-identity guard: the changes were computed against a specific
+    // save, so exporting onto a different file risks a wrong/corrupt result.
+    const expected = getSaveFileMeta()
+    if (expected && file.name !== expected.name) {
+      showErrorToast(
+        `Heads up: "${file.name}" doesn't match the save your changes came from ("${expected.name}"). Make sure it's the right save before exporting.`,
+      )
     }
+    rememberSaveFile(file)
+    setFileTick((t) => t + 1)
   }
 
   async function doExport() {
@@ -128,7 +141,7 @@ export function PendingExportButton() {
       if (r.vesselsReset) parts.push("vessels reset")
       if (r.presetsReset) parts.push("all loadouts cleared")
       showSuccessToast(
-        `Saved ${r.filename} — ${parts.join(", ") || "no changes"}. Load it in-game, then re-import here to refresh.`,
+        `Saved ${r.filename} — ${parts.join(", ") || "no changes"}. Close the game, replace your save with this file, then re-upload here to re-sync the planner.`,
       )
     } catch (err) {
       showErrorToast(
@@ -187,6 +200,11 @@ export function PendingExportButton() {
                             {e.sub}
                           </div>
                         )}
+                        {e.warn && (
+                          <div className="text-xs text-amber-600 dark:text-amber-500">
+                            {e.warn}
+                          </div>
+                        )}
                       </div>
                       <Button
                         variant="ghost"
@@ -206,12 +224,25 @@ export function PendingExportButton() {
           </div>
 
           <SheetFooter>
-            <div className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-sm text-amber-700 dark:text-amber-400">
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-              <span>
-                Back up your original save first. Export downloads a modified
-                copy — close the game, then replace your save with it.
-              </span>
+            <div className="space-y-2">
+              <div className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-sm text-amber-700 dark:text-amber-400">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                <span>
+                  Back up your original save first. Export downloads a modified
+                  copy — close the game, then replace your save with it.
+                </span>
+              </div>
+              {backupMeta && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void downloadOriginalBackup()}
+                  className="w-full gap-1.5"
+                >
+                  <Download className="h-4 w-4" />
+                  Download a backup of your original ({backupMeta.name})
+                </Button>
+              )}
             </div>
 
             {!saveFile && (

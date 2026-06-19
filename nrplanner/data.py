@@ -505,6 +505,18 @@ class SourceDataHandler:
                 "allow_per_character": allow,
                 "source": source,
             })
+        # Attach the per-copy practical magnitude (e.g. "+15%") for UI tooltips.
+        # Falls back through alias ids since the bonus is curated on one id.
+        for r in results:
+            bonus = self.get_effect_bonus_value(r["id"])
+            if bonus is None:
+                for aid in r["alias_ids"]:
+                    bonus = self.get_effect_bonus_value(aid)
+                    if bonus is not None:
+                        break
+            r["bonus_display"] = (
+                self._format_effect_bonus(bonus) if bonus else None
+            )
         return results
 
     # ------------------------------------------------------------------
@@ -862,6 +874,22 @@ class SourceDataHandler:
         if bonus["mode"] == "multiplicative":
             return bonus["value"] - 1.0
         return bonus["value"]  # additive flat amount, or reduction fraction
+
+    @staticmethod
+    def _format_effect_bonus(bonus: dict) -> str:
+        """Per-copy practical magnitude as a UI string: '+15%',
+        '+10% Physical Negation', '+75 Resistance'. Mirrors cumulative.py's
+        single-copy formatting so the inventory tooltip matches the summaries."""
+        value = bonus["value"]
+        mode = bonus["mode"]
+        unit = bonus.get("unit", "")
+        if mode == "multiplicative":
+            pct = (value - 1.0) * 100
+            return f"+{pct:.0f}%" if unit == "%" else f"+{pct:.0f}% {unit}"
+        if mode == "multiplicative_reduction":
+            return f"+{value * 100:.0f}% {unit}"
+        num = str(int(value)) if float(value).is_integer() else f"{value:g}"
+        return f"+{num} {unit}".strip()
 
     def _ensure_family_magnitude_bounds(self) -> None:
         """Lazily map family base name -> max/min bonus magnitude across its tiers."""

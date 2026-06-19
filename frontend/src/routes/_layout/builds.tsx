@@ -13,6 +13,7 @@ import {
 } from "@tanstack/react-router"
 import {
   Copy,
+  Layers,
   MoreVertical,
   Pencil,
   Plus,
@@ -32,6 +33,7 @@ import {
   type FeaturedBuildPublic,
   OptimizeService,
 } from "@/client"
+import { EmptyState } from "@/components/Common/EmptyState"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import {
@@ -84,7 +86,7 @@ import { handleError } from "@/utils"
 export const Route = createFileRoute("/_layout/builds")({
   component: BuildsPage,
   head: () => ({
-    meta: [{ title: "Builds - Nightreign Relic Planner" }],
+    meta: [{ title: "Optimizer - Nightreign Relic Planner" }],
   }),
 })
 
@@ -774,9 +776,11 @@ function AuthBuildList() {
 
   if (!data.data?.length) {
     return (
-      <p className="text-muted-foreground py-8 text-center">
-        No builds yet. Create one to get started.
-      </p>
+      <EmptyState icon={Layers} title="No builds yet">
+        A build is what you <em>want</em> — e.g. fire damage and survivability.
+        Create one above and the optimizer finds the best relics you own to
+        match.
+      </EmptyState>
     )
   }
 
@@ -847,7 +851,7 @@ function AuthBuildsSection() {
     <>
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-2xl font-semibold">Builds</h2>
+          <h2 className="text-2xl font-semibold">Your Builds</h2>
           <p className="text-muted-foreground mt-1">
             Create build definitions to drive the optimizer.
           </p>
@@ -879,7 +883,7 @@ function AnonBuildsSection() {
     <>
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-2xl font-semibold">Builds</h2>
+          <h2 className="text-2xl font-semibold">Your Builds</h2>
           <p className="text-muted-foreground mt-1">
             Create build definitions to drive the optimizer.
           </p>
@@ -900,9 +904,11 @@ function AnonBuildsSection() {
       </p>
 
       {builds.length === 0 ? (
-        <p className="text-muted-foreground py-8 text-center">
-          No builds yet. Create one to get started.
-        </p>
+        <EmptyState icon={Layers} title="No builds yet">
+          A build is what you <em>want</em> — e.g. fire damage and
+          survivability. Create one above and the optimizer finds the best
+          relics you own to match.
+        </EmptyState>
       ) : (
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {builds.map((build: LocalBuild) => (

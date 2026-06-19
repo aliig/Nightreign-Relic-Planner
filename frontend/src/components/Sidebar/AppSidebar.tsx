@@ -12,11 +12,36 @@ import { type Item, Main } from "./Main"
 import { User } from "./User"
 
 const baseItems: Item[] = [
-  { icon: Home, title: "Dashboard", path: "/" },
-  { icon: Upload, title: "Upload", path: "/upload" },
-  { icon: Package, title: "Inventory", path: "/inventory" },
-  { icon: BookMarked, title: "Loadouts", path: "/loadouts" },
-  { icon: Layers, title: "Builds", path: "/builds" },
+  {
+    icon: Home,
+    title: "Dashboard",
+    path: "/",
+    description: "Your save overview & next steps",
+  },
+  {
+    icon: Upload,
+    title: "Upload",
+    path: "/upload",
+    description: "Import a save file (.sl2 / memory.dat)",
+  },
+  {
+    icon: Package,
+    title: "Inventory",
+    path: "/inventory",
+    description: "Browse, filter & cull your relics",
+  },
+  {
+    icon: BookMarked,
+    title: "Game Loadouts",
+    path: "/loadouts",
+    description: "Relic sets saved in your game",
+  },
+  {
+    icon: Layers,
+    title: "Optimizer",
+    path: "/builds",
+    description: "Find the best relics for what you want",
+  },
 ]
 
 export function AppSidebar() {
