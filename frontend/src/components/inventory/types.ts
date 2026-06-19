@@ -12,3 +12,11 @@ export type ManagedRelic = {
   isFavorite: boolean
   equipped: boolean
 }
+
+/**
+ * True if a relic is "unique" (one-of-a-kind, cannot be re-acquired once gone).
+ * Mirrors `is_unique_relic()` in nrplanner/constants.py — keep the ranges in sync.
+ */
+export function isUniqueRelic(realId: number): boolean {
+  return (realId >= 1000 && realId <= 2100) || (realId >= 10000 && realId <= 19999)
+}

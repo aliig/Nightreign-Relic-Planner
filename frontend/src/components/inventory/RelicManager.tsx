@@ -42,7 +42,7 @@ import {
   type FilterState,
   InventoryFilters,
 } from "./InventoryFilters"
-import type { ManagedRelic } from "./types"
+import { isUniqueRelic, type ManagedRelic } from "./types"
 
 type UsageSort = "name" | "most" | "least"
 
@@ -102,8 +102,10 @@ export function RelicManager({
   const effectiveFavorite = (r: ManagedRelic): boolean =>
     r.gaHandle in favoriteChanges ? favoriteChanges[r.gaHandle] : r.isFavorite
 
+  // Unique relics are one-of-a-kind and can't be re-acquired, so they're locked
+  // from trashing just like equipped relics — guard against accidental deletion.
   const isSellable = (r: ManagedRelic): boolean =>
-    !r.equipped && !effectiveFavorite(r)
+    !r.equipped && !effectiveFavorite(r) && !isUniqueRelic(r.realId)
 
   const buildsOf = (r: ManagedRelic): RelicBuildRef[] =>
     usage.get(r.realId) ?? []
@@ -309,11 +311,14 @@ export function RelicManager({
               const builds = buildsOf(relic)
               const count = builds.length
               const status = relicStatus(relic.equipped, count > 0)
+              const isUnique = isUniqueRelic(relic.realId)
               const lockReason = relic.equipped
                 ? "Equipped — can't trash"
-                : fav
-                  ? "Bookmarked — un-bookmark to trash"
-                  : undefined
+                : isUnique
+                  ? "Unique relic — can't be re-acquired, so it's locked"
+                  : fav
+                    ? "Bookmarked — un-bookmark to trash"
+                    : undefined
               return (
                 <TableRow
                   key={relic.key}
@@ -341,10 +346,10 @@ export function RelicManager({
                           isDeep={relic.isDeep}
                         />
                       </span>
-                      {relic.equipped && (
+                      {(relic.equipped || isUnique) && (
                         <Lock
                           className="h-3 w-3 text-muted-foreground shrink-0"
-                          aria-label="Equipped"
+                          aria-label={relic.equipped ? "Equipped" : "Unique"}
                         />
                       )}
                     </div>
