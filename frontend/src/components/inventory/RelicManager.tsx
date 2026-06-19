@@ -1,6 +1,6 @@
 import { Link } from "@tanstack/react-router"
 import { Coins, Eye, EyeOff, Lock, RotateCcw, Star, Trash2 } from "lucide-react"
-import { useMemo, useState } from "react"
+import { useCallback, useMemo, useState } from "react"
 
 import { EffectList, RelicNameCell } from "@/components/RelicDisplay"
 import { Badge } from "@/components/ui/badge"
@@ -99,13 +99,23 @@ export function RelicManager({
   // Transient multi-select for the "Trash selected" bulk action — NOT persisted.
   const [selection, setSelection] = useState<Set<number>>(new Set())
 
-  const effectiveFavorite = (r: ManagedRelic): boolean =>
-    r.gaHandle in favoriteChanges ? favoriteChanges[r.gaHandle] : r.isFavorite
+  // Memoized so isSellable is stable across renders (the visible-list memo and
+  // the bulk-select depend on it); rebinds only when pending favorites change.
+  const effectiveFavorite = useCallback(
+    (r: ManagedRelic): boolean =>
+      r.gaHandle in favoriteChanges
+        ? favoriteChanges[r.gaHandle]
+        : r.isFavorite,
+    [favoriteChanges],
+  )
 
   // Unique relics are one-of-a-kind and can't be re-acquired, so they're locked
   // from trashing just like equipped relics — guard against accidental deletion.
-  const isSellable = (r: ManagedRelic): boolean =>
-    !r.equipped && !effectiveFavorite(r) && !isUniqueRelic(r.realId)
+  const isSellable = useCallback(
+    (r: ManagedRelic): boolean =>
+      !r.equipped && !effectiveFavorite(r) && !isUniqueRelic(r.realId),
+    [effectiveFavorite],
+  )
 
   const buildsOf = (r: ManagedRelic): RelicBuildRef[] =>
     usage.get(r.realId) ?? []
@@ -128,6 +138,12 @@ export function RelicManager({
         (r) => relicStatus(r.equipped, u(r) > 0) === filter.statusFilter,
       )
     }
+    // Sellability depends on pending favorite/equipped/unique state, which only
+    // lives here — so it's filtered alongside status rather than in applyFilters.
+    if (filter.sellableFilter !== "all") {
+      const wantSellable = filter.sellableFilter === "sellable"
+      list = list.filter((r) => isSellable(r) === wantSellable)
+    }
     // Trashed relics are hidden by default — they've left the inventory.
     if (!showTrashed) {
       list = list.filter((r) => !trashed.has(r.gaHandle))
@@ -141,7 +157,16 @@ export function RelicManager({
       sorted.sort((a, b) => a.name.localeCompare(b.name))
     }
     return sorted
-  }, [relics, filter, effectMap, usageSort, usage, showTrashed, trashed])
+  }, [
+    relics,
+    filter,
+    effectMap,
+    usageSort,
+    usage,
+    showTrashed,
+    trashed,
+    isSellable,
+  ])
 
   // Murk reflects the modified save: every trashed relic's value is already added.
   const trashedRelics = useMemo(

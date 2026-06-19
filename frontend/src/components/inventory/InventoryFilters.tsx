@@ -27,6 +27,8 @@ export type FilterState = {
   tierFilter: string
   deepFilter: string
   statusFilter: string
+  /** all = no filter, sellable = trashable now, locked = equipped/bookmarked/unique. */
+  sellableFilter: "all" | "sellable" | "locked"
   effectFilter: number[]
   /** How to match the selected effects: all (AND) / any (OR) / none (NOT). */
   effectMode: "and" | "or" | "not"
@@ -295,6 +297,21 @@ export function InventoryFilters({
           <SelectItem value="active">Active</SelectItem>
         </SelectContent>
       </Select>
+      <Select
+        value={filter.sellableFilter}
+        onValueChange={(v) =>
+          patch({ sellableFilter: v as FilterState["sellableFilter"] })
+        }
+      >
+        <SelectTrigger className="w-36">
+          <SelectValue placeholder="Sellable" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="all">Any sellability</SelectItem>
+          <SelectItem value="sellable">Sellable</SelectItem>
+          <SelectItem value="locked">Locked</SelectItem>
+        </SelectContent>
+      </Select>
       <EffectMultiSelect
         effectsData={effectsData}
         selectedEffects={filter.effectFilter}
@@ -312,6 +329,7 @@ export const EMPTY_FILTER: FilterState = {
   tierFilter: "all",
   deepFilter: "all",
   statusFilter: "all",
+  sellableFilter: "all",
   effectFilter: [],
   effectMode: "and",
 }

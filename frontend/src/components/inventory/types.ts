@@ -18,5 +18,7 @@ export type ManagedRelic = {
  * Mirrors `is_unique_relic()` in nrplanner/constants.py — keep the ranges in sync.
  */
 export function isUniqueRelic(realId: number): boolean {
-  return (realId >= 1000 && realId <= 2100) || (realId >= 10000 && realId <= 19999)
+  return (
+    (realId >= 1000 && realId <= 2100) || (realId >= 10000 && realId <= 19999)
+  )
 }
