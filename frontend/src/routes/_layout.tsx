@@ -1,6 +1,7 @@
 import { createFileRoute, Outlet } from "@tanstack/react-router"
 
 import { Footer } from "@/components/Common/Footer"
+import { OptimizeTrackerButton } from "@/components/OptimizeTrackerButton"
 import { PendingExportButton } from "@/components/PendingExportButton"
 import AppSidebar from "@/components/Sidebar/AppSidebar"
 import {
@@ -20,7 +21,8 @@ function Layout() {
       <SidebarInset>
         <header className="sticky top-0 z-10 flex h-16 shrink-0 items-center gap-2 border-b border-border/50 bg-background/80 backdrop-blur-md px-4">
           <SidebarTrigger className="-ml-1 text-muted-foreground" />
-          <div className="ml-auto">
+          <div className="ml-auto flex items-center gap-2">
+            <OptimizeTrackerButton />
             <PendingExportButton />
           </div>
         </header>

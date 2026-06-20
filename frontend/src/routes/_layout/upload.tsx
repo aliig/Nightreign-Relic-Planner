@@ -25,6 +25,7 @@ import {
   rawScoreTooltip,
   relicSummary,
 } from "@/lib/buildChange"
+import { startUpload, useOptimizeJob } from "@/lib/optimizeJobs"
 import { computeOverallPct, optimizingLabel } from "@/lib/optimizeProgress"
 import { storeOriginalBackup } from "@/lib/saveBackup"
 import { rememberSaveFile } from "@/lib/saveFile"
@@ -76,128 +77,6 @@ function SaveStatusBanner() {
       </AlertDescription>
     </Alert>
   )
-}
-
-interface StreamUploadProgress {
-  phase: "parsing" | "optimizing" | "done"
-  buildIndex?: number
-  buildTotal?: number
-  buildName?: string
-  vessel?: number
-  vesselTotal?: number
-  vesselName?: string
-}
-
-interface StreamUploadResult {
-  profiles: Array<{
-    slot_index: number
-    name: string
-    relic_count: number
-    id?: string
-  }>
-  profileCount: number
-  platform: string
-  relicDelta?: { added: number; removed: number }
-  changes: BuildChange[]
-}
-
-async function runUploadStream(
-  file: File,
-  onProgress: (p: StreamUploadProgress) => void,
-): Promise<StreamUploadResult> {
-  const token = localStorage.getItem("access_token")
-  const formData = new FormData()
-  formData.append("file", file)
-
-  const headers: HeadersInit = {}
-  if (token)
-    (headers as Record<string, string>).Authorization = `Bearer ${token}`
-
-  const response = await fetch("/api/v1/saves/upload/stream", {
-    method: "POST",
-    headers,
-    body: formData,
-  })
-
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({ detail: "Upload failed" }))
-    throw new Error(err.detail ?? "Upload failed")
-  }
-
-  const reader = response.body!.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ""
-  let uploadData: any = null
-  const changes: BuildChange[] = []
-
-  // Accumulate progress so per-build context (which build, of how many) survives
-  // into the per-vessel ticks — the backend sends build identity only on
-  // `optimize_start`, not on each `optimize_progress`.
-  let progress: StreamUploadProgress = { phase: "parsing" }
-  const emit = (patch: Partial<StreamUploadProgress>) => {
-    progress = { ...progress, ...patch }
-    onProgress(progress)
-  }
-
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
-
-    const parts = buffer.split("\n\n")
-    buffer = parts.pop() ?? ""
-
-    for (const part of parts) {
-      const dataLine = part.split("\n").find((l) => l.startsWith("data: "))
-      if (!dataLine) continue
-      const payload = JSON.parse(dataLine.slice(6))
-
-      if (payload.type === "upload_complete") {
-        uploadData = payload.data
-        emit({ phase: "optimizing" })
-      } else if (payload.type === "optimize_start") {
-        // New build: set its identity, clear the prior build's vessel sub-progress.
-        emit({
-          buildIndex: payload.index,
-          buildTotal: payload.total,
-          buildName: payload.build_name,
-          vessel: undefined,
-          vesselTotal: undefined,
-          vesselName: undefined,
-        })
-      } else if (payload.type === "optimize_progress") {
-        // Vessel tick: merges onto the current build's identity from optimize_start.
-        emit({
-          vessel: payload.vessel,
-          vesselTotal: payload.total,
-          vesselName: payload.name,
-        })
-      } else if (payload.type === "optimize_done") {
-        if (payload.change) changes.push(payload.change as BuildChange)
-      } else if (payload.type === "complete") {
-        emit({ phase: "done" })
-        return {
-          profiles: uploadData?.profiles ?? [],
-          profileCount: uploadData?.profile_count ?? 0,
-          platform: uploadData?.platform ?? "PC",
-          relicDelta: uploadData?.relic_delta,
-          changes,
-        }
-      }
-    }
-  }
-
-  if (uploadData) {
-    return {
-      profiles: uploadData.profiles ?? [],
-      profileCount: uploadData.profile_count ?? 0,
-      platform: uploadData.platform ?? "PC",
-      relicDelta: uploadData.relic_delta,
-      changes,
-    }
-  }
-
-  throw new Error("Stream ended without completion")
 }
 
 function ChangesSummary({ changes }: { changes: BuildChange[] }) {
@@ -263,14 +142,14 @@ function UploadPage() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [dragging, setDragging] = useState(false)
 
-  // Streaming upload state (authenticated)
-  const [streamProgress, setStreamProgress] =
-    useState<StreamUploadProgress | null>(null)
-  const [streamResult, setStreamResult] = useState<StreamUploadResult | null>(
-    null,
-  )
-  const [streamError, setStreamError] = useState<string | null>(null)
-  const [isStreaming, setIsStreaming] = useState(false)
+  // Background upload + re-optimization job (authenticated). Lives in a module
+  // store (lib/optimizeJobs) so it survives navigation away from this page; here
+  // we just read it to render in-page progress and results.
+  const job = useOptimizeJob()
+  const streamActive = job?.status === "parsing" || job?.status === "optimizing"
+  const streamProgress = job?.progress ?? null
+  const streamResult = job?.status === "done" ? (job.result ?? null) : null
+  const streamError = job?.status === "error" ? (job.error ?? null) : null
 
   // Legacy mutation state (anonymous)
   const [uploadResult, setUploadResult] = useState<Awaited<
@@ -305,40 +184,6 @@ function UploadPage() {
     onError: handleError.bind(showErrorToast),
   })
 
-  async function handleStreamUpload(file: File) {
-    setIsStreaming(true)
-    setStreamProgress({ phase: "parsing" })
-    setStreamResult(null)
-    setStreamError(null)
-    try {
-      const result = await runUploadStream(file, setStreamProgress)
-      setStreamResult(result)
-      queryClient.invalidateQueries({ queryKey: ["profiles"] })
-      queryClient.invalidateQueries({ queryKey: ["save-status"] })
-      queryClient.invalidateQueries({ queryKey: ["builds"] })
-      queryClient.invalidateQueries({ queryKey: ["snapshot"] })
-
-      const meaningful = result.changes.filter(
-        (c) => c.status !== "unchanged" && c.status !== "new",
-      )
-      if (meaningful.length > 0) {
-        showSuccessToast(
-          `Save imported — ${meaningful.length} build${meaningful.length !== 1 ? "s" : ""} re-optimized.`,
-        )
-      } else {
-        showSuccessToast(
-          `Save imported — ${result.profileCount} profile${result.profileCount !== 1 ? "s" : ""} found.`,
-        )
-      }
-    } catch (err) {
-      setStreamError(err instanceof Error ? err.message : "Upload failed")
-      showErrorToast(err instanceof Error ? err.message : "Upload failed")
-    } finally {
-      setIsStreaming(false)
-      setStreamProgress(null)
-    }
-  }
-
   function handleFile(file: File) {
     const name = file.name.toLowerCase()
     if (!name.endsWith(".sl2") && !name.endsWith(".dat")) {
@@ -355,7 +200,7 @@ function UploadPage() {
       "Original save backed up in this browser — you can download it anytime from the Upload page.",
     )
     if (isLoggedIn()) {
-      handleStreamUpload(file)
+      void startUpload(file)
     } else {
       uploadMutation.mutate(file)
     }
@@ -373,7 +218,7 @@ function UploadPage() {
     if (file) handleFile(file)
   }
 
-  const isPending = isStreaming || uploadMutation.isPending
+  const isPending = streamActive || uploadMutation.isPending
   const showError = streamError || uploadMutation.isError
 
   return (

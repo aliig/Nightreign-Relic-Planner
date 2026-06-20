@@ -14,6 +14,7 @@ import {
 import {
   Copy,
   Layers,
+  Loader2,
   MoreVertical,
   Pencil,
   Plus,
@@ -81,6 +82,7 @@ import {
   relicSummary,
 } from "@/lib/buildChange"
 import { CHARACTER_NAMES } from "@/lib/constants"
+import { useBuildOptimizeStatus } from "@/lib/optimizeJobs"
 import { handleError } from "@/utils"
 
 export const Route = createFileRoute("/_layout/builds")({
@@ -213,6 +215,8 @@ function BuildCard({
 }) {
   const [draftName, setDraftName] = useState(build.name)
   const [deleteOpen, setDeleteOpen] = useState(false)
+  // Live status while a background save re-optimization is touching this build.
+  const optimizeStatus = useBuildOptimizeStatus(build.id)
 
   const effectCount = (build.groups ?? []).reduce(
     (acc, g) => acc + g.effects.length,
@@ -249,22 +253,29 @@ function BuildCard({
             onBlur={commitRename}
             className="text-base font-semibold bg-transparent border-b border-transparent hover:border-muted-foreground/30 focus:border-primary focus:outline-none focus:ring-0 py-0.5 min-w-0 flex-1 truncate transition-colors"
           />
-          {(() => {
-            // Subtle at-a-glance marker: only the score/pin-moving changes
-            // (neutral "rearranged" lives in the changes-since-last-save list).
-            const d = describeBuildChange(summary?.change)
-            if (!d || d.tone === "neutral") return null
-            const Icon = d.icon
-            return (
-              <span
-                className={`shrink-0 inline-flex items-center gap-0.5 text-xs font-medium ${d.textClass}`}
-                title={rawScoreTooltip(d.rawScore) ?? d.headline}
-              >
-                <Icon className="h-3 w-3" />
-                {d.headline}
-              </span>
-            )
-          })()}
+          {optimizeStatus === "optimizing" ? (
+            <span className="shrink-0 inline-flex items-center gap-1 text-xs font-medium text-primary">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              Optimizing…
+            </span>
+          ) : (
+            (() => {
+              // Subtle at-a-glance marker: only the score/pin-moving changes
+              // (neutral "rearranged" lives in the changes-since-last-save list).
+              const d = describeBuildChange(summary?.change)
+              if (!d || d.tone === "neutral") return null
+              const Icon = d.icon
+              return (
+                <span
+                  className={`shrink-0 inline-flex items-center gap-0.5 text-xs font-medium ${d.textClass}`}
+                  title={rawScoreTooltip(d.rawScore) ?? d.headline}
+                >
+                  <Icon className="h-3 w-3" />
+                  {d.headline}
+                </span>
+              )
+            })()
+          )}
           <div className="flex items-center gap-1 shrink-0">
             <Button
               asChild
