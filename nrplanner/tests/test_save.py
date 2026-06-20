@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 
 from nrplanner import SourceDataHandler, decrypt_sl2, parse_relics
-from nrplanner.constants import EMPTY_EFFECT, ITEM_TYPE_RELIC
+from nrplanner.constants import ITEM_TYPE_RELIC
 from nrplanner.models import RelicInventory
 from nrplanner.save import _parse_active_handles, _parse_items
 

@@ -1,7 +1,6 @@
 """Game constants — no mutable state."""
 
 # Item type flags (upper 4 bits of gaitem_handle)
-ITEM_TYPE_EMPTY  = 0x00000000
 ITEM_TYPE_WEAPON = 0x80000000
 ITEM_TYPE_ARMOR  = 0x90000000
 ITEM_TYPE_RELIC  = 0xC0000000

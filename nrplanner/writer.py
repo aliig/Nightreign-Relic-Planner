@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
-from nrplanner.constants import EMPTY_EFFECT, ITEM_TYPE_RELIC
+from nrplanner.constants import ITEM_TYPE_RELIC
 from nrplanner.save import (
     _DS2_KEY,
     _ITEM_ENTRY_SIZE,
@@ -144,12 +144,6 @@ def set_favorites(blob: bytes, changes: dict[int, bool]) -> tuple[bytes, Favorit
     result.changed_handles.sort()
     result.not_found_handles = sorted(pending)
     return bytes(data), result
-
-
-def relic_effect_count(item) -> int:
-    """Number of properties (non-empty effects) on a parsed Item."""
-    effects = (item.effect_1, item.effect_2, item.effect_3)
-    return sum(1 for e in effects if e not in (EMPTY_EFFECT, 0))
 
 
 def patch_slot_checksum(blob: bytearray) -> None:

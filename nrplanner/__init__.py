@@ -21,7 +21,6 @@ from nrplanner.models import (
 )
 from nrplanner.scoring import BuildScorer
 from nrplanner.optimizer import VesselOptimizer
-from nrplanner.builds import BuildStore
 from nrplanner.writer import (
     DeleteResult,
     FavoriteResult,
@@ -64,8 +63,6 @@ __all__ = [
     "BuildChange", "RelicRef",
     # Optimizer
     "BuildScorer", "VesselOptimizer",
-    # Persistence
-    "BuildStore",
     # Save write-back
     "DeleteResult", "FavoriteResult", "delete_relics", "read_favorite_handles",
     "read_murks", "repack_sl2", "sell_value", "set_favorites",

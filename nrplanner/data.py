@@ -7,7 +7,7 @@ paths can be overridden (useful for testing and future FastAPI deployment).
 import functools
 import re
 from pathlib import Path
-from typing import Optional, Union
+from typing import Optional
 
 import pandas as pd
 
@@ -31,21 +31,6 @@ def _longest_common_prefix(names: list[str]) -> str:
     if label != names[0]:
         label += "..."
     return label
-
-
-def get_system_language() -> str:
-    """Detect OS locale and return a supported language code (default en_US)."""
-    import locale
-    try:
-        lang, _ = locale.getdefaultlocale()
-    except Exception:
-        return "en_US"
-    if lang:
-        import locale as _lc
-        normalized = _lc.normalize(lang).split('.')[0].replace('-', '_')
-        if normalized in LANGUAGE_MAP:
-            return normalized
-    return "en_US"
 
 
 def _filter_nonzero_weight(effects: pd.DataFrame) -> pd.DataFrame:
@@ -221,28 +206,9 @@ class SourceDataHandler:
     def get_support_languages(self) -> dict[str, str]:
         return LANGUAGE_MAP
 
-    def get_support_languages_code(self):
-        return LANGUAGE_MAP.keys()
-
-    def get_support_languages_name(self):
-        return LANGUAGE_MAP.values()
-
     # ------------------------------------------------------------------
     # Relic data
     # ------------------------------------------------------------------
-
-    def get_relic_origin_structure(self) -> dict:
-        """Return {str(relic_id): {name, color}} for all relics."""
-        names = self.relic_name.copy().set_index("id").rename(columns={"text": "name"})
-        result = {}
-        for idx, row in self.relic_table.iterrows():
-            name_matches  = names[names.index == idx]["name"].values
-            color_matches = self.relic_table[self.relic_table.index == idx]["relicColor"].values
-            result[str(idx)] = {
-                "name":  str(name_matches[0]) if len(name_matches) > 0 else "Unset",
-                "color": COLOR_MAP[int(color_matches[0])] if len(color_matches) > 0 else "Red",
-            }
-        return result
 
     def get_relic_datas(self) -> pd.DataFrame:
         names = self.relic_name.copy().rename(columns={"text": "name"})
@@ -250,14 +216,6 @@ class SourceDataHandler:
         result = pd.merge(result, names, how="left", left_on="ID", right_on="id")
         result.drop(columns=["id"], inplace=True)
         return result.set_index("ID")
-
-    def get_relic_color(self, relic_id: int) -> str:
-        return COLOR_MAP[self.relic_table.loc[relic_id, "relicColor"]]
-
-    def get_relic_type_info(self, relic_id: int) -> tuple:
-        if self.is_scene_relic(relic_id):
-            return ("Scene Relic (1.03+)", "Unique effect pools from patch 1.03", "#9966CC")
-        return ("Original Relic", "Effect pools from base game", "#666666")
 
     def is_scene_relic(self, relic_id: int) -> bool:
         return relic_id in self._scene_relic_ids
@@ -271,24 +229,6 @@ class SourceDataHandler:
     def get_relic_slot_count(self, relic_id: int) -> tuple[int, int]:
         seq = self.get_relic_pools_seq(relic_id)
         return 3 - seq[:3].count(-1), 3 - seq[3:].count(-1)
-
-    def get_filtered_relics_df(self, color: Union[int, str] = None,
-                               deep: Optional[bool] = None,
-                               effect_slot: Optional[int] = None,
-                               curse_slot: Optional[int] = None) -> pd.DataFrame:
-        df = self.relic_table.copy().reset_index()
-        df = df[df["ID"].isin(self.get_safe_relic_ids())]
-        if color is not None:
-            color_id = COLOR_MAP.index(color) if isinstance(color, str) else color
-            df = df[df["relicColor"] == color_id]
-        if deep is not None:
-            mask = df["ID"].apply(self.is_deep_relic)
-            df = df[mask] if deep else df[~mask]
-        if effect_slot is not None:
-            df = df[df["ID"].apply(lambda x: self.get_relic_slot_count(x)[0] == effect_slot)]
-        if curse_slot is not None:
-            df = df[df["ID"].apply(lambda x: self.get_relic_slot_count(x)[1] == curse_slot)]
-        return df
 
     @staticmethod
     def get_safe_relic_ids() -> list[int]:
@@ -327,19 +267,6 @@ class SourceDataHandler:
     # ------------------------------------------------------------------
     # Effect data
     # ------------------------------------------------------------------
-
-    def get_effect_origin_structure(self) -> dict:
-        """Return {str(effect_id): {name}} for all effects."""
-        names = self.effect_name.copy().set_index("id")
-        result = {"4294967295": {"name": "Empty"}}
-        for idx, row in self.effect_params.iterrows():
-            try:
-                text_id = self.effect_params.loc[idx, "attachTextId"]
-                matches = names[names.index == text_id]["text"].values
-                result[str(idx)] = {"name": str(matches[0]) if len(matches) > 0 else "Unknown"}
-            except KeyError:
-                result[str(idx)] = {"name": "Unknown"}
-        return result
 
     def get_effect_datas(self) -> pd.DataFrame:
         names = self.effect_name.copy().rename(columns={"text": "name"})
@@ -935,12 +862,6 @@ class SourceDataHandler:
     # ------------------------------------------------------------------
     # Pool queries
     # ------------------------------------------------------------------
-
-    def get_pool_effects(self, pool_id: int) -> list[int]:
-        if pool_id == -1:
-            return []
-        return (self.effect_table[self.effect_table["ID"] == pool_id]
-                ["attachEffectId"].values.tolist())
 
     def get_pool_rollable_effects(self, pool_id: int) -> list[int]:
         """Effects with non-zero chanceWeight in a pool.

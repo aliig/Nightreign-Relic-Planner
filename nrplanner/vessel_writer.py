@@ -36,7 +36,7 @@ Equipped vessels (Sections 1-2) are reset purely in place (zeroing relic fields)
 """
 import struct
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from nrplanner.vessel import VesselParser
 

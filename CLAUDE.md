@@ -83,7 +83,6 @@ nrplanner/
     models.py      Pydantic models: TierConfig, OwnedRelic, BuildDefinition, VesselResult, etc.
     scoring.py     BuildScorer — effect scoring with stacking awareness
     optimizer.py   VesselOptimizer — backtrack + greedy slot assignment solvers
-    builds.py      BuildStore — JSON CRUD for build definitions
     resources/     Game data: CSV params, XML FMG text, JSON stacking rules
 ```
 

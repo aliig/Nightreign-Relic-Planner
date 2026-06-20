@@ -104,15 +104,6 @@ class RelicInventory:
                 tier=tier,
             ))
 
-    def get_by_color(self, color: str) -> list[OwnedRelic]:
-        return [r for r in self.relics if r.color == color]
-
-    def get_standard(self) -> list[OwnedRelic]:
-        return [r for r in self.relics if not r.is_deep]
-
-    def get_deep(self) -> list[OwnedRelic]:
-        return [r for r in self.relics if r.is_deep]
-
     def get_candidates(self, slot_color: str, is_deep_slot: bool) -> list[OwnedRelic]:
         """Relics eligible for a slot (color + deep/standard type only)."""
         return [
@@ -186,15 +177,6 @@ class BuildDefinition(BaseModel):
             if family_name in g.families:
                 return ("group", g.weight)
         return None
-
-    def all_prioritized_effects(self) -> set[int]:
-        """All effect IDs explicitly mentioned in this build."""
-        result: set[int] = set()
-        result.update(self.required_effects)
-        result.update(self.excluded_effects)
-        for g in self.groups:
-            result.update(g.effects)
-        return result
 
     def get_effective_requirements(self) -> tuple[list[int], list[str]]:
         """Derive requirements from highest-weight group for missing-effect signaling.

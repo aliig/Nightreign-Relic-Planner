@@ -240,12 +240,6 @@ class BuildScorer:
                         # post-hoc validation catches orphaned results.
         return False
 
-    # Keep old name as alias for backwards compatibility during transition
-    def has_blacklisted_effect(self, relic: OwnedRelic, build: BuildDefinition,
-                               desired_compat_effects: dict[int, set[int]] | None = None,
-                               ) -> bool:
-        return self.has_excluded_effect(relic, build, desired_compat_effects)
-
     # ------------------------------------------------------------------
     # Excluded stacking category helpers
     # ------------------------------------------------------------------
@@ -471,7 +465,7 @@ class BuildScorer:
         self._desired_cw = result
         return result
 
-    def _effect_stacking_score(self, eff_id: int, category: str, weight: int,
+    def _effect_stacking_score(self, eff_id: int, weight: int,
                                 state: VesselState) -> int:
         """Weight of an effect given what's already in the vessel (0 if redundant).
 
@@ -561,7 +555,7 @@ class BuildScorer:
             if cat is not None and cat != "excluded":
                 if self._is_at_limit(eff, state):
                     continue  # at user-defined limit, score 0 (neutral)
-                score += self._effect_stacking_score(eff, cat, weight, state)
+                score += self._effect_stacking_score(eff, weight, state)
         for curse in relic.curses:
             if curse in (EMPTY_EFFECT, 0):
                 continue
@@ -574,7 +568,7 @@ class BuildScorer:
             if cat is not None and cat != "excluded":
                 if self._is_at_limit(curse, state):
                     continue  # at user-defined limit, score 0 (neutral)
-                score += self._effect_stacking_score(curse, cat, weight, state)
+                score += self._effect_stacking_score(curse, weight, state)
             elif cat is None:
                 score += build.default_curse_weight
         for curse in relic.curses:
@@ -646,7 +640,7 @@ class BuildScorer:
                         override_status = "limit_reached"
                     else:
                         ctx_score = self._effect_stacking_score(
-                            eff, cat, weight, state)
+                            eff, weight, state)
                         if ctx_score < 0 and ctx_score != weight:
                             override_status = "conflict_penalty"
                         elif ctx_score == 0 and base_score != 0:

@@ -40,10 +40,6 @@ _SEQUENCES = [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]]
 
 class RelicChecker:
     RELIC_RANGE: tuple[int, int] = (100, 2013322)
-    UNIQUENESS_IDS: set[int] = (
-        set(range(RELIC_GROUPS['unique_1'][0], RELIC_GROUPS['unique_1'][1] + 1)) |
-        set(range(RELIC_GROUPS['unique_2'][0], RELIC_GROUPS['unique_2'][1] + 1))
-    )
 
     def __init__(self, ga_relic: list, data_source: SourceDataHandler):
         self.ga_relic = ga_relic
@@ -189,38 +185,6 @@ class RelicChecker:
 
         return True
 
-    def get_strict_invalid_reason(self, relic_id: int, effects: list[int]) -> str | None:
-        """Human-readable reason for strict invalidity, or None if not strictly invalid."""
-        if not self.is_strict_invalid(relic_id, effects, InvalidReason.NONE):
-            return None
-        try:
-            pools = self.data_source.get_relic_pools_seq(relic_id)
-        except KeyError:
-            return "Unknown relic ID"
-
-        deep_pools = {2000000, 2100000, 2200000}
-        pool_names = {2000000: "Pool A", 2100000: "Pool B", 2200000: "Pool C"}
-        problems = []
-        for i, eff in enumerate(effects[:3]):
-            if eff in _EMPTY:
-                continue
-            pool = pools[i]
-            if pool not in deep_pools:
-                continue
-            if eff not in self.data_source.get_pool_effects_strict(pool):
-                valid_pools = [
-                    pool_names.get(p, str(p))
-                    for p in deep_pools
-                    if eff in self.data_source.get_pool_effects_strict(p)
-                ]
-                name = self.data_source.get_effect_name(eff)
-                if valid_pools:
-                    problems.append(f"'{name}' needs {'/'.join(valid_pools)} but slot {i+1} uses {pool_names.get(pool, str(pool))}")
-                else:
-                    problems.append(f"'{name}' has 0 weight in all deep pools")
-
-        return "; ".join(problems) if problems else "No valid permutation exists"
-
     # ------------------------------------------------------------------
     # Effect ordering
     # ------------------------------------------------------------------
@@ -252,10 +216,6 @@ class RelicChecker:
         pairs.sort(key=lambda x: (x[0], x[1]))
         return [p[1] for p in pairs] + [p[2] for p in pairs]
 
-    def has_valid_order(self, relic_id: int, effects: list[int]) -> bool:
-        """True if any permutation of effects is valid (rollable-pool check)."""
-        return self.get_valid_order(relic_id, effects) is not None
-
     def get_valid_order(self, relic_id: int, effects: list[int]) -> list[int] | None:
         """Return sorted effects if any permutation is rollable-pool valid, else None."""
         try:
@@ -266,39 +226,6 @@ class RelicChecker:
         for seq in _SEQUENCES:
             if self._seq_rollable_valid(effects, seq, pools):
                 return self.sort_effects(effects)
-        return None
-
-    def get_strictly_valid_order(self, relic_id: int, effects: list[int]) -> list[int] | None:
-        """Return sorted effects if any permutation is strict-pool valid, else None."""
-        try:
-            pools = self.data_source.get_relic_pools_seq(relic_id)
-        except KeyError:
-            return None
-
-        deep_pools = {2000000, 2100000, 2200000}
-        for seq in _SEQUENCES:
-            cur_effs   = [effects[i]     for i in seq]
-            cur_curses = [effects[i + 3] for i in seq]
-            valid = True
-            for idx in range(3):
-                eff        = cur_effs[idx]
-                curse      = cur_curses[idx]
-                pool       = pools[idx]
-                curse_pool = pools[idx + 3]
-                if eff in _EMPTY:
-                    continue
-                if eff not in self.data_source.get_pool_effects_strict(pool):
-                    valid = False; break
-                if self.data_source.effect_needs_curse(eff):
-                    if curse_pool == -1 or curse in _EMPTY:
-                        valid = False; break
-                    if curse not in self.data_source.get_pool_effects_strict(curse_pool):
-                        valid = False; break
-                if curse not in _EMPTY and curse_pool == -1:
-                    valid = False; break
-            if valid:
-                return self.sort_effects(effects)
-
         return None
 
     # ------------------------------------------------------------------
