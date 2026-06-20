@@ -72,6 +72,9 @@ vi.mock("@/hooks/useSaveStatus", () => ({
 }))
 
 // ── import after mocks ─────────────────────────────────────────────────────
+// pendingChanges is intentionally NOT mocked — we exercise the real
+// sessionStorage-backed store to prove a new upload clears the pending diff.
+import { clearAll, readAll, toggleSell } from "@/lib/pendingChanges"
 import { Route } from "../upload"
 
 // UploadPage is the component property of the mocked Route config
@@ -249,5 +252,43 @@ describe("UploadPage — success state with uploadResult", () => {
     // Here we just confirm the component renders without crashing.
     renderUpload()
     expect(screen.getByText(/drop your save file here/i)).toBeInTheDocument()
+  })
+})
+
+describe("UploadPage — pending changes reset", () => {
+  // Start each case from a clean store and leave it clean for other tests
+  // (the store is module-level state shared across tests in this file).
+  beforeEach(() => clearAll())
+  afterEach(() => clearAll())
+
+  it("clears pending changes when a valid new save is selected", () => {
+    // Seed an edit against the "previous" save (slot 0).
+    toggleSell(0, 123, { name: "Old relic" })
+    expect(Object.keys(readAll())).toHaveLength(1)
+
+    renderUpload()
+    const input =
+      document.querySelector<HTMLInputElement>("input[type='file']")!
+    fireEvent.change(input, {
+      target: { files: [makeFile("NR0000.sl2")] },
+    })
+
+    // Uploading a new save voids the old diff.
+    expect(Object.keys(readAll())).toHaveLength(0)
+  })
+
+  it("leaves pending changes intact when an invalid file is selected", () => {
+    toggleSell(0, 123, { name: "Old relic" })
+
+    renderUpload()
+    const input =
+      document.querySelector<HTMLInputElement>("input[type='file']")!
+    fireEvent.change(input, {
+      target: { files: [makeFile("save.txt")] },
+    })
+
+    // The extension guard returns before clearAll(), so edits survive.
+    expect(mockShowErrorToast).toHaveBeenCalled()
+    expect(Object.keys(readAll())).toHaveLength(1)
   })
 })

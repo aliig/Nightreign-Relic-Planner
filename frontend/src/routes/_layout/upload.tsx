@@ -27,6 +27,7 @@ import {
 } from "@/lib/buildChange"
 import { startUpload, useOptimizeJob } from "@/lib/optimizeJobs"
 import { computeOverallPct, optimizingLabel } from "@/lib/optimizeProgress"
+import { clearAll } from "@/lib/pendingChanges"
 import { storeOriginalBackup } from "@/lib/saveBackup"
 import { rememberSaveFile } from "@/lib/saveFile"
 import { formatRelativeTime, handleError } from "@/utils"
@@ -193,6 +194,10 @@ function UploadPage() {
     // Keep the original file in-session so the inventory page can export an
     // edited copy without re-uploading (raw saves are never persisted).
     rememberSaveFile(file)
+    // A new save replaces the file the pending diff was computed against, so the
+    // old edits (keyed by slot index) would silently re-attach to a different
+    // save. Discard them — they can't be validly applied to the new file.
+    clearAll()
     // Also stash a durable, in-browser backup of the pristine original so the
     // user can recover it later if their save ever gets corrupted.
     void storeOriginalBackup(file)
