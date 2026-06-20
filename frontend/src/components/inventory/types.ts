@@ -1,3 +1,10 @@
+/**
+ * In-game relic storage cap. The game refuses to hold more than this many
+ * relics per character, so the inventory shows owned-vs-cap to help players
+ * sell down. Source: community-reported limit.
+ */
+export const RELIC_CAP = 1950
+
 /** Normalized relic row shared by the authenticated + anonymous inventory views. */
 export type ManagedRelic = {
   key: string // unique row key (DB id for auth, ga_handle for anon)

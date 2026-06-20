@@ -6,6 +6,7 @@ import {
   Eye,
   EyeOff,
   Lock,
+  Package,
   RotateCcw,
   Star,
   Trash2,
@@ -53,7 +54,7 @@ import {
   type FilterState,
   matchesState,
 } from "./relicFilter"
-import { isUniqueRelic, type ManagedRelic } from "./types"
+import { isUniqueRelic, type ManagedRelic, RELIC_CAP } from "./types"
 
 type UsageSort = "name" | "most" | "least" | "value-high" | "value-low"
 
@@ -207,6 +208,9 @@ export function RelicManager({
   )
   const projectedMurks = Math.min(murks + murkGain, 0xffffffff)
   const trashedCount = trashedRelics.length
+  // Owned-vs-cap readout reflects pending trashes — each trashed relic frees one
+  // slot toward the in-game storage cap.
+  const projectedRelicCount = relics.length - trashedCount
 
   function trash(r: ManagedRelic) {
     if (!isSellable(r) || trashed.has(r.gaHandle)) return
@@ -342,14 +346,26 @@ export function RelicManager({
               </Button>
             )}
           </div>
-          <div className="flex items-center gap-2 text-sm">
-            <Coins className="h-4 w-4 text-amber-500" />
-            <span className="font-medium">{formatMurks(projectedMurks)}</span>
-            {murkGain > 0 && (
-              <span className="text-green-600 dark:text-green-500">
-                (+{formatMurks(murkGain)} from {trashedCount} trashed)
+          <div className="flex items-center gap-4 text-sm">
+            <div className="flex items-center gap-2">
+              <Coins className="h-4 w-4 text-amber-500" />
+              <span className="font-medium">{formatMurks(projectedMurks)}</span>
+              {murkGain > 0 && (
+                <span className="text-green-600 dark:text-green-500">
+                  (+{formatMurks(murkGain)} from {trashedCount} trashed)
+                </span>
+              )}
+            </div>
+            <div
+              className="flex items-center gap-2"
+              title="In-game relic storage cap. Trash relics to free space — this count updates as you do."
+            >
+              <Package className="h-4 w-4 text-muted-foreground" />
+              <span className="font-medium">
+                {projectedRelicCount.toLocaleString()} /{" "}
+                {RELIC_CAP.toLocaleString()}
               </span>
-            )}
+            </div>
           </div>
         </div>
         <ActiveFilterChips
@@ -377,7 +393,6 @@ export function RelicManager({
               <TableHead>Relic</TableHead>
               <TableHead className="w-32">Status</TableHead>
               <TableHead>Effects</TableHead>
-              <TableHead>Curses</TableHead>
               <TableHead className="w-12 text-center">Mark</TableHead>
               <TableHead className="w-12 text-center">Trash</TableHead>
             </TableRow>
@@ -398,6 +413,18 @@ export function RelicManager({
                   : fav
                     ? "Bookmarked — un-bookmark to trash"
                     : undefined
+              // Effects and curses share one column now: curses stack beneath the
+              // effects (rendered red), so the action icons stay in view.
+              const effectsCell = EffectList({
+                effectIds: relic.effects,
+                isCurse: false,
+                effectMap,
+              })
+              const cursesCell = EffectList({
+                effectIds: relic.curses,
+                isCurse: true,
+                effectMap,
+              })
               return (
                 <TableRow
                   key={relic.key}
@@ -488,22 +515,12 @@ export function RelicManager({
                     </div>
                   </TableCell>
                   <TableCell>
-                    {EffectList({
-                      effectIds: relic.effects,
-                      isCurse: false,
-                      effectMap,
-                    }) ?? (
-                      <span className="text-xs text-muted-foreground italic">
-                        —
-                      </span>
-                    )}
-                  </TableCell>
-                  <TableCell>
-                    {EffectList({
-                      effectIds: relic.curses,
-                      isCurse: true,
-                      effectMap,
-                    }) ?? (
+                    {effectsCell || cursesCell ? (
+                      <div className="flex flex-col gap-1.5">
+                        {effectsCell}
+                        {cursesCell}
+                      </div>
+                    ) : (
                       <span className="text-xs text-muted-foreground italic">
                         —
                       </span>
