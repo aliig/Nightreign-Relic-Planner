@@ -1,4 +1,4 @@
-# FastAPI Project - Development
+# Nightreign Relic Planner - Development
 
 ## Docker Compose
 

@@ -1,4 +1,4 @@
-# FastAPI Project - Backend
+# Nightreign Relic Planner - Backend
 
 ## Requirements
 
