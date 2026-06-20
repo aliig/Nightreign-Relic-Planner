@@ -149,6 +149,8 @@ describe("startUpload — happy path", () => {
     for (const key of [
       "profiles",
       "save-status",
+      "relics",
+      "loadouts",
       "builds",
       "snapshot",
       "build-summaries",
@@ -158,6 +160,48 @@ describe("startUpload — happy path", () => {
       })
     }
     expect(toast.success).toHaveBeenCalled()
+  })
+
+  it("refreshes the save-file-backed views at upload_complete, before optimization finishes", async () => {
+    // A reader that delivers upload_complete and then hangs — i.e. the (slow)
+    // optimization phase is still running and the stream hasn't completed.
+    const reader = {
+      read: vi
+        .fn()
+        .mockResolvedValueOnce({
+          done: false,
+          value: enc(
+            sse({
+              type: "upload_complete",
+              data: { profiles: [], profile_count: 1, platform: "PC" },
+            }),
+          ),
+        })
+        // Never resolves: optimization is still in flight.
+        .mockImplementationOnce(() => new Promise<never>(() => {})),
+    }
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: true, body: { getReader: () => reader } })),
+    )
+
+    // Don't await — the job never completes in this scenario.
+    void startUpload(file())
+    await flush()
+    await flush()
+
+    // Inventory / loadouts / profiles refreshed already…
+    for (const key of ["profiles", "save-status", "relics", "loadouts"]) {
+      expect(queryClient.invalidateQueries).toHaveBeenCalledWith({
+        queryKey: [key],
+      })
+    }
+    // …but the optimization-derived queries are NOT touched until the stream
+    // completes (this is the bug being guarded against — they used to all wait).
+    expect(queryClient.invalidateQueries).not.toHaveBeenCalledWith({
+      queryKey: ["builds"],
+    })
+    expect(getJob()?.status).toBe("optimizing")
   })
 })
 

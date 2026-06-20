@@ -112,6 +112,7 @@ async function runUploadStream(
   file: File,
   onProgress: (p: StreamUploadProgress) => void,
   onBuildEvent: (buildId: string, info: Partial<BuildJobInfo>) => void,
+  onUploadComplete: () => void,
 ): Promise<StreamUploadResult> {
   const token = localStorage.getItem("access_token")
   const formData = new FormData()
@@ -171,6 +172,11 @@ async function runUploadStream(
       if (payload.type === "upload_complete") {
         uploadData = payload.data
         emitProgress({ phase: "optimizing" })
+        // The parsed inventory, loadouts, and profiles are already committed
+        // server-side by the time this event fires — well before the slow
+        // optimization phase. Let the caller refresh the save-file-backed views
+        // now instead of waiting for the whole stream to finish.
+        onUploadComplete()
       } else if (payload.type === "optimize_start") {
         if (payload.build_id)
           onBuildEvent(payload.build_id, {
@@ -253,15 +259,25 @@ export function startUpload(file: File): Promise<void> {
       if (myGen !== generation) return
       setBuild(buildId, info)
     },
+    () => {
+      if (myGen !== generation) return
+      // Inventory, game loadouts, and profiles are persisted server-side the
+      // moment parsing finishes — well before optimization completes. Refresh
+      // those save-file-backed views right away so they don't show stale data
+      // while the (slow) re-optimization keeps running in the background.
+      queryClient.invalidateQueries({ queryKey: ["profiles"] })
+      queryClient.invalidateQueries({ queryKey: ["save-status"] })
+      queryClient.invalidateQueries({ queryKey: ["relics"] })
+      queryClient.invalidateQueries({ queryKey: ["loadouts"] })
+    },
   )
     .then((result) => {
       if (myGen !== generation) return
       patchJob({ status: "done", progress: { phase: "done" }, result })
 
-      // Same refresh the /upload component used to do inline — now here so it
-      // lands regardless of which route is mounted on completion.
-      queryClient.invalidateQueries({ queryKey: ["profiles"] })
-      queryClient.invalidateQueries({ queryKey: ["save-status"] })
+      // Optimization-derived data is only valid once the whole stream completes.
+      // (Inventory / profiles / loadouts were already refreshed at
+      // upload_complete, above.)
       queryClient.invalidateQueries({ queryKey: ["builds"] })
       queryClient.invalidateQueries({ queryKey: ["snapshot"] })
       queryClient.invalidateQueries({ queryKey: ["build-summaries"] })

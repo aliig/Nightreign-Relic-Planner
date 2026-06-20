@@ -5,6 +5,7 @@ import { Suspense, useMemo, useState } from "react"
 
 import { GameService, SavesService } from "@/client"
 import { EmptyState } from "@/components/Common/EmptyState"
+import { SaveFreshness } from "@/components/Common/SaveFreshness"
 import { RelicManager } from "@/components/inventory/RelicManager"
 import type { ManagedRelic } from "@/components/inventory/types"
 import { buildEffectMap } from "@/components/RelicDisplay"
@@ -299,13 +300,16 @@ function InventoryPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold">Relic Inventory</h1>
-        <p className="text-muted-foreground mt-1">
-          Browse relics, bookmark keepers, and trash unused ones for Murk.
-          Changes apply here instantly — export from the Changes panel when
-          you're done.
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <h1 className="text-2xl font-semibold">Relic Inventory</h1>
+          <p className="text-muted-foreground mt-1">
+            Browse relics, bookmark keepers, and trash unused ones for Murk.
+            Changes apply here instantly — export from the Changes panel when
+            you're done.
+          </p>
+        </div>
+        <SaveFreshness className="mt-1 shrink-0" />
       </div>
       <Suspense fallback={<Skeleton className="h-48 w-full" />}>
         {user ? <AuthInventory /> : <AnonInventory />}

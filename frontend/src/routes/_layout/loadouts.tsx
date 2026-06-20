@@ -4,6 +4,7 @@ import { ChevronDown, ChevronUp, Pencil, RotateCcw, Trash2 } from "lucide-react"
 import { type ReactNode, Suspense, useMemo, useState } from "react"
 
 import { GameService, type ParsedLoadoutData, SavesService } from "@/client"
+import { SaveFreshness } from "@/components/Common/SaveFreshness"
 import { CumulativeSummary } from "@/components/OptimizeResults"
 import {
   buildEffectMap,
@@ -875,14 +876,17 @@ function LoadoutsPage() {
   const { user } = useAuth()
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold">Game Loadouts</h1>
-        <p className="mt-1 text-muted-foreground">
-          View, rename, and delete the in-game relic loadout presets saved in
-          your character's save file. Expand a loadout to see every relic's
-          effects and its cumulative bonuses. Create new ones from the optimizer
-          with <strong>Save as loadout</strong>.
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <h1 className="text-2xl font-semibold">Game Loadouts</h1>
+          <p className="mt-1 text-muted-foreground">
+            View, rename, and delete the in-game relic loadout presets saved in
+            your character's save file. Expand a loadout to see every relic's
+            effects and its cumulative bonuses. Create new ones from the
+            optimizer with <strong>Save as loadout</strong>.
+          </p>
+        </div>
+        <SaveFreshness className="mt-1 shrink-0" />
       </div>
       <Suspense fallback={<Skeleton className="h-48 w-full" />}>
         {user ? <AuthLoadouts /> : <AnonLoadouts />}
