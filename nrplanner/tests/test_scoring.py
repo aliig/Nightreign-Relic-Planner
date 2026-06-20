@@ -484,6 +484,79 @@ class TestTierFamilyStacking:
 
 
 # ---------------------------------------------------------------------------
+# vs-afflicted-enemy damage stacking ("unique" tiers + cross-status regression)
+#
+# All nine tiers are "unique": different levels stack, different statuses are
+# independent, and identical copies don't stack. poison's compatibilityId IS
+# scarlet rot +0's effect id (7260300), so the pre-fix all-"no_stack" rules
+# zeroed rot +0 whenever a poison relic shared the vessel — guarded below.
+# ---------------------------------------------------------------------------
+
+_POISON_0 = 7260000  # +0 (normal pool, 1.1x); compat=7260300 (== rot +0's id)
+_POISON_1 = 6260000  # +1 (deep pool, 1.16x)
+_POISON_2 = 6260001  # +2 (deep pool, 1.2x)
+_ROT_0    = 7260300  # +0; compat=7260300 (self) — the id poison points its compat at
+_ROT_1    = 6260300  # +1
+_FROST_1  = 6260400  # +1 (independent family; compat=7260400)
+
+
+class TestAfflictedEnemyStacking:
+    """vs-[status]-afflicted-enemy damage: all nine tiers are 'unique'."""
+
+    def test_all_nine_are_unique(self, ds: SourceDataHandler) -> None:
+        for eid in (7260000, 6260000, 6260001, 7260300, 6260300, 6260301,
+                    7260400, 6260400, 6260401):
+            assert ds.get_effect_stacking_type(eid) == "unique", eid
+
+    def test_three_distinct_families(self, ds: SourceDataHandler) -> None:
+        fams = {ds.get_effect_family(_POISON_1),
+                ds.get_effect_family(_ROT_1),
+                ds.get_effect_family(_FROST_1)}
+        assert len(fams) == 3 and None not in fams
+
+    def test_cross_tier_same_status_stacks(
+        self, scorer: BuildScorer, ds: SourceDataHandler,
+    ) -> None:
+        """+2 must score fully even with +0 and +1 already placed (levels stack)."""
+        build = _make_build(groups=[
+            WeightGroup(weight=100, effects=[_POISON_0, _POISON_1, _POISON_2])])
+        relic = _make_relic([_POISON_2, EMPTY, EMPTY])
+        state = _vessel_state_from_effects(ds, [_POISON_0, _POISON_1])
+        assert scorer.score_relic_in_context(relic, build, state) == 100
+
+    def test_identical_copy_blocked(
+        self, scorer: BuildScorer, ds: SourceDataHandler,
+    ) -> None:
+        """A second identical +1 scores 0 (a copy doesn't stack with itself)."""
+        build = _make_build(groups=[WeightGroup(weight=100, effects=[_POISON_1])])
+        relic = _make_relic([_POISON_1, EMPTY, EMPTY])
+        state = _vessel_state_from_effects(ds, [_POISON_1])
+        assert scorer.score_relic_in_context(relic, build, state) == 0
+
+    def test_cross_status_independent(
+        self, scorer: BuildScorer, ds: SourceDataHandler,
+    ) -> None:
+        """vs-poison and vs-frost are different effects -> both count."""
+        build = _make_build(groups=[
+            WeightGroup(weight=100, effects=[_POISON_1, _FROST_1])])
+        relic = _make_relic([_FROST_1, EMPTY, EMPTY])
+        state = _vessel_state_from_effects(ds, [_POISON_1])
+        assert scorer.score_relic_in_context(relic, build, state) == 100
+
+    def test_rot0_not_zeroed_by_poison_regression(
+        self, scorer: BuildScorer, ds: SourceDataHandler,
+    ) -> None:
+        """Regression: poison's compat == scarlet rot +0's id (7260300). The old
+        all-'no_stack' rules injected 7260300 into effect_ids when a poison relic
+        was placed, zeroing a later rot +0. Under 'unique' it scores fully."""
+        build = _make_build(groups=[
+            WeightGroup(weight=100, effects=[_POISON_1, _ROT_0])])
+        relic = _make_relic([_ROT_0, EMPTY, EMPTY])
+        state = _vessel_state_from_effects(ds, [_POISON_1])
+        assert scorer.score_relic_in_context(relic, build, state) == 100
+
+
+# ---------------------------------------------------------------------------
 # BuildDefinition.get_effective_requirements
 # ---------------------------------------------------------------------------
 

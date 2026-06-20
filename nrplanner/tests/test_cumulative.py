@@ -233,3 +233,31 @@ def test_plus0_base_unifies_with_family(ds: SourceDataHandler):
     assert g.cumulative_value == pytest.approx(1.05 * 1.085 * 1.1)
     labels = {t.tier_label for t in g.tiers}
     assert labels == {"+0", "+1", "+2"}  # base labelled "+0" because the group is tiered
+
+
+def test_unique_afflicted_cross_tier_stacks(ds: SourceDataHandler):
+    """vs-poison +0/+1/+2 are 'unique': different levels stack multiplicatively
+    (1.1 * 1.16 * 1.2 = 1.5312 -> 1.53×)."""
+    mag = _ids_by_mag(ds, "Attack power up when facing poison-afflicted enemy")
+    groups = summarize_cumulative_effects([mag[0][0], mag[1][0], mag[2][0]], ds)
+
+    assert len(groups) == 1
+    g = groups[0]
+    assert g.mode == "multiplicative"
+    assert g.cumulative_value == pytest.approx(1.1 * 1.16 * 1.2)
+    assert g.bonus_display == "1.53× (+53%)"
+    assert [(t.tier_label, t.count) for t in g.tiers] == [("+2", 1), ("+1", 1), ("+0", 1)]
+
+
+def test_unique_afflicted_duplicate_does_not_stack(ds: SourceDataHandler):
+    """Two identical vs-poison +1 don't stack (unique): 1.16×, not 1.16². The
+    redundant copy is capped so the summary matches in-game behaviour."""
+    mag = _ids_by_mag(ds, "Attack power up when facing poison-afflicted enemy")
+    plus1 = mag[1][0]
+    groups = summarize_cumulative_effects([plus1, plus1], ds)
+
+    assert len(groups) == 1
+    g = groups[0]
+    assert g.cumulative_value == pytest.approx(1.16)
+    assert g.bonus_display == "1.16× (+16%)"
+    assert g.tiers[0].count == 1  # the redundant copy is not counted
