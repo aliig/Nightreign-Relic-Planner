@@ -25,18 +25,20 @@ def get_items_json() -> dict:
 
 @lru_cache(maxsize=1)
 def game_data_version() -> str:
-    """Stable fingerprint of the canonical game-data CSVs.
+    """Stable fingerprint of the canonical game data.
 
     No explicit version ships with the game data, so we hash the param CSVs
-    (effect / relic / vessel definitions).  Stored as OptimizationSnapshot
-    provenance: a data/balance change then invalidates stale snapshots
-    automatically, without any special-casing.
+    (effect / relic / vessel definitions) AND the resource JSON files
+    (stacking_rules.json, effect_bonus_values.json, effects.json, items.json
+    — all of which feed scoring/optimization).  Stored as OptimizationSnapshot
+    provenance: a data/balance change to any of them then invalidates stale
+    snapshots automatically, without any special-casing.
     """
     import nrplanner as _pkg
 
-    param_dir = Path(_pkg.__file__).parent / "resources" / "param"
+    resources = Path(_pkg.__file__).parent / "resources"
     h = hashlib.sha256()
-    for path in sorted(param_dir.glob("*.csv")):
+    for path in sorted(resources.glob("param/*.csv")) + sorted(resources.glob("json/*.json")):
         h.update(path.name.encode())
         h.update(path.read_bytes())
     return h.hexdigest()[:16]
