@@ -1,87 +1,253 @@
-import { Filter, Search, X } from "lucide-react"
+import { ChevronDown, Search, X } from "lucide-react"
 import { useMemo, useState } from "react"
 
+import { COLOR_HEX, RELIC_COLORS, RELIC_TIERS } from "@/components/RelicDisplay"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
-import type { ManagedRelic } from "./types"
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover"
+import { cn } from "@/lib/utils"
+import {
+  activeFilterChips,
+  EMPTY_FILTER,
+  type FilterState,
+  stateFacetCount,
+  type TriState,
+} from "./relicFilter"
 
-export type FilterState = {
-  search: string
-  colorFilter: string
-  tierFilter: string
-  deepFilter: string
-  statusFilter: string
-  /** all = no filter, sellable = trashable now, locked = equipped/bookmarked/unique. */
-  sellableFilter: "all" | "sellable" | "locked"
-  effectFilter: number[]
-  /** How to match the selected effects: all (AND) / any (OR) / none (NOT). */
-  effectMode: "and" | "or" | "not"
+type FacetProps = {
+  f: FilterState
+  set: (patch: Partial<FilterState>) => void
 }
 
-export function applyFilters(
-  relics: ManagedRelic[],
-  f: FilterState,
-  effectMap: Map<number, string>,
-): ManagedRelic[] {
-  return relics.filter((r) => {
-    if (f.search && !r.name.toLowerCase().includes(f.search.toLowerCase()))
-      return false
-    if (f.colorFilter !== "all" && r.color !== f.colorFilter) return false
-    if (f.tierFilter !== "all" && r.tier !== f.tierFilter) return false
-    if (f.deepFilter === "deep" && !r.isDeep) return false
-    if (f.deepFilter === "standard" && r.isDeep) return false
+const TRI_OPTIONS: { value: string; label: string }[] = [
+  { value: "all", label: "Any" },
+  { value: "yes", label: "Yes" },
+  { value: "no", label: "No" },
+]
 
-    if (f.effectFilter.length > 0) {
-      const selectedNames = f.effectFilter
-        .map((id) => effectMap.get(id))
-        .filter(Boolean)
-      const relicEffectNames = r.effects
-        .map((id) => effectMap.get(id))
-        .filter(Boolean)
-      const has = (name: string | undefined) => relicEffectNames.includes(name)
-      if (f.effectMode === "or") {
-        if (!selectedNames.some(has)) return false
-      } else if (f.effectMode === "not") {
-        if (selectedNames.some(has)) return false
-      } else if (!selectedNames.every(has)) {
-        return false
-      }
-    }
-    return true
-  })
+/** Shared trigger content: label + active-count badge + chevron. */
+function FacetInner({ label, count }: { label: string; count?: number }) {
+  return (
+    <>
+      {label}
+      {count ? (
+        <Badge
+          variant="secondary"
+          className="h-5 min-w-5 justify-center rounded-full px-1 text-xs tabular-nums"
+        >
+          {count}
+        </Badge>
+      ) : null}
+      <ChevronDown className="h-3.5 w-3.5 opacity-50" />
+    </>
+  )
 }
 
-function EffectMultiSelect({
-  effectsData,
-  selectedEffects,
+/** A compact single-row segmented control (used for the tri-state State axes). */
+function Segmented({
+  value,
   onChange,
-  mode,
-  onModeChange,
+  options,
 }: {
-  effectsData: unknown[]
-  selectedEffects: number[]
-  onChange: (ids: number[]) => void
-  mode: "and" | "or" | "not"
-  onModeChange: (mode: "and" | "or" | "not") => void
+  value: string
+  onChange: (v: string) => void
+  options: { value: string; label: string }[]
 }) {
-  const [open, setOpen] = useState(false)
+  return (
+    <div className="inline-flex w-full gap-0.5 rounded-md bg-muted/50 p-0.5">
+      {options.map((o) => (
+        <button
+          key={o.value}
+          type="button"
+          onClick={() => onChange(o.value)}
+          className={cn(
+            "flex-1 rounded-sm px-2 py-1 text-xs transition-colors",
+            value === o.value
+              ? "bg-background font-medium shadow-sm"
+              : "text-muted-foreground hover:text-foreground",
+          )}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function ColorFacet({ f, set }: FacetProps) {
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button variant="outline" size="sm" className="h-9 gap-1.5">
+          <FacetInner label="Color" count={f.colors.length} />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-44 p-1.5">
+        {RELIC_COLORS.map((c) => {
+          const checked = f.colors.includes(c)
+          return (
+            <button
+              key={c}
+              type="button"
+              onClick={() =>
+                set({
+                  colors: checked
+                    ? f.colors.filter((x) => x !== c)
+                    : [...f.colors, c],
+                })
+              }
+              className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent"
+            >
+              <Checkbox
+                checked={checked}
+                tabIndex={-1}
+                className="pointer-events-none"
+              />
+              <span
+                className="h-3 w-3 rounded-full border border-border"
+                style={{ backgroundColor: COLOR_HEX[c] }}
+              />
+              {c}
+            </button>
+          )
+        })}
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+function TierFacet({ f, set }: FacetProps) {
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button variant="outline" size="sm" className="h-9 gap-1.5">
+          <FacetInner label="Tier" count={f.tiers.length} />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-44 p-1.5">
+        {RELIC_TIERS.map((t) => {
+          const checked = f.tiers.includes(t)
+          return (
+            <button
+              key={t}
+              type="button"
+              onClick={() =>
+                set({
+                  tiers: checked
+                    ? f.tiers.filter((x) => x !== t)
+                    : [...f.tiers, t],
+                })
+              }
+              className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent"
+            >
+              <Checkbox
+                checked={checked}
+                tabIndex={-1}
+                className="pointer-events-none"
+              />
+              {t}
+            </button>
+          )
+        })}
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+function TypeFacet({ f, set }: FacetProps) {
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button variant="outline" size="sm" className="h-9 gap-1.5">
+          <FacetInner label="Type" count={f.deep !== "all" ? 1 : 0} />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-56 p-2">
+        <Segmented
+          value={f.deep}
+          onChange={(v) => set({ deep: v as FilterState["deep"] })}
+          options={[
+            { value: "all", label: "Any" },
+            { value: "standard", label: "Standard" },
+            { value: "deep", label: "Deep" },
+          ]}
+        />
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+function StateFacet({ f, set }: FacetProps) {
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button variant="outline" size="sm" className="h-9 gap-1.5">
+          <FacetInner label="State" count={stateFacetCount(f)} />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-64 space-y-3 p-3">
+        <div className="space-y-1.5">
+          <p className="text-xs font-medium text-muted-foreground">
+            Sellability
+          </p>
+          <Segmented
+            value={f.sellable}
+            onChange={(v) => set({ sellable: v as FilterState["sellable"] })}
+            options={[
+              { value: "all", label: "Any" },
+              { value: "sellable", label: "Sellable" },
+              { value: "locked", label: "Locked" },
+            ]}
+          />
+        </div>
+        <div className="h-px bg-border" />
+        <div className="space-y-1.5">
+          <p className="text-xs font-medium text-muted-foreground">Equipped</p>
+          <Segmented
+            value={f.equipped}
+            onChange={(v) => set({ equipped: v as TriState })}
+            options={TRI_OPTIONS}
+          />
+        </div>
+        <div className="space-y-1.5">
+          <p className="text-xs font-medium text-muted-foreground">
+            In a build
+          </p>
+          <Segmented
+            value={f.used}
+            onChange={(v) => set({ used: v as TriState })}
+            options={TRI_OPTIONS}
+          />
+        </div>
+        <div className="space-y-1.5">
+          <p className="text-xs font-medium text-muted-foreground">
+            Bookmarked
+          </p>
+          <Segmented
+            value={f.bookmarked}
+            onChange={(v) => set({ bookmarked: v as TriState })}
+            options={TRI_OPTIONS}
+          />
+        </div>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+function EffectsFacet({
+  f,
+  set,
+  effectsData,
+}: FacetProps & { effectsData: unknown[] }) {
   const [search, setSearch] = useState("")
+  const selected = f.effectFilter
+  const setEffects = (ids: number[]) => set({ effectFilter: ids })
 
   const effects = useMemo(() => {
     const arr = (
@@ -101,20 +267,14 @@ function EffectMultiSelect({
   }, [effectsData, search])
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        <Button variant="outline" className="w-48 justify-start">
-          <Filter className="mr-2 h-4 w-4" />
-          {selectedEffects.length > 0
-            ? `${selectedEffects.length} Effect${selectedEffects.length > 1 ? "s" : ""}`
-            : "Filter Effects"}
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button variant="outline" size="sm" className="h-9 gap-1.5">
+          <FacetInner label="Effects" count={selected.length} />
         </Button>
-      </DialogTrigger>
-      <DialogContent className="max-w-md p-0 overflow-hidden">
-        <DialogHeader className="p-4 pb-2">
-          <DialogTitle>Filter by Effects</DialogTitle>
-        </DialogHeader>
-        <div className="px-4 pb-2">
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-80 p-0">
+        <div className="p-2 pb-1">
           <div className="flex gap-1 rounded-md bg-muted/50 p-0.5">
             {(
               [
@@ -127,9 +287,9 @@ function EffectMultiSelect({
                 key={m}
                 type="button"
                 size="sm"
-                variant={mode === m ? "secondary" : "ghost"}
+                variant={f.effectMode === m ? "secondary" : "ghost"}
                 className="h-7 flex-1 text-xs"
-                onClick={() => onModeChange(m)}
+                onClick={() => set({ effectMode: m })}
               >
                 {label}
               </Button>
@@ -138,13 +298,17 @@ function EffectMultiSelect({
           <p className="mt-1 text-xs text-muted-foreground">
             Match relics with{" "}
             <strong>
-              {mode === "or" ? "any" : mode === "not" ? "none" : "all"}
+              {f.effectMode === "or"
+                ? "any"
+                : f.effectMode === "not"
+                  ? "none"
+                  : "all"}
             </strong>{" "}
             of the selected effects.
           </p>
         </div>
-        <div className="px-4 pb-2 relative">
-          <Search className="absolute left-6 top-2.5 h-4 w-4 text-muted-foreground" />
+        <div className="relative px-2 pb-2">
+          <Search className="absolute left-4 top-2.5 h-4 w-4 text-muted-foreground" />
           <Input
             placeholder="Search effects..."
             value={search}
@@ -152,9 +316,9 @@ function EffectMultiSelect({
             className="pl-8"
           />
         </div>
-        {selectedEffects.length > 0 && (
-          <div className="px-4 pb-2 flex flex-wrap gap-1 max-h-24 overflow-y-auto">
-            {selectedEffects.map((id) => {
+        {selected.length > 0 && (
+          <div className="flex max-h-24 flex-wrap gap-1 overflow-y-auto px-2 pb-2">
+            {selected.map((id) => {
               const e = (
                 effectsData as Array<{ id: number; name: string }>
               ).find((x) => x.id === id)
@@ -168,10 +332,9 @@ function EffectMultiSelect({
                   {e.name}
                   <button
                     type="button"
-                    onClick={() =>
-                      onChange(selectedEffects.filter((x) => x !== id))
-                    }
+                    onClick={() => setEffects(selected.filter((x) => x !== id))}
                     className="ml-1 hover:text-destructive"
+                    aria-label={`Remove ${e.name}`}
                   >
                     <X className="h-3 w-3" />
                   </button>
@@ -182,21 +345,22 @@ function EffectMultiSelect({
         )}
         <div className="max-h-[300px] overflow-y-auto border-t">
           {effects.length > 0 ? (
-            <div className="p-2 flex flex-col gap-1">
+            <div className="flex flex-col gap-1 p-2">
               {effects.map((e) => {
-                const isSelected = selectedEffects.includes(e.id)
+                const isSelected = selected.includes(e.id)
                 return (
                   <button
                     key={e.id}
                     type="button"
-                    onClick={() => {
-                      if (isSelected) {
-                        onChange(selectedEffects.filter((id) => id !== e.id))
-                      } else {
-                        onChange([...selectedEffects, e.id])
-                      }
-                    }}
-                    className={`flex items-center gap-2 px-2 py-1.5 rounded-sm text-sm hover:bg-accent text-left w-full ${isSelected ? "bg-accent/50" : ""}`}
+                    onClick={() =>
+                      isSelected
+                        ? setEffects(selected.filter((id) => id !== e.id))
+                        : setEffects([...selected, e.id])
+                    }
+                    className={cn(
+                      "flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm hover:bg-accent",
+                      isSelected && "bg-accent/50",
+                    )}
                   >
                     <Checkbox
                       checked={isSelected}
@@ -214,11 +378,13 @@ function EffectMultiSelect({
             </p>
           )}
         </div>
-      </DialogContent>
-    </Dialog>
+      </PopoverContent>
+    </Popover>
   )
 }
 
+/** The filter facet controls (search + Color/Tier/Type/State/Effects popovers).
+ *  Returns a fragment so the caller can lay them out alongside Sort etc. */
 export function InventoryFilters({
   filter,
   setFilter,
@@ -228,108 +394,64 @@ export function InventoryFilters({
   setFilter: (next: FilterState) => void
   effectsData: unknown[]
 }) {
-  const patch = (p: Partial<FilterState>) => setFilter({ ...filter, ...p })
+  const set = (patch: Partial<FilterState>) =>
+    setFilter({ ...filter, ...patch })
   return (
-    <div className="flex flex-wrap gap-3">
-      <Input
-        placeholder="Search by name…"
-        value={filter.search}
-        onChange={(e) => patch({ search: e.target.value })}
-        className="w-48"
-      />
-      <Select
-        value={filter.colorFilter}
-        onValueChange={(v) => patch({ colorFilter: v })}
-      >
-        <SelectTrigger className="w-32">
-          <SelectValue placeholder="Color" />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value="all">All Colors</SelectItem>
-          {["Red", "Blue", "Yellow", "Green"].map((c) => (
-            <SelectItem key={c} value={c}>
-              {c}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-      <Select
-        value={filter.tierFilter}
-        onValueChange={(v) => patch({ tierFilter: v })}
-      >
-        <SelectTrigger className="w-36">
-          <SelectValue placeholder="Tier" />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value="all">All Tiers</SelectItem>
-          {["Grand", "Polished", "Delicate"].map((t) => (
-            <SelectItem key={t} value={t}>
-              {t}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-      <Select
-        value={filter.deepFilter}
-        onValueChange={(v) => patch({ deepFilter: v })}
-      >
-        <SelectTrigger className="w-32">
-          <SelectValue placeholder="Type" />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value="all">All Types</SelectItem>
-          <SelectItem value="standard">Standard</SelectItem>
-          <SelectItem value="deep">Deep</SelectItem>
-        </SelectContent>
-      </Select>
-      <Select
-        value={filter.statusFilter}
-        onValueChange={(v) => patch({ statusFilter: v })}
-      >
-        <SelectTrigger className="w-36">
-          <SelectValue placeholder="Status" />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value="all">All status</SelectItem>
-          <SelectItem value="unused">Unused</SelectItem>
-          <SelectItem value="stale">Stale (equipped)</SelectItem>
-          <SelectItem value="bench">On the bench</SelectItem>
-          <SelectItem value="active">Active</SelectItem>
-        </SelectContent>
-      </Select>
-      <Select
-        value={filter.sellableFilter}
-        onValueChange={(v) =>
-          patch({ sellableFilter: v as FilterState["sellableFilter"] })
-        }
-      >
-        <SelectTrigger className="w-36">
-          <SelectValue placeholder="Sellable" />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value="all">Any sellability</SelectItem>
-          <SelectItem value="sellable">Sellable</SelectItem>
-          <SelectItem value="locked">Locked</SelectItem>
-        </SelectContent>
-      </Select>
-      <EffectMultiSelect
-        effectsData={effectsData}
-        selectedEffects={filter.effectFilter}
-        onChange={(ids) => patch({ effectFilter: ids })}
-        mode={filter.effectMode}
-        onModeChange={(m) => patch({ effectMode: m })}
-      />
-    </div>
+    <>
+      <div className="relative">
+        <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+        <Input
+          placeholder="Search by name…"
+          value={filter.search}
+          onChange={(e) => set({ search: e.target.value })}
+          className="h-9 w-48 pl-8"
+        />
+      </div>
+      <ColorFacet f={filter} set={set} />
+      <TierFacet f={filter} set={set} />
+      <TypeFacet f={filter} set={set} />
+      <StateFacet f={filter} set={set} />
+      <EffectsFacet f={filter} set={set} effectsData={effectsData} />
+    </>
   )
 }
 
-export const EMPTY_FILTER: FilterState = {
-  search: "",
-  colorFilter: "all",
-  tierFilter: "all",
-  deepFilter: "all",
-  statusFilter: "all",
-  sellableFilter: "all",
-  effectFilter: [],
-  effectMode: "and",
+/** Removable chips summarizing the active filter, plus Clear-all. */
+export function ActiveFilterChips({
+  filter,
+  setFilter,
+  effectMap,
+}: {
+  filter: FilterState
+  setFilter: (next: FilterState) => void
+  effectMap: Map<number, string>
+}) {
+  const chips = activeFilterChips(filter, effectMap)
+  if (chips.length === 0) return null
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      <span className="text-xs text-muted-foreground">Filters:</span>
+      {chips.map((chip) => (
+        <Badge key={chip.key} variant="secondary" className="gap-1 font-normal">
+          {chip.label}
+          <button
+            type="button"
+            onClick={() => setFilter({ ...filter, ...chip.clear })}
+            className="hover:text-destructive"
+            aria-label={`Remove filter ${chip.label}`}
+          >
+            <X className="h-3 w-3" />
+          </button>
+        </Badge>
+      ))}
+      <Button
+        variant="ghost"
+        size="sm"
+        className="h-6 px-2 text-xs"
+        onClick={() => setFilter(EMPTY_FILTER)}
+      >
+        Clear all
+      </Button>
+    </div>
+  )
 }

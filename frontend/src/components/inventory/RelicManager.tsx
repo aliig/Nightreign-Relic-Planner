@@ -1,5 +1,15 @@
 import { Link } from "@tanstack/react-router"
-import { Coins, Eye, EyeOff, Lock, RotateCcw, Star, Trash2 } from "lucide-react"
+import {
+  ArrowUpDown,
+  ChevronDown,
+  Coins,
+  Eye,
+  EyeOff,
+  Lock,
+  RotateCcw,
+  Star,
+  Trash2,
+} from "lucide-react"
 import { useCallback, useMemo, useState } from "react"
 
 import { EffectList, RelicNameCell } from "@/components/RelicDisplay"
@@ -7,17 +17,17 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import {
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
 import {
   Table,
   TableBody,
@@ -36,15 +46,24 @@ import { setFavorite, toggleSell, usePendingSlot } from "@/lib/pendingChanges"
 import { type RelicStatus, relicStatus } from "@/lib/relicStatus"
 import { effectCountOf, formatMurks, sellValue } from "@/lib/sellValue"
 import { cn } from "@/lib/utils"
+import { ActiveFilterChips, InventoryFilters } from "./InventoryFilters"
 import {
   applyFilters,
   EMPTY_FILTER,
   type FilterState,
-  InventoryFilters,
-} from "./InventoryFilters"
+  matchesState,
+} from "./relicFilter"
 import { isUniqueRelic, type ManagedRelic } from "./types"
 
-type UsageSort = "name" | "most" | "least"
+type UsageSort = "name" | "most" | "least" | "value-high" | "value-low"
+
+const SORT_LABELS: Record<UsageSort, string> = {
+  name: "Name (A–Z)",
+  most: "Most used",
+  least: "Least used",
+  "value-high": "Highest value",
+  "value-low": "Lowest value",
+}
 
 const STATUS_META: Record<
   RelicStatus,
@@ -130,20 +149,20 @@ export function RelicManager({
 
   const visible = useMemo(() => {
     const u = (r: ManagedRelic) => usage.get(r.realId)?.length ?? 0
+    const relicValue = (r: ManagedRelic) =>
+      sellValue(effectCountOf(r.effects), r.isDeep)
     let list = applyFilters(relics, filter, effectMap)
-    // Status is usage-derived (equipped + usage), so it's filtered here rather
-    // than in applyFilters, which only sees relic-intrinsic fields.
-    if (filter.statusFilter !== "all") {
-      list = list.filter(
-        (r) => relicStatus(r.equipped, u(r) > 0) === filter.statusFilter,
-      )
-    }
-    // Sellability depends on pending favorite/equipped/unique state, which only
-    // lives here — so it's filtered alongside status rather than in applyFilters.
-    if (filter.sellableFilter !== "all") {
-      const wantSellable = filter.sellableFilter === "sellable"
-      list = list.filter((r) => isSellable(r) === wantSellable)
-    }
+    // The State axes (sellable/equipped/in-a-build/bookmarked) depend on live
+    // usage + pending favorites, which only exist here — so they're filtered
+    // here rather than in applyFilters, which only sees relic-intrinsic fields.
+    list = list.filter((r) =>
+      matchesState(filter, {
+        equipped: r.equipped,
+        used: u(r) > 0,
+        favorite: effectiveFavorite(r),
+        sellable: isSellable(r),
+      }),
+    )
     // Trashed relics are hidden by default — they've left the inventory.
     if (!showTrashed) {
       list = list.filter((r) => !trashed.has(r.gaHandle))
@@ -153,6 +172,14 @@ export function RelicManager({
       sorted.sort((a, b) => u(b) - u(a) || a.name.localeCompare(b.name))
     } else if (usageSort === "least") {
       sorted.sort((a, b) => u(a) - u(b) || a.name.localeCompare(b.name))
+    } else if (usageSort === "value-high") {
+      sorted.sort(
+        (a, b) => relicValue(b) - relicValue(a) || a.name.localeCompare(b.name),
+      )
+    } else if (usageSort === "value-low") {
+      sorted.sort(
+        (a, b) => relicValue(a) - relicValue(b) || a.name.localeCompare(b.name),
+      )
     } else {
       sorted.sort((a, b) => a.name.localeCompare(b.name))
     }
@@ -166,6 +193,7 @@ export function RelicManager({
     showTrashed,
     trashed,
     isSellable,
+    effectiveFavorite,
   ])
 
   // Murk reflects the modified save: every trashed relic's value is already added.
@@ -258,51 +286,77 @@ export function RelicManager({
 
   return (
     <div className="space-y-4">
-      {/* Filters + Murk + show-trashed */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap gap-3">
-          <InventoryFilters
-            filter={filter}
-            setFilter={setFilter}
-            effectsData={effectsData}
-          />
-          <Select
-            value={usageSort}
-            onValueChange={(v) => setUsageSort(v as UsageSort)}
-          >
-            <SelectTrigger className="w-40">
-              <SelectValue placeholder="Sort by usage" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="name">Name (A–Z)</SelectItem>
-              <SelectItem value="least">Least used</SelectItem>
-              <SelectItem value="most">Most used</SelectItem>
-            </SelectContent>
-          </Select>
-          {trashedCount > 0 && (
-            <Button
-              variant={showTrashed ? "secondary" : "outline"}
-              size="sm"
-              onClick={() => setShowTrashed((v) => !v)}
-            >
-              {showTrashed ? (
-                <EyeOff className="mr-1.5 h-3.5 w-3.5" />
-              ) : (
-                <Eye className="mr-1.5 h-3.5 w-3.5" />
-              )}
-              {showTrashed ? "Hide" : "Show"} trashed ({trashedCount})
-            </Button>
-          )}
+      {/* Filters + sort + show-trashed + murk readout, then active-filter chips */}
+      <div className="space-y-2">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <InventoryFilters
+              filter={filter}
+              setFilter={setFilter}
+              effectsData={effectsData}
+            />
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="sm" className="h-9 gap-1.5">
+                  <ArrowUpDown className="h-3.5 w-3.5 opacity-70" />
+                  {SORT_LABELS[usageSort]}
+                  <ChevronDown className="h-3.5 w-3.5 opacity-50" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start">
+                <DropdownMenuRadioGroup
+                  value={usageSort}
+                  onValueChange={(v) => setUsageSort(v as UsageSort)}
+                >
+                  <DropdownMenuRadioItem value="name">
+                    Name (A–Z)
+                  </DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="most">
+                    Most used
+                  </DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="least">
+                    Least used
+                  </DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="value-high">
+                    Highest value
+                  </DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="value-low">
+                    Lowest value
+                  </DropdownMenuRadioItem>
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            {trashedCount > 0 && (
+              <Button
+                variant={showTrashed ? "secondary" : "outline"}
+                size="sm"
+                className="h-9"
+                onClick={() => setShowTrashed((v) => !v)}
+              >
+                {showTrashed ? (
+                  <EyeOff className="mr-1.5 h-3.5 w-3.5" />
+                ) : (
+                  <Eye className="mr-1.5 h-3.5 w-3.5" />
+                )}
+                {showTrashed ? "Hide" : "Show"} trashed ({trashedCount})
+              </Button>
+            )}
+          </div>
+          <div className="flex items-center gap-2 text-sm">
+            <Coins className="h-4 w-4 text-amber-500" />
+            <span className="font-medium">{formatMurks(projectedMurks)}</span>
+            {murkGain > 0 && (
+              <span className="text-green-600 dark:text-green-500">
+                (+{formatMurks(murkGain)} from {trashedCount} trashed)
+              </span>
+            )}
+          </div>
         </div>
-        <div className="flex items-center gap-2 text-sm">
-          <Coins className="h-4 w-4 text-amber-500" />
-          <span className="font-medium">{formatMurks(projectedMurks)}</span>
-          {murkGain > 0 && (
-            <span className="text-green-600 dark:text-green-500">
-              (+{formatMurks(murkGain)} from {trashedCount} trashed)
-            </span>
-          )}
-        </div>
+        <ActiveFilterChips
+          filter={filter}
+          setFilter={setFilter}
+          effectMap={effectMap}
+        />
       </div>
 
       {visible.length === 0 ? (
@@ -353,31 +407,33 @@ export function RelicManager({
                   }
                 >
                   <TableCell>
-                    <Checkbox
-                      checked={selection.has(relic.gaHandle)}
-                      disabled={!sellable || isTrashed}
-                      onCheckedChange={() => toggleSelect(relic)}
-                      aria-label={`Select ${relic.name}`}
-                      title={lockReason}
-                    />
+                    {sellable ? (
+                      <Checkbox
+                        checked={selection.has(relic.gaHandle)}
+                        disabled={isTrashed}
+                        onCheckedChange={() => toggleSelect(relic)}
+                        aria-label={`Select ${relic.name}`}
+                      />
+                    ) : (
+                      <span
+                        role="img"
+                        className="inline-flex p-0.5 text-muted-foreground"
+                        title={lockReason}
+                        aria-label={lockReason}
+                      >
+                        <Lock className="h-3.5 w-3.5" />
+                      </span>
+                    )}
                   </TableCell>
                   <TableCell className="min-w-[180px]">
-                    <div className="flex items-center gap-1.5">
-                      <span className={isTrashed ? "line-through" : ""}>
-                        <RelicNameCell
-                          name={relic.name}
-                          color={relic.color}
-                          tier={relic.tier}
-                          isDeep={relic.isDeep}
-                        />
-                      </span>
-                      {(relic.equipped || isUnique) && (
-                        <Lock
-                          className="h-3 w-3 text-muted-foreground shrink-0"
-                          aria-label={relic.equipped ? "Equipped" : "Unique"}
-                        />
-                      )}
-                    </div>
+                    <span className={isTrashed ? "line-through" : ""}>
+                      <RelicNameCell
+                        name={relic.name}
+                        color={relic.color}
+                        tier={relic.tier}
+                        isDeep={relic.isDeep}
+                      />
+                    </span>
                   </TableCell>
                   <TableCell>
                     <div className="flex flex-col items-start gap-1">

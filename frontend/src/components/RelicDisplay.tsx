@@ -20,6 +20,12 @@ export const DEEP_COLOR = "#8B6FC0"
 
 export const EMPTY_EFFECT = 4294967295
 
+/** Canonical relic colors, in display order. Single source for color filters. */
+export const RELIC_COLORS: string[] = ["Red", "Blue", "Yellow", "Green"]
+
+/** Canonical relic tiers, best → smallest. Single source for tier filters. */
+export const RELIC_TIERS: string[] = ["Grand", "Polished", "Delicate"]
+
 /**
  * Per-copy practical magnitude (e.g. "+15%") per effect id, populated as a side
  * effect of buildEffectMap (which every effect-rendering surface calls). Lets
