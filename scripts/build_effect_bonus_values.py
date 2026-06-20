@@ -230,7 +230,7 @@ def main() -> None:
             "copies of one tier do not -- cumulative.py caps them); absent id => no computed total. Optional "
             "'conditional' marks effects that only apply in a context (e.g. 'when HP below 40%') so the UI can badge them."
         ),
-        "_source": "community spreadsheet NORMAL+DEEP tabs: Stackable-with-self=Yes rows + 'different levels stack' unique families",
+        "_source": "community spreadsheet NORMAL+DEEP tabs: Stackable-with-self=Yes rows + 'different levels stack' unique families, https://docs.google.com/spreadsheets/d/1meXOw4jR1hh7YXVMeijWwSDIXnCw6Tk4hTZPq2qvyK4/edit?gid=754182815#gid=754182815, https://docs.google.com/spreadsheets/d/1meXOw4jR1hh7YXVMeijWwSDIXnCw6Tk4hTZPq2qvyK4/edit?gid=470274380#gid=470274380",
     }
     for eid in sorted(table):
         out[str(eid)] = table[eid]
