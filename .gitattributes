@@ -1,2 +1,27 @@
-* text=auto
-*.sh text eol=lf
+# Line-ending policy: LF everywhere, on every OS.
+#
+# Pinning `eol=lf` (not just `text=auto`) is deliberate: with core.autocrlf=true
+# on Windows, a bare `text=auto` lets git rewrite the working tree to CRLF while
+# the repo blobs and our formatters (biome --write, prettier, etc.) emit LF. That
+# mismatch flags untouched files as "modified" (LF<->CRLF) whenever any tool
+# rewrites them. eol=lf makes the working-tree ending deterministic and stops it.
+* text=auto eol=lf
+
+# Scripts that are sensitive to their line endings.
+*.sh   text eol=lf
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+
+# Known binary formats — never normalize or diff as text.
+*.sl2  binary
+*.dat  binary
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.webp binary
+*.woff binary
+*.woff2 binary
+*.ttf  binary
+*.otf  binary
