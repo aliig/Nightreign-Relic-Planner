@@ -18,7 +18,9 @@ import {
 } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 import useAuth from "@/hooks/useAuth"
+import useCustomToast from "@/hooks/useCustomToast"
 import { useRelicUsage } from "@/hooks/useRelicUsage"
+import { useReconcileSlotBases } from "@/lib/pendingChanges"
 
 export const Route = createFileRoute("/_layout/inventory")({
   component: InventoryPage,
@@ -98,6 +100,17 @@ function AuthInventory() {
 
   const [selectedId, setSelectedId] = useState<string | null>(
     profiles.data?.[0]?.id ?? null,
+  )
+
+  const { showErrorToast } = useCustomToast()
+  // Drop any pending edits whose underlying save was re-uploaded (here or on
+  // another device) since they were made — they'd otherwise mis-apply.
+  useReconcileSlotBases(
+    (profiles.data ?? []).map((p) => ({ slot: p.slot_index, id: p.id })),
+    (slots) =>
+      showErrorToast(
+        `Cleared unsynced edits for slot ${slots.join(", ")} — this save was re-uploaded since you made them.`,
+      ),
   )
 
   if (!profiles.data?.length) {

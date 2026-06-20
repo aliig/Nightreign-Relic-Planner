@@ -73,6 +73,21 @@ export async function getOriginalBackupMeta(): Promise<BackupMeta | null> {
   }
 }
 
+/**
+ * The pristine original File itself (binary, restore-ready).
+ *
+ * Survives page reloads (unlike the in-session `saveFile.ts` copy), so export
+ * can fall back to this instead of forcing the user to re-select their save.
+ */
+export async function getOriginalBackupFile(): Promise<File | null> {
+  try {
+    const rec = await readBackup()
+    return rec?.file ?? null
+  } catch {
+    return null
+  }
+}
+
 /** Re-download the pristine original (keeps its filename, so it's restore-ready). */
 export async function downloadOriginalBackup(): Promise<boolean> {
   try {

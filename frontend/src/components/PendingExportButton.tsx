@@ -23,7 +23,11 @@ import {
   toggleSell,
   usePendingAll,
 } from "@/lib/pendingChanges"
-import { downloadOriginalBackup, useOriginalBackup } from "@/lib/saveBackup"
+import {
+  downloadOriginalBackup,
+  getOriginalBackupFile,
+  useOriginalBackup,
+} from "@/lib/saveBackup"
 import { getSaveFile, getSaveFileMeta, rememberSaveFile } from "@/lib/saveFile"
 import { formatMurks } from "@/lib/sellValue"
 
@@ -106,6 +110,9 @@ export function PendingExportButton() {
 
   const saveFile = getSaveFile()
   const saveMeta = getSaveFileMeta()
+  // Export can source bytes from the in-session File OR the durable IndexedDB
+  // backup, so it's available even after a reload dropped the in-memory File.
+  const haveSource = !!saveFile || !!backupMeta
   const multiSlot = groups.length > 1
 
   function onPickFile(e: React.ChangeEvent<HTMLInputElement>) {
@@ -124,12 +131,22 @@ export function PendingExportButton() {
   }
 
   async function doExport() {
-    const file = getSaveFile()
-    if (!file) return
+    // Prefer the in-session File; fall back to the durable IndexedDB backup so
+    // export still works after a reload (no re-select dance needed).
+    const file = getSaveFile() ?? (await getOriginalBackupFile())
+    if (!file) {
+      showErrorToast(
+        "Couldn't find your save file to export. Re-select it below.",
+      )
+      return
+    }
     setBusy(true)
     try {
       const r = await exportPendingChanges(file, readAll())
-      clearAll()
+      // Live-document model: Export is a "Save As", not a commit-and-forget.
+      // The edits stay applied in the planner — only a new upload resets them
+      // (upload.tsx clears pending on import). So we intentionally do NOT
+      // clearAll() here; doing so would snap the views back to the original.
       setOpen(false)
       const parts: string[] = []
       if (r.sold) parts.push(`${r.sold} relic(s) sold`)
@@ -141,7 +158,7 @@ export function PendingExportButton() {
       if (r.vesselsReset) parts.push("vessels reset")
       if (r.presetsReset) parts.push("all loadouts cleared")
       showSuccessToast(
-        `Saved ${r.filename} — ${parts.join(", ") || "no changes"}. Close the game, replace your save with this file, then re-upload here to re-sync the planner.`,
+        `Exported ${r.filename}${parts.length ? ` — ${parts.join(", ")}` : ""}. Your edits stay applied here. Close the game and replace your save with this file to use it in-game; uploading a new save is the only thing that resets the planner.`,
       )
     } catch (err) {
       showErrorToast(
@@ -245,7 +262,7 @@ export function PendingExportButton() {
               )}
             </div>
 
-            {!saveFile && (
+            {!haveSource && (
               <div className="space-y-1 text-sm">
                 <p className="text-muted-foreground">
                   {saveMeta
@@ -274,7 +291,7 @@ export function PendingExportButton() {
               </Button>
               <Button
                 onClick={doExport}
-                disabled={busy || !saveFile}
+                disabled={busy || !haveSource}
                 className="gap-1.5"
               >
                 <Download className="h-4 w-4" />

@@ -31,10 +31,12 @@ import {
 } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 import useAuth from "@/hooks/useAuth"
+import useCustomToast from "@/hooks/useCustomToast"
 import {
   addLoadoutOp,
   removeLoadoutOp,
   usePendingSlot,
+  useReconcileSlotBases,
 } from "@/lib/pendingChanges"
 
 export const Route = createFileRoute("/_layout/loadouts")({
@@ -679,6 +681,17 @@ function AuthLoadouts() {
   )
   const [selectedId, setSelectedId] = useState<string | null>(
     profiles.data?.[0]?.id ?? null,
+  )
+
+  const { showErrorToast } = useCustomToast()
+  // Drop any pending loadout edits whose underlying save was re-uploaded (here
+  // or on another device) since they were made — index-based ops would mis-fire.
+  useReconcileSlotBases(
+    (profiles.data ?? []).map((p) => ({ slot: p.slot_index, id: p.id })),
+    (slots) =>
+      showErrorToast(
+        `Cleared unsynced edits for slot ${slots.join(", ")} — this save was re-uploaded since you made them.`,
+      ),
   )
 
   if (!profiles.data?.length) {

@@ -7,11 +7,13 @@
  * written to disk until the user exports. Every edit (sell/bookmark a relic,
  * add/delete/rename/overwrite a loadout, reset vessels/loadouts) lives here.
  *
- * Keyed by save-slot index (the selected profile). Backed by sessionStorage so it
- * survives SPA navigation (the save File itself is held separately in saveFile.ts
- * and is re-selected after a full reload).
+ * Keyed by save-slot index (the selected profile). Backed by localStorage so the
+ * diff survives SPA navigation, tab close, and browser restart — only a new save
+ * upload (or explicit discard) resets it. It is never sent to a server, so it does
+ * NOT follow the account to another device. The save File itself is held separately
+ * in saveFile.ts (in-memory) with a durable copy in saveBackup.ts (IndexedDB).
  */
-import { useSyncExternalStore } from "react"
+import { useEffect, useRef, useSyncExternalStore } from "react"
 
 export type PendingLoadoutOp =
   | {
@@ -54,6 +56,10 @@ export type SlotPending = {
   // Label cache keyed by ga_handle (relic name / murk value) for the change log.
   // Purely cosmetic; pruned to the handles still referenced by sells/favorites.
   meta: Record<number, RelicMeta>
+  // Identity (profile.id) of the save these edits were computed against. Profile
+  // rows are recreated on every re-upload, so a changed id means the underlying
+  // save was replaced (here or on another device) and the diff is stale.
+  baseId?: string
 }
 
 type State = Record<number, SlotPending>
@@ -66,7 +72,7 @@ function emptySlot(): SlotPending {
 
 function load(): State {
   try {
-    const raw = sessionStorage.getItem(STORAGE_KEY)
+    const raw = localStorage.getItem(STORAGE_KEY)
     if (!raw) return {}
     const parsed = JSON.parse(raw) as State
     // Normalize so every slot has the full shape (sessions saved before `meta`
@@ -84,9 +90,27 @@ function load(): State {
 let state: State = load()
 const listeners = new Set<() => void>()
 
+// localStorage is shared across tabs, but each tab keeps its own in-memory
+// `state`. Without this, a write in tab B would be invisible to tab A, and tab A's
+// next persist would clobber it. The `storage` event fires only in *other* tabs,
+// so reload the diff and re-render when another tab changes it. (sessionStorage was
+// per-tab and never needed this.)
+if (typeof window !== "undefined") {
+  window.addEventListener("storage", (e) => {
+    if (e.key !== STORAGE_KEY) return
+    state = load()
+    for (const l of listeners) l()
+  })
+}
+
+// The profile identity each slot's diff was last stamped against, captured when
+// the inventory/loadouts for that slot loads. Not persisted — it's rebuilt from
+// the server's current profiles each session and only used to stamp new edits.
+const currentBaseBySlot = new Map<number, string>()
+
 function persist() {
   try {
-    sessionStorage.setItem(STORAGE_KEY, JSON.stringify(state))
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state))
   } catch {
     /* ignore quota / disabled storage */
   }
@@ -122,7 +146,13 @@ function pruneMeta(s: SlotPending): SlotPending {
 }
 
 function updateSlot(slot: number, fn: (s: SlotPending) => SlotPending) {
-  const next = { ...state, [slot]: pruneMeta(fn(getSlot(state, slot))) }
+  const base = getSlot(state, slot)
+  const updated = pruneMeta(fn(base))
+  // Stamp the profile identity this edit was made against (keep an existing
+  // stamp; otherwise take the slot's current one) so a later re-upload can be
+  // detected as stale. See noteSlotBase.
+  updated.baseId = base.baseId ?? currentBaseBySlot.get(slot)
+  const next = { ...state, [slot]: updated }
   // Drop the slot entry entirely if it became empty (keeps counts clean).
   const s = next[slot]
   if (
@@ -209,6 +239,31 @@ export function clearAll() {
   setState({})
 }
 
+/**
+ * Record the profile identity currently loaded for a slot and reconcile any
+ * existing diff against it. Returns true iff a stale diff was cleared.
+ *
+ * - No diff for the slot: just remember the id (future edits stamp with it).
+ * - Diff with no stamp (legacy/pre-feature): adopt the current id as its base.
+ * - Diff stamped against a different id: the save was re-uploaded (here or on
+ *   another device) since the edits were made, so index-based loadout ops would
+ *   mis-fire against a changed save — discard the whole slot.
+ */
+export function noteSlotBase(slot: number, currentId: string): boolean {
+  currentBaseBySlot.set(slot, currentId)
+  const s = state[slot]
+  if (!s) return false
+  if (s.baseId == null) {
+    setState({ ...state, [slot]: { ...s, baseId: currentId } })
+    return false
+  }
+  if (s.baseId !== currentId) {
+    clearSlot(slot)
+    return true
+  }
+  return false
+}
+
 // --- selectors / hooks -----------------------------------------------------
 
 /** Reactive snapshot of one slot's pending changes. */
@@ -220,6 +275,31 @@ export function usePendingSlot(slot: number | null | undefined): SlotPending {
 /** Reactive snapshot of the whole diff across all slots (for the change log). */
 export function usePendingAll(): State {
   return useSyncExternalStore(subscribe, () => state)
+}
+
+/**
+ * Reconcile pending diffs against the currently-loaded profiles. Re-runs only
+ * when the set of (slot, profile id) pairs changes. Calls onStale with the slot
+ * indexes whose edits were discarded because their save was re-uploaded.
+ */
+export function useReconcileSlotBases(
+  bases: Array<{ slot: number; id: string }>,
+  onStale?: (slots: number[]) => void,
+): void {
+  // `bases`/`onStale` are fresh every render, so the effect runs each render; the
+  // lastKey guard makes it a cheap no-op until the (slot, profile id) set actually
+  // changes — i.e. real work happens once per save (re)load, not per render.
+  const lastKey = useRef<string | null>(null)
+  useEffect(() => {
+    const key = bases.map((b) => `${b.slot}:${b.id}`).join(",")
+    if (key === lastKey.current) return
+    lastKey.current = key
+    const cleared: number[] = []
+    for (const b of bases) {
+      if (noteSlotBase(b.slot, b.id)) cleared.push(b.slot)
+    }
+    if (cleared.length) onStale?.(cleared)
+  }, [bases, onStale])
 }
 
 /** Non-reactive read of a slot (for export handlers). */
