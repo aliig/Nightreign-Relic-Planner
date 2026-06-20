@@ -56,6 +56,16 @@
   "mode": "multiplicative",
   "unit": "%"
  },
+ "330000": {
+  "value": 1.05,
+  "mode": "multiplicative",
+  "unit": "%"
+ },
+ "330400": {
+  "value": 1.05,
+  "mode": "multiplicative",
+  "unit": "%"
+ },
  "340000": {
   "value": 0.1,
   "mode": "multiplicative_reduction",
@@ -80,6 +90,11 @@
   "value": 0.1,
   "mode": "multiplicative_reduction",
   "unit": "Holy Negation"
+ },
+ "340500": {
+  "value": 0.06,
+  "mode": "multiplicative_reduction",
+  "unit": "Affinity Negation"
  },
  "340800": {
   "value": 0.16,
@@ -968,6 +983,11 @@
   "mode": "multiplicative_reduction",
   "unit": "Holy Negation"
  },
+ "8200500": {
+  "value": 0.06,
+  "mode": "multiplicative_reduction",
+  "unit": "Affinity Negation"
+ },
  "8210000": {
   "value": 75,
   "mode": "additive_flat",
@@ -1074,6 +1094,16 @@
   "unit": "Resistance"
  },
  "8320500": {
+  "value": 1.05,
+  "mode": "multiplicative",
+  "unit": "%"
+ },
+ "8330000": {
+  "value": 1.05,
+  "mode": "multiplicative",
+  "unit": "%"
+ },
+ "8330100": {
   "value": 1.05,
   "mode": "multiplicative",
   "unit": "%"
