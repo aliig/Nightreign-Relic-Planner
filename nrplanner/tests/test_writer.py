@@ -17,6 +17,8 @@ from nrplanner.models import RelicInventory
 from nrplanner.save import _parse_items
 from nrplanner.vessel import LoadoutHandler
 from nrplanner.writer import (
+    AddCapacityError,
+    add_relics,
     delete_relics,
     patch_slot_checksum,
     read_favorite_handles,
@@ -230,3 +232,73 @@ class TestRoundTrip:
     def test_repack_rejects_wrong_size(self, raw_save, userdata):
         with pytest.raises(ValueError):
             repack_sl2(raw_save, {0: userdata + b"\x00"})
+
+
+def _ghost_relics(blob: bytes):
+    """Ghost relic records: full 80-byte Layer-1 relics with no ItemEntry row."""
+    from nrplanner.constants import ITEM_TYPE_RELIC
+    from nrplanner.save import _parse_active_handles
+
+    items, items_end = _parse_items(blob, start_offset=0x14, slot_count=5120)
+    active = _parse_active_handles(blob, items_end)
+    return [
+        it for it in items
+        if (it.gaitem_handle & 0xF0000000) == ITEM_TYPE_RELIC
+        and it.size == 80 and it.gaitem_handle not in active
+    ]
+
+
+@requires_fixture
+class TestAddRelics:
+    def test_add_cloned_relic_full_roundtrip(self, raw_save, userdata):
+        ghosts = _ghost_relics(userdata)
+        if not ghosts:
+            pytest.skip("fixture save has no ghost records to resurrect")
+
+        # Clone an owned relic's raw 80-byte record as realistic input.
+        before_relics, _ = parse_relics(userdata)
+        source = next(r for r in before_relics if r.size == 80)
+        record = userdata[source.offset:source.offset + 80]
+        count_before = _read_entry_count(userdata)
+
+        new_blob, result = add_relics(userdata, [record])
+
+        assert len(new_blob) == len(userdata)
+        assert result.entry_count_before == count_before
+        assert result.entry_count_after == count_before + 1
+        new_handle = result.added_handles[0]
+        assert new_handle == ghosts[0].gaitem_handle
+        assert new_handle != source.ga_handle
+
+        # Survives a full repack/re-decrypt.
+        repacked = repack_sl2(raw_save, {0: new_blob})
+        rt_blob = _decrypt_blob(repacked)
+        after_relics, _ = parse_relics(rt_blob)
+        after_by_handle = {r.ga_handle: r for r in after_relics}
+
+        assert len(after_relics) == len(before_relics) + 1
+        added = after_by_handle[new_handle]
+        # Content identical to the source relic; only the handle differs.
+        assert (added.item_id, added.effect_1, added.effect_2, added.effect_3,
+                added.sec_effect1, added.sec_effect2, added.sec_effect3) == (
+            source.item_id, source.effect_1, source.effect_2, source.effect_3,
+            source.sec_effect1, source.sec_effect2, source.sec_effect3)
+        # Every pre-existing relic untouched.
+        for r in before_relics:
+            assert r.ga_handle in after_by_handle
+        assert _read_entry_count(rt_blob) == count_before + 1
+
+    def test_add_beyond_ghost_capacity_raises(self, userdata):
+        ghosts = _ghost_relics(userdata)
+        relics, _ = parse_relics(userdata)
+        record = userdata[relics[0].offset:relics[0].offset + 80]
+        with pytest.raises(AddCapacityError):
+            add_relics(userdata, [record] * (len(ghosts) + 1))
+
+    def test_add_rejects_malformed_records(self, userdata):
+        relics, _ = parse_relics(userdata)
+        record = userdata[relics[0].offset:relics[0].offset + 80]
+        with pytest.raises(ValueError):
+            add_relics(userdata, [record[:79]])  # wrong length
+        with pytest.raises(ValueError):
+            add_relics(userdata, [b"\x00" * 80])  # not a relic handle

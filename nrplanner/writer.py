@@ -1,5 +1,5 @@
 """
-Save file write-back: delete relics, credit Murk, repack/re-encrypt a .sl2.
+Save file write-back: delete/add relics, credit Murk, repack/re-encrypt a .sl2.
 
 This is the inverse of the read path in ``save.py``. The binary layout and
 offset math here are deliberately kept consistent with ``save.py`` (which is
@@ -34,6 +34,7 @@ from nrplanner.save import (
     _ITEM_ENTRY_SIZE,
     _ITEM_ENTRY_SLOT_COUNT,
     _IV_SIZE,
+    _parse_active_handles,
     _parse_items,
 )
 
@@ -59,6 +60,19 @@ class FavoriteResult:
     """Outcome of a set_favorites call."""
     changed_handles: list[int] = field(default_factory=list)
     not_found_handles: list[int] = field(default_factory=list)
+
+
+@dataclass
+class AddResult:
+    """Outcome of an add_relics call."""
+    added_handles: list[int] = field(default_factory=list)  # per input record
+    entry_count_before: int = 0
+    entry_count_after: int = 0
+    ghosts_available: int = 0
+
+
+class AddCapacityError(ValueError):
+    """Not enough reusable ghost records / free ItemEntry slots for the add."""
 
 
 @dataclass
@@ -234,6 +248,94 @@ def delete_relics(blob: bytes, ga_handles, murk_credit: int = 0) -> tuple[bytes,
 
     result.removed_handles = sorted(matched)
     return bytes(new_data), result
+
+
+_RELIC_STATE_SIZE = 80  # full relic ItemState record (see save.Item.from_bytes)
+
+
+def add_relics(blob: bytes, records) -> tuple[bytes, AddResult]:
+    """Add relics by resurrecting ghost ItemState records. Fully in-place.
+
+    ``records`` is an iterable of raw 80-byte relic ItemState records (e.g.
+    sliced from another save via RawRelic.offset/size). Unknown fields
+    (durability, unk_1, padding, unk_2) are preserved byte-for-byte; only the
+    leading ga_handle is rewritten.
+
+    Why ghosts: the blob has no spare bytes before its trailer, so the
+    ItemState region cannot grow. Instead each new relic overwrites a *ghost*
+    — a full 80-byte relic record left in Layer 1 (ItemState) with no Layer 2
+    (ItemEntry) row, i.e. an abandoned run-session item. We keep the ghost's
+    game-allocated ga_handle (so the game's handle counter is already past it)
+    and activate it by writing a fresh ItemEntry row. Zero bytes move — this
+    is strictly more conservative than delete_relics, which shifts the tail.
+
+    Raises AddCapacityError if there are fewer ghosts (or free ItemEntry
+    slots) than records, and ValueError on a malformed input record.
+    """
+    records = list(records)
+    for i, rec in enumerate(records):
+        if len(rec) != _RELIC_STATE_SIZE:
+            raise ValueError(
+                f"record #{i} is {len(rec)} bytes; expected {_RELIC_STATE_SIZE}")
+        handle = struct.unpack_from("<I", rec, 0)[0]
+        if (handle & 0xF0000000) != ITEM_TYPE_RELIC:
+            raise ValueError(f"record #{i} is not a relic record (handle 0x{handle:08X})")
+
+    data = bytearray(blob)
+    result = AddResult()
+
+    items, items_end = _parse_items(data, start_offset=0x14, slot_count=5120)
+    active = _parse_active_handles(data, items_end)
+
+    ghosts = [
+        item for item in items
+        if (item.gaitem_handle & 0xF0000000) == ITEM_TYPE_RELIC
+        and item.size == _RELIC_STATE_SIZE
+        and item.gaitem_handle not in active
+    ]
+    result.ghosts_available = len(ghosts)
+    if len(records) > len(ghosts):
+        raise AddCapacityError(
+            f"need {len(records)} reusable ghost records, save has {len(ghosts)}")
+
+    # --- ItemEntry table: free slots + acquisition_id watermark -------------
+    count_off = items_end + _ENTRY_COUNT_REL_OFFSET
+    entries_start = count_off + 4
+    free_slots: list[int] = []
+    max_acq = 0
+    for i in range(_ITEM_ENTRY_SLOT_COUNT):
+        off = entries_start + i * _ITEM_ENTRY_SIZE
+        if off + _ITEM_ENTRY_SIZE > len(data):
+            break
+        handle, _, acq = struct.unpack_from("<III", data, off)
+        if handle == 0:
+            free_slots.append(off)
+        else:
+            max_acq = max(max_acq, acq)
+    if len(records) > len(free_slots):
+        raise AddCapacityError(
+            f"need {len(records)} free ItemEntry slots, save has {len(free_slots)}")
+
+    # --- overwrite ghosts + activate, one record at a time ------------------
+    for i, rec in enumerate(records):
+        ghost = ghosts[i]
+        patched = bytearray(rec)
+        struct.pack_into("<I", patched, 0, ghost.gaitem_handle)
+        data[ghost.offset:ghost.offset + _RELIC_STATE_SIZE] = patched
+
+        # ItemEntry row: amount=1, next acquisition ordinal, not favorite/new.
+        struct.pack_into("<IIIBB", data, free_slots[i],
+                         ghost.gaitem_handle, 1, max_acq + 1 + i, 0, 0)
+        result.added_handles.append(ghost.gaitem_handle)
+
+    entry_count_before = struct.unpack_from("<I", data, count_off)[0]
+    entry_count_after = entry_count_before + len(records)
+    struct.pack_into("<I", data, count_off, entry_count_after)
+    result.entry_count_before = entry_count_before
+    result.entry_count_after = entry_count_after
+
+    assert len(data) == len(blob), f"length changed: {len(blob)} -> {len(data)}"
+    return bytes(data), result
 
 
 def _aes_encrypt(plaintext: bytes, iv: bytes) -> bytes:
