@@ -189,6 +189,12 @@ class Relic(SQLModel, table=True):
         default=False,
         sa_column=Column(Boolean, nullable=False, server_default="false"),
     )
+    # Global "items ever acquired" counter from the save's ItemEntry table;
+    # higher = acquired more recently. NULL for rows persisted before this
+    # column existed (populated on next save upload).
+    acquisition_id: int | None = Field(
+        default=None, sa_column=Column(BigInteger(), nullable=True)
+    )
 
     profile: Optional["Profile"] = Relationship(back_populates="relics")
 
@@ -211,6 +217,7 @@ class RelicPublic(SQLModel):
     tier: str
     is_favorite: bool = False
     equipped: bool = False
+    acquisition_id: int | None = None
 
 
 class RelicsPublic(SQLModel):
@@ -466,6 +473,7 @@ class ParsedRelicData(SQLModel):
     tier: str
     is_favorite: bool = False
     equipped: bool = False
+    acquisition_id: int | None = None
 
 
 class ParsedLoadoutData(SQLModel):

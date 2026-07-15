@@ -66,6 +66,7 @@ function AuthInventoryBody({
         curses: [r.curse_1, r.curse_2, r.curse_3],
         isFavorite: r.is_favorite ?? false,
         equipped: r.equipped ?? false,
+        acquisitionId: r.acquisition_id ?? null,
       })),
     [data.data],
   )
@@ -218,6 +219,7 @@ function AnonInventory() {
       curses: [r.curse_1, r.curse_2, r.curse_3],
       isFavorite: !!r.is_favorite,
       equipped: !!r.equipped,
+      acquisitionId: r.acquisition_id ?? null,
     }))
   }, [profile])
 

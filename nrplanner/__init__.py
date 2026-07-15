@@ -25,6 +25,7 @@ from nrplanner.writer import (
     DeleteResult,
     FavoriteResult,
     delete_relics,
+    read_acquisition_ids,
     read_favorite_handles,
     read_murks,
     repack_sl2,
@@ -64,8 +65,9 @@ __all__ = [
     # Optimizer
     "BuildScorer", "VesselOptimizer",
     # Save write-back
-    "DeleteResult", "FavoriteResult", "delete_relics", "read_favorite_handles",
-    "read_murks", "repack_sl2", "sell_value", "set_favorites",
+    "DeleteResult", "FavoriteResult", "delete_relics", "read_acquisition_ids",
+    "read_favorite_handles", "read_murks", "repack_sl2", "sell_value",
+    "set_favorites",
     # Loadout / vessel write-back
     "PresetRecord", "VesselWriteError", "add_preset", "delete_preset",
     "now_filetime", "overwrite_preset", "parse_presets", "rename_preset",

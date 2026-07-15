@@ -24,6 +24,7 @@ function relic(over: Partial<ManagedRelic>): ManagedRelic {
     curses: [],
     isFavorite: false,
     equipped: false,
+    acquisitionId: null,
     ...over,
   }
 }

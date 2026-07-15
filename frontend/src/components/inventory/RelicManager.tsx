@@ -56,7 +56,14 @@ import {
 } from "./relicFilter"
 import { isUniqueRelic, type ManagedRelic, RELIC_CAP } from "./types"
 
-type UsageSort = "name" | "most" | "least" | "value-high" | "value-low"
+type UsageSort =
+  | "name"
+  | "most"
+  | "least"
+  | "value-high"
+  | "value-low"
+  | "newest"
+  | "oldest"
 
 const SORT_LABELS: Record<UsageSort, string> = {
   name: "Name (A–Z)",
@@ -64,6 +71,8 @@ const SORT_LABELS: Record<UsageSort, string> = {
   least: "Least used",
   "value-high": "Highest value",
   "value-low": "Lowest value",
+  newest: "Newest acquired",
+  oldest: "Oldest acquired",
 }
 
 const STATUS_META: Record<
@@ -181,6 +190,20 @@ export function RelicManager({
       sorted.sort(
         (a, b) => relicValue(a) - relicValue(b) || a.name.localeCompare(b.name),
       )
+    } else if (usageSort === "newest" || usageSort === "oldest") {
+      // acquisitionId is the game's global acquisition counter (higher =
+      // acquired later). Null (pre-column uploads) sorts last either way.
+      const dir = usageSort === "newest" ? -1 : 1
+      sorted.sort((a, b) => {
+        if (a.acquisitionId == null && b.acquisitionId == null)
+          return a.name.localeCompare(b.name)
+        if (a.acquisitionId == null) return 1
+        if (b.acquisitionId == null) return -1
+        return (
+          dir * (a.acquisitionId - b.acquisitionId) ||
+          a.name.localeCompare(b.name)
+        )
+      })
     } else {
       sorted.sort((a, b) => a.name.localeCompare(b.name))
     }
@@ -326,6 +349,12 @@ export function RelicManager({
                   </DropdownMenuRadioItem>
                   <DropdownMenuRadioItem value="value-low">
                     Lowest value
+                  </DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="newest">
+                    Newest acquired
+                  </DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="oldest">
+                    Oldest acquired
                   </DropdownMenuRadioItem>
                 </DropdownMenuRadioGroup>
               </DropdownMenuContent>

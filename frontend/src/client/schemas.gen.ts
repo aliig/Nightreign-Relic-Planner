@@ -1568,6 +1568,17 @@ export const ParsedRelicDataSchema = {
             type: 'boolean',
             title: 'Equipped',
             default: false
+        },
+        acquisition_id: {
+            anyOf: [
+                {
+                    type: 'integer'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Acquisition Id'
         }
     },
     type: 'object',
@@ -1742,6 +1753,17 @@ export const RelicPublicSchema = {
             type: 'boolean',
             title: 'Equipped',
             default: false
+        },
+        acquisition_id: {
+            anyOf: [
+                {
+                    type: 'integer'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Acquisition Id'
         }
     },
     type: 'object',

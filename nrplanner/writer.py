@@ -131,6 +131,29 @@ def read_favorite_handles(data: bytes, items_end_offset: int) -> set[int]:
     return favorites
 
 
+def read_acquisition_ids(data: bytes, items_end_offset: int) -> dict[int, int]:
+    """Return ga_handle -> acquisition_id for every owned item.
+
+    acquisition_id (+0x08 in each ItemEntry record) is a global counter the
+    game increments for every item ever acquired, so a higher value means the
+    item was acquired more recently. Mirrors the table location used by
+    _parse_active_handles. Note: ItemState file-position order does NOT track
+    acquisition order — the game reuses freed slots.
+    """
+    table_offset = items_end_offset + _ENTRY_COUNT_REL_OFFSET
+    entries_start = table_offset + 4  # skip the stored count field
+
+    acquisition_ids: dict[int, int] = {}
+    for i in range(_ITEM_ENTRY_SLOT_COUNT):
+        off = entries_start + i * _ITEM_ENTRY_SIZE
+        if off + _ITEM_ENTRY_SIZE > len(data):
+            break
+        handle, _, acq = struct.unpack_from("<III", data, off)
+        if handle != 0:
+            acquisition_ids[handle] = acq
+    return acquisition_ids
+
+
 def set_favorites(blob: bytes, changes: dict[int, bool]) -> tuple[bytes, FavoriteResult]:
     """Bookmark/unbookmark relics by toggling the ItemEntry is_favorite byte.
 

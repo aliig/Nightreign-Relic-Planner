@@ -53,6 +53,7 @@ from nrplanner import (
     delete_relics,
     overwrite_preset,
     parse_relics,
+    read_acquisition_ids,
     read_favorite_handles,
     read_murks,
     rename_preset,
@@ -396,6 +397,7 @@ def _parse_save_to_profiles(
             # Sell-protection: relics equipped in a loadout/preset or bookmarked
             # in-game cannot be sold.
             favorite_handles = read_favorite_handles(data, items_end)
+            acquisition_ids = read_acquisition_ids(data, items_end)
             murks = read_murks(data, items_end)
             loadout = LoadoutHandler(ds)
             loadout.parse(data)
@@ -418,6 +420,7 @@ def _parse_save_to_profiles(
                     tier=r.tier,
                     is_favorite=r.ga_handle in favorite_handles,
                     equipped=r.ga_handle in equipped_handles,
+                    acquisition_id=acquisition_ids.get(r.ga_handle),
                 )
                 for r in inventory.relics
             ]
@@ -573,6 +576,7 @@ async def upload_save(
                 tier=r.tier,
                 is_favorite=r.is_favorite,
                 equipped=r.equipped,
+                acquisition_id=r.acquisition_id,
             ))
 
         # Attach DB id to response data
@@ -832,6 +836,7 @@ async def upload_save_stream(
                 tier=r.tier,
                 is_favorite=r.is_favorite,
                 equipped=r.equipped,
+                acquisition_id=r.acquisition_id,
             ))
 
         prof_data.id = profile.id

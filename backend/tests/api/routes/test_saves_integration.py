@@ -50,6 +50,12 @@ def test_upload_real_sl2_anonymous(client: TestClient) -> None:
             assert isinstance(relic["effect_1"], int)
             assert isinstance(relic["effect_2"], int)
             assert isinstance(relic["effect_3"], int)
+        # Every owned relic has an ItemEntry row, so acquisition_id must be a
+        # unique positive int for all of them (it drives the inventory's
+        # newest/oldest-acquired sort).
+        acq_ids = [r["acquisition_id"] for r in prof["relics"]]
+        assert all(isinstance(a, int) and a > 0 for a in acq_ids)
+        assert len(set(acq_ids)) == len(acq_ids)
 
 
 @pytest.mark.skipif(
@@ -58,7 +64,7 @@ def test_upload_real_sl2_anonymous(client: TestClient) -> None:
 )
 @pytest.mark.usefixtures("override_game_data")
 def test_upload_real_sl2_authenticated(
-    client: TestClient, superuser_token_headers: dict[str, str]
+    client: TestClient, superuser_token_headers: dict[str, str], db: Session
 ) -> None:
     """Authenticated upload with real fixture — data is persisted to DB."""
     with FIXTURE_PATH.open("rb") as f:
@@ -72,6 +78,15 @@ def test_upload_real_sl2_authenticated(
     data = response.json()
     assert data["persisted"] is True
     assert data["save_upload_id"] is not None
+
+    # acquisition_id must survive persistence (not just the parse response).
+    from app.models import Relic
+
+    relics = db.exec(select(Relic)).all()
+    assert relics
+    assert all(
+        r.acquisition_id is not None and r.acquisition_id > 0 for r in relics
+    )
 
 
 @pytest.mark.skipif(

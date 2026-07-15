@@ -372,6 +372,7 @@ export type ParsedRelicData = {
     tier: string;
     is_favorite?: boolean;
     equipped?: boolean;
+    acquisition_id?: (number | null);
 };
 
 export type PrivateUserCreate = {
@@ -420,6 +421,7 @@ export type RelicPublic = {
     tier: string;
     is_favorite?: boolean;
     equipped?: boolean;
+    acquisition_id?: (number | null);
 };
 
 /**

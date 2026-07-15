@@ -18,6 +18,9 @@ export type ManagedRelic = {
   curses: number[]
   isFavorite: boolean
   equipped: boolean
+  /** In-game acquisition counter (higher = acquired later). Null for relics
+   *  persisted before the field existed — populated on next save upload. */
+  acquisitionId: number | null
 }
 
 /**
