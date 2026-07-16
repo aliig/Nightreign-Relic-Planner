@@ -92,6 +92,12 @@ class SaveUpload(SQLModel, table=True):
         sa_type=DateTime(timezone=True),  # type: ignore
     )
     profile_count: int = 0
+    # SteamID64 (decimal string) of the account that owns the uploaded save,
+    # read from the save's fixed profile anchor. Used to detect when a newly
+    # uploaded save belongs to a DIFFERENT account than the previous upload, so
+    # the save-to-save comparison isn't run across unrelated profiles. NULL when
+    # unknown (PS4 saves, pre-column rows, or an unreadable anchor).
+    save_owner_id: str | None = Field(default=None, max_length=32)
 
     owner: Optional["User"] = Relationship(back_populates="save_uploads")
     profiles: list["Profile"] = Relationship(

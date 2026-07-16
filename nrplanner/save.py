@@ -357,3 +357,74 @@ def discover_characters(decrypted_dir: str | Path,
         except Exception as e:
             print(f"Error reading {file_path}: {e}")
     return results
+
+
+# --- Steam account identity -------------------------------------------------
+# An individual SteamID64 is 0x0110000100000000 + account_id, so a valid one
+# falls in a fixed range and its upper 4 bytes are always 01 00 10 01
+# little-endian (a cheap scan marker). The owning account's ID is recorded at a
+# fixed offset in the profile/menu entry (USERDATA_10 @ 0x8) — the one place
+# that unambiguously identifies the save's owner rather than a co-op partner
+# whose ID may also appear elsewhere in the save.
+#
+# This is the canonical home for Steam-ID save logic; scripts (e.g.
+# scripts/transfer_save.py) consume these helpers rather than re-deriving them.
+STEAM_ID_BASE = 0x0110000100000000
+STEAM_ID_MAX = STEAM_ID_BASE + 0xFFFFFFFF
+STEAM_ID_MARKER = b"\x01\x00\x10\x01"  # upper 4 bytes of an individual SteamID64
+PROFILE_ENTRY_INDEX = 10  # USERDATA_10 — the profile/menu entry
+PROFILE_ENTRY_FILE = "USERDATA_10"
+PROFILE_ID_OFFSET = 0x8
+
+
+def is_steam_id(value: int) -> bool:
+    """True if value is a plausible individual SteamID64."""
+    return STEAM_ID_BASE <= value <= STEAM_ID_MAX
+
+
+def find_steam_ids(blob: bytes) -> list[tuple[int, int]]:
+    """Return [(offset, steam_id)] for every SteamID64 in a decrypted blob."""
+    hits: list[tuple[int, int]] = []
+    pos = blob.find(STEAM_ID_MARKER, 4)
+    while pos != -1:
+        start = pos - 4  # the marker is the u64's upper half
+        value = struct.unpack_from("<Q", blob, start)[0]
+        if is_steam_id(value):
+            hits.append((start, value))
+        pos = blob.find(STEAM_ID_MARKER, pos + 1)
+    return hits
+
+
+def owner_steam_id_from_blob(profile_blob: bytes) -> int | None:
+    """Owner SteamID64 from a profile/menu entry (USERDATA_10) blob.
+
+    Reads the fixed profile anchor rather than sweeping the blob, so co-op
+    partners' IDs are never mistaken for the owner's. Returns None when the blob
+    is too short or the value there isn't a plausible SteamID64.
+    """
+    if len(profile_blob) < PROFILE_ID_OFFSET + 8:
+        return None
+    value = struct.unpack_from("<Q", profile_blob, PROFILE_ID_OFFSET)[0]
+    return value if is_steam_id(value) else None
+
+
+def read_owner_steam_id(decrypted_dir: str | Path, mode: str = "PC") -> str | None:
+    """Read the owning account's SteamID64 from a decrypted save directory.
+
+    Returns the ID as a decimal string, or None when it can't be determined:
+    PS4 saves (no SteamID64), a missing/short profile entry, or a value that
+    isn't a plausible SteamID64. Callers use this only to tell whether two
+    uploads came from the same account, so an unknown owner (None) is handled
+    gracefully rather than raised.
+    """
+    if mode != "PC":
+        return None  # PS4 memory.dat uses a PSN account, not a SteamID64
+    profile_path = Path(decrypted_dir) / PROFILE_ENTRY_FILE
+    if not profile_path.exists():
+        return None
+    try:
+        blob = profile_path.read_bytes()
+    except OSError:
+        return None
+    value = owner_steam_id_from_blob(blob)
+    return str(value) if value is not None else None

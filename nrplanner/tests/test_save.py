@@ -20,7 +20,17 @@ import pytest
 from nrplanner import SourceDataHandler, decrypt_sl2, parse_relics
 from nrplanner.constants import ITEM_TYPE_RELIC
 from nrplanner.models import RelicInventory
-from nrplanner.save import _parse_active_handles, _parse_items
+from nrplanner.save import (
+    PROFILE_ENTRY_FILE,
+    PROFILE_ID_OFFSET,
+    STEAM_ID_BASE,
+    STEAM_ID_MAX,
+    _parse_active_handles,
+    _parse_items,
+    is_steam_id,
+    owner_steam_id_from_blob,
+    read_owner_steam_id,
+)
 
 FIXTURE_PATH = (
     Path(__file__).parent.parent.parent
@@ -132,3 +142,62 @@ class TestPhantomRelicFilter:
             f"Active handle count ({len(active)}) diverges too far from "
             f"stored count ({stored_count})"
         )
+
+
+class TestOwnerSteamId:
+    """The owning-account SteamID64 reader used to tell whether two save
+    uploads came from the same account (drives the save-to-save comparison)."""
+
+    VALID_SID = 76561198039949473  # the real fixture account
+
+    @staticmethod
+    def _profile_blob(value: int, *, length: int = 64) -> bytes:
+        """A USERDATA_10-shaped blob with ``value`` packed at the owner anchor."""
+        buf = bytearray(length)
+        struct.pack_into("<Q", buf, PROFILE_ID_OFFSET, value)
+        return bytes(buf)
+
+    def test_is_steam_id_bounds(self) -> None:
+        assert is_steam_id(STEAM_ID_BASE)
+        assert is_steam_id(STEAM_ID_MAX)
+        assert is_steam_id(self.VALID_SID)
+        assert not is_steam_id(STEAM_ID_BASE - 1)
+        assert not is_steam_id(STEAM_ID_MAX + 1)
+        assert not is_steam_id(0)
+        assert not is_steam_id(12345)
+
+    def test_owner_from_blob_valid(self) -> None:
+        assert owner_steam_id_from_blob(self._profile_blob(self.VALID_SID)) == self.VALID_SID
+
+    def test_owner_from_blob_too_short(self) -> None:
+        assert owner_steam_id_from_blob(b"\x00" * (PROFILE_ID_OFFSET + 4)) is None
+
+    def test_owner_from_blob_non_steam_value(self) -> None:
+        assert owner_steam_id_from_blob(self._profile_blob(42)) is None
+
+    def test_read_ps4_is_none(self, tmp_path) -> None:
+        # PS4 memory.dat uses a PSN account, not a SteamID64.
+        (tmp_path / PROFILE_ENTRY_FILE).write_bytes(self._profile_blob(self.VALID_SID))
+        assert read_owner_steam_id(tmp_path, mode="PS4") is None
+
+    def test_read_missing_profile_entry(self, tmp_path) -> None:
+        assert read_owner_steam_id(tmp_path, mode="PC") is None
+
+    def test_read_reads_profile_entry_as_string(self, tmp_path) -> None:
+        (tmp_path / PROFILE_ENTRY_FILE).write_bytes(self._profile_blob(self.VALID_SID))
+        assert read_owner_steam_id(tmp_path, mode="PC") == str(self.VALID_SID)
+
+    def test_read_non_steam_value_is_none(self, tmp_path) -> None:
+        (tmp_path / PROFILE_ENTRY_FILE).write_bytes(self._profile_blob(7))
+        assert read_owner_steam_id(tmp_path, mode="PC") is None
+
+
+@pytest.mark.skipif(
+    not FIXTURE_PATH.exists(),
+    reason="Real save fixture not present — copy NR0000.sl2 to backend/tests/fixtures/",
+)
+def test_read_owner_steam_id_real_fixture() -> None:
+    """The reader recovers the real fixture account's SteamID64 end-to-end."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        decrypt_sl2(FIXTURE_PATH, tmpdir)
+        assert read_owner_steam_id(tmpdir, mode="PC") == "76561198039949473"

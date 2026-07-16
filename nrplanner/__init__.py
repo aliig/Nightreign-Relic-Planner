@@ -7,6 +7,7 @@ from nrplanner.save import (
     parse_relics,
     read_char_name,
     discover_characters,
+    read_owner_steam_id,
 )
 from nrplanner.data import SourceDataHandler
 from nrplanner.checker import RelicChecker, InvalidReason, is_curse_invalid
@@ -49,6 +50,7 @@ __all__ = [
     # Save parsing
     "RawRelic", "decrypt_sl2", "split_memory_dat",
     "parse_relics", "read_char_name", "discover_characters",
+    "read_owner_steam_id",
     # Game data
     "SourceDataHandler",
     # Validation

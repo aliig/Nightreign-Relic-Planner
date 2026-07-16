@@ -57,23 +57,17 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from nrplanner.save import decrypt_sl2
+from nrplanner.save import (
+    PROFILE_ENTRY_INDEX,
+    decrypt_sl2,
+    find_steam_ids,
+    is_steam_id,
+    owner_steam_id_from_blob,
+)
 from nrplanner.writer import patch_slot_checksum, repack_sl2
 
-# Upper 4 bytes of a little-endian individual SteamID64 (0x0110000100000000).
-_STEAM_ID_MARKER = b"\x01\x00\x10\x01"
-_STEAM_ID_BASE = 0x0110000100000000
-_STEAM_ID_MAX = _STEAM_ID_BASE + 0xFFFFFFFF
-
-# The profile/menu entry records the owning account at a fixed offset. This is
-# the anchor that distinguishes the owner from co-op partners' IDs elsewhere.
-_PROFILE_ENTRY = 10
-_PROFILE_ID_OFFSET = 0x8
-
-
-def is_steam_id(value: int) -> bool:
-    """True if value is a plausible individual SteamID64."""
-    return _STEAM_ID_BASE <= value <= _STEAM_ID_MAX
+# Steam-ID save logic (constants, scanning, and the owner anchor) lives in
+# nrplanner.save so the library and this script share one source of truth.
 
 
 def decrypt_blobs(sl2_path: Path) -> dict[int, bytes]:
@@ -86,19 +80,6 @@ def decrypt_blobs(sl2_path: Path) -> dict[int, bytes]:
     if not blobs:
         raise ValueError(f"No USERDATA entries decrypted from {sl2_path}.")
     return blobs
-
-
-def find_steam_ids(blob: bytes) -> list[tuple[int, int]]:
-    """Return [(offset, steam_id)] for every SteamID64 in a decrypted blob."""
-    hits = []
-    pos = blob.find(_STEAM_ID_MARKER, 4)
-    while pos != -1:
-        start = pos - 4  # the marker is the u64's upper half
-        value = struct.unpack_from("<Q", blob, start)[0]
-        if is_steam_id(value):
-            hits.append((start, value))
-        pos = blob.find(_STEAM_ID_MARKER, pos + 1)
-    return hits
 
 
 def scan(blobs: dict[int, bytes]) -> dict[int, list[tuple[int, int]]]:
@@ -117,19 +98,16 @@ def owner_id(blobs: dict[int, bytes], label: str) -> int:
     Read from the fixed profile anchor rather than inferred from a sweep: a save
     legitimately contains co-op partners' IDs too, and only this one is the owner.
     """
-    blob = blobs.get(_PROFILE_ENTRY)
+    blob = blobs.get(PROFILE_ENTRY_INDEX)
     if blob is None:
         raise ValueError(
-            f"{label}: no USERDATA_{_PROFILE_ENTRY:02d} entry -- "
+            f"{label}: no USERDATA_{PROFILE_ENTRY_INDEX:02d} entry -- "
             "is this a Nightreign .sl2?"
         )
-    if len(blob) < _PROFILE_ID_OFFSET + 8:
-        raise ValueError(f"{label}: profile entry too short to hold a Steam ID.")
-
-    value = struct.unpack_from("<Q", blob, _PROFILE_ID_OFFSET)[0]
-    if not is_steam_id(value):
+    value = owner_steam_id_from_blob(blob)
+    if value is None:
         raise ValueError(
-            f"{label}: value at the profile anchor ({value}) is not a SteamID64. "
+            f"{label}: the profile anchor does not hold a SteamID64. "
             "This may not be a Nightreign save."
         )
     return value

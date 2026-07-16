@@ -56,6 +56,7 @@ from nrplanner import (
     read_acquisition_ids,
     read_favorite_handles,
     read_murks,
+    read_owner_steam_id,
     rename_preset,
     repack_sl2,
     reset_all_presets,
@@ -158,6 +159,21 @@ def _build_def_for_relevance(build: Build) -> BuildDefinition:
         required_effects=build.required_effects or [],
         required_families=build.required_families or [],
     )
+
+
+def _same_account(old_owner_id: str | None, new_owner_id: str | None) -> bool:
+    """Whether two uploads can be treated as the SAME game account.
+
+    The save-to-save comparison ("changes since last save") is only meaningful
+    within one account — comparing slot N of account A against slot N of account
+    B is nonsense. We only suppress the comparison when we can PROVE the accounts
+    differ (both owner IDs known and unequal). If either ID is unknown (PS4
+    saves, pre-column rows, or an unreadable anchor) we fall back to comparing,
+    so an unknown owner never hides a legitimate change.
+    """
+    if old_owner_id is None or new_owner_id is None:
+        return True
+    return old_owner_id == new_owner_id
 
 
 def _compute_relic_delta(
@@ -349,8 +365,13 @@ def _parse_save_to_profiles(
     filename: str,
     ds: Any,
     items_json: dict,
-) -> tuple[str, list[ParsedProfileData]]:
-    """Decrypt/split save, parse all character slots, return (platform, profiles)."""
+) -> tuple[str, str | None, list[ParsedProfileData]]:
+    """Decrypt/split save, parse all slots.
+
+    Returns (platform, owner_steam_id, profiles). owner_steam_id is the
+    SteamID64 (decimal string) of the account that owns the save, or None when
+    it can't be read (PS4 saves, unreadable anchor).
+    """
     platform = _detect_platform(filename)
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -385,6 +406,8 @@ def _parse_save_to_profiles(
                 status_code=422,
                 detail="No characters found in save file.",
             )
+
+        owner_steam_id = read_owner_steam_id(decrypt_dir, mode=platform)
 
         profiles: list[ParsedProfileData] = []
         for char_name, userdata_path in char_paths:
@@ -442,7 +465,7 @@ def _parse_save_to_profiles(
                 )
             )
 
-    return platform, profiles
+    return platform, owner_steam_id, profiles
 
 
 @router.post("/upload", response_model=UploadResponse)
@@ -472,7 +495,7 @@ async def upload_save(
         )
     items_json = get_items_json()
     # CPU-bound (AES decrypt + binary parse) — keep it off the event loop.
-    platform, profiles = await run_in_threadpool(
+    platform, owner_steam_id, profiles = await run_in_threadpool(
         _parse_save_to_profiles, file_bytes, file.filename, ds, items_json
     )
 
@@ -484,6 +507,16 @@ async def upload_save(
             profiles=profiles,
             persisted=False,
         )
+
+    # The save-to-save comparison only makes sense within one game account.
+    # Detect whether this upload belongs to the same account as the previous one
+    # (there is at most one SaveUpload per user); read the old owner id before it
+    # is deleted below. When we can prove the account differs, the comparison is
+    # suppressed rather than run across unrelated profiles.
+    old_owner_id = session.exec(
+        select(SaveUpload.save_owner_id).where(SaveUpload.owner_id == current_user.id)
+    ).first()
+    same_account = _same_account(old_owner_id, owner_steam_id)
 
     # Remap pinned relic handles in the user's builds before old data is deleted.
     # ga_handle values are assigned by the game engine and can change between saves
@@ -511,14 +544,17 @@ async def upload_save(
 
         # Cheap save-diff: flag builds whose stored arrangement may have changed
         # (snapshots survive the re-upload — they key on slot_index, not profile).
-        old_profiles = session.exec(
-            select(Profile).where(Profile.owner_id == current_user.id)
-        ).all()
-        relic_delta = _compute_relic_delta(list(old_relics), profiles)
-        affected_builds = _flag_affected_snapshots(
-            session, ds, current_user.id, list(old_relics), list(old_profiles),
-            profiles, list(db_builds), handle_remap,
-        )
+        # Only meaningful within one account: a different account's slot N is a
+        # different character, so skip the diff entirely when accounts differ.
+        if same_account:
+            old_profiles = session.exec(
+                select(Profile).where(Profile.owner_id == current_user.id)
+            ).all()
+            relic_delta = _compute_relic_delta(list(old_relics), profiles)
+            affected_builds = _flag_affected_snapshots(
+                session, ds, current_user.id, list(old_relics), list(old_profiles),
+                profiles, list(db_builds), handle_remap,
+            )
 
     # Authenticated — delete old upload and persist fresh data
     old_uploads = session.exec(
@@ -532,6 +568,7 @@ async def upload_save(
         owner_id=current_user.id,
         platform=platform,
         profile_count=len(profiles),
+        save_owner_id=owner_steam_id,
     )
     session.add(save_upload)
     session.flush()  # get the ID before creating children
@@ -743,9 +780,16 @@ async def upload_save_stream(
         )
     items_json = get_items_json()
     # CPU-bound (AES decrypt + binary parse) — keep it off the event loop.
-    platform, profiles = await run_in_threadpool(
+    platform, owner_steam_id, profiles = await run_in_threadpool(
         _parse_save_to_profiles, file_bytes, file.filename, ds, items_json
     )
+
+    # Same-account check (see upload_save): only compare/re-optimize against the
+    # previous upload when we can't prove it belongs to a different account.
+    old_owner_id = session.exec(
+        select(SaveUpload.save_owner_id).where(SaveUpload.owner_id == current_user.id)
+    ).first()
+    same_account = _same_account(old_owner_id, owner_steam_id)
 
     # Compute remap and identify affected builds before persisting
     old_relics = list(session.exec(
@@ -768,14 +812,17 @@ async def upload_save_stream(
                 session.add(build)
         session.flush()
 
-        old_profiles = list(session.exec(
-            select(Profile).where(Profile.owner_id == current_user.id)
-        ).all())
-        relic_delta = _compute_relic_delta(old_relics, profiles)
-        affected = _identify_affected_builds(
-            session, ds, current_user.id, old_relics, old_profiles,
-            profiles, db_builds, handle_remap,
-        )
+        # A different account's slot N is a different character — skip the diff
+        # and the eager re-optimization when accounts differ.
+        if same_account:
+            old_profiles = list(session.exec(
+                select(Profile).where(Profile.owner_id == current_user.id)
+            ).all())
+            relic_delta = _compute_relic_delta(old_relics, profiles)
+            affected = _identify_affected_builds(
+                session, ds, current_user.id, old_relics, old_profiles,
+                profiles, db_builds, handle_remap,
+            )
 
     # Persist fresh data (same as non-streaming upload)
     old_uploads = session.exec(
@@ -789,6 +836,7 @@ async def upload_save_stream(
         owner_id=current_user.id,
         platform=platform,
         profile_count=len(profiles),
+        save_owner_id=owner_steam_id,
     )
     session.add(save_upload)
     session.flush()
