@@ -293,3 +293,81 @@ def test_select_cull_handles_rules_and_protection(ds, wylder_eff):
     # explicitly protected handles are never culled
     prot = select_cull_handles(owned, builds, ds, protected_handles={0xC1000002}, **_OPT)
     assert 0xC1000002 not in prot
+
+
+# ---------------------------------------------------------------------------
+# No builds selected -> rules-only, NO optimizer runs (the hang fix)
+# ---------------------------------------------------------------------------
+
+def test_no_builds_keeps_all_generated(ds):
+    a = _gen([111, EMPTY, EMPTY], color="Red")
+    b = _gen([222, EMPTY, EMPTY], color="Blue")
+    res = bulk_acquire(
+        builds=[], owned=[], current_murk=100_000,
+        buckets=[PurchaseBucket(False, "1.03", 600, quantity=2)],
+        generator=_StubGen([a, b]), ds=ds, storage_cap_left=10, **_OPT,
+    )
+    assert res.generated == 2
+    assert res.kept == 2, "no builds -> keep everything (rules-only, no optimizer)"
+    assert res.duds == 0
+    assert all(k.reason == "kept" for k in res.keepers)
+
+
+def test_no_builds_exclusion_sells_matched(ds):
+    keep = _gen([111, EMPTY, EMPTY], color="Blue")
+    sell = _gen([222, EMPTY, EMPTY], color="Red")   # excluded by color
+    res = bulk_acquire(
+        builds=[], owned=[], current_murk=100_000,
+        buckets=[PurchaseBucket(False, "1.03", 600, quantity=2)],
+        generator=_StubGen([keep, sell]), ds=ds, storage_cap_left=10,
+        exclusion_rules=[{"colors": ["Red"]}], **_OPT,
+    )
+    assert res.kept == 1 and res.duds == 1
+    assert res.keepers[0].relic.color == "Blue"
+
+
+def test_no_builds_inclusion_still_wins(ds):
+    r = _gen([111, EMPTY, EMPTY], color="Red")   # matches both rules
+    res = bulk_acquire(
+        builds=[], owned=[], current_murk=100_000,
+        buckets=[PurchaseBucket(False, "1.03", 600, quantity=1)],
+        generator=_StubGen([r]), ds=ds, storage_cap_left=10,
+        inclusion_rules=[{"colors": ["Red"]}],
+        exclusion_rules=[{"effect_counts": [1]}], **_OPT,
+    )
+    assert res.kept == 1 and res.keepers[0].reason == "inclusion"
+
+
+def test_no_builds_cull_is_exclusion_only(ds):
+    a = _owned([111, EMPTY, EMPTY], color="Red", ga_handle=0xC1000001)
+    b = _owned([222, EMPTY, EMPTY], color="Blue", ga_handle=0xC1000002)
+    owned = [a, b]
+    # no builds + no rules -> nothing culled (no optimizer, no exclusion match)
+    assert select_cull_handles(owned, [], ds, **_OPT) == []
+    # no builds + exclusion -> only the matched relic
+    out = select_cull_handles(owned, [], ds, exclusion_rules=[{"colors": ["Red"]}], **_OPT)
+    assert out == [0xC1000001]
+
+
+def test_progress_callback_fires_per_build(ds, wylder_eff):
+    calls: list[tuple[int, int, str]] = []
+    keeper = _gen([wylder_eff, EMPTY, EMPTY], color="Red")
+    bulk_acquire(
+        builds=[_ctx([wylder_eff], "B1"), _ctx([wylder_eff], "B2")], owned=[],
+        current_murk=100_000,
+        buckets=[PurchaseBucket(False, "1.03", 600, quantity=1)],
+        generator=_StubGen([keeper]), ds=ds, storage_cap_left=10,
+        progress=lambda i, t, name: calls.append((i, t, name)), **_OPT,
+    )
+    assert [c[0] for c in calls] == [1, 2]     # one call per build, in order
+    assert all(c[1] == 2 for c in calls)
+    assert {c[2] for c in calls} == {"B1", "B2"}
+
+
+def test_cull_progress_callback_fires(ds, wylder_eff):
+    calls: list[tuple[int, int, str]] = []
+    owned = [_owned([wylder_eff, EMPTY, EMPTY], color="Red", ga_handle=0xC1000001)]
+    select_cull_handles(
+        owned, [_ctx([wylder_eff], "B1")], ds,
+        progress=lambda i, t, name: calls.append((i, t, name)), **_OPT)
+    assert calls and calls[0] == (1, 1, "B1")

@@ -12,6 +12,7 @@ relics and may represent a generated relic by a content-equal owned copy.
 from __future__ import annotations
 
 import random
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from nrplanner.changes import fingerprint_owned
@@ -205,6 +206,7 @@ def bulk_acquire(*, builds: list[BuildContext], owned: list[OwnedRelic],
                  optimizer: VesselOptimizer | None = None, executor=None,
                  top_n: int = 10, max_per_vessel: int = 3, deadline_secs: float = 6.0,
                  gen_max: int = 8000, max_candidates: int = 500,
+                 progress: Callable[[int, int, str], None] | None = None,
                  rng: random.Random | None = None, seed: int | None = None) -> BulkResult:
     """Bulk-generate purchases, keep only build-relevant relics, refund the rest.
 
@@ -237,67 +239,84 @@ def bulk_acquire(*, builds: list[BuildContext], owned: list[OwnedRelic],
     def refund(o: OwnedRelic) -> int:
         return sell_value(o.effect_count, o.is_deep)
 
-    # 3. classify by rules (waterfall), then pre-filter the build-aware path ------
-    #    inclusion -> force-keep ; exclusion -> sell ; else -> build-aware candidate.
+    # 3. classify (waterfall): inclusion keep > exclusion sell > build-aware/keep --
     owned_fps = {fingerprint_owned(o) for o in owned}
-    force_keep: list[OwnedRelic] = []
-    scored: list[tuple[int, OwnedRelic]] = []
     pre_by_handle: dict[int, int] = {}
-    for o in generated:
-        if relic_matches_rules(o, inclusion_rules):
-            pre_by_handle[o.ga_handle] = max(
-                (scorer.positive_pre_score(o, b.build) for b in builds), default=0)
-            force_keep.append(o)
-            continue
-        if relic_matches_rules(o, exclusion_rules):
-            continue  # explicit "always sell" -> dud
-        if fingerprint_owned(o) in owned_fps:
-            continue  # you already own this content -> dud
-        best_pre = max((scorer.positive_pre_score(o, b.build) for b in builds), default=0)
-        if best_pre <= 0:
-            continue  # cannot help any build -> dud
-        pre_by_handle[o.ga_handle] = best_pre
-        scored.append((best_pre, o))
-    scored.sort(key=lambda x: x[0], reverse=True)
-    if len(scored) > max_candidates:
-        scored = scored[:max_candidates]  # rest -> duds
-    candidates = [o for _, o in scored]
-
-    # 4. optimize each build over owned + forced keepers + candidates -------------
-    inv = RelicInventory.from_owned_relics(owned + force_keep + candidates)
-    build_used: dict[str, set] = {
-        b.name: _optimize_used_fps(b, inv, optimizer, executor, top_n,
-                                   max_per_vessel, deadline_secs)
-        for b in builds
-    }
-    all_used: set = set()
-    for s in build_used.values():
-        all_used |= s
-
-    # 5. keepers = inclusion-forced (any content) + build-used candidates ---------
     keepers: list[Keeper] = []
-    seen_fp: set = set()
-    for o in force_keep:            # explicit "always keep" wins the waterfall
-        fp = fingerprint_owned(o)
-        if fp in seen_fp:
-            continue                # dedup identical copies
-        seen_fp.add(fp)
-        keepers.append(Keeper(relic=o, builds=[], reason="inclusion"))
-    for o in candidates:            # build-aware: new content placed in a build's top-N
-        fp = fingerprint_owned(o)
-        if fp in seen_fp or fp in owned_fps or fp not in all_used:
-            continue
-        seen_fp.add(fp)
-        names = [name for name, used in build_used.items() if fp in used]
-        keepers.append(Keeper(relic=o, builds=names, reason="build"))
+    limited: str | None = "gen_max" if gen_max_hit else None
 
-    def _keep_priority(k: Keeper) -> tuple[int, int]:
-        # inclusion outranks build-aware; then by best pre-score (for trimming order).
+    if builds:
+        # Build-aware path: rules override; otherwise keep only content a build's top-N
+        # would place. Pre-filter with positive_pre_score to keep the optimizer input small.
+        force_keep: list[OwnedRelic] = []
+        scored: list[tuple[int, OwnedRelic]] = []
+        for o in generated:
+            if relic_matches_rules(o, inclusion_rules):
+                pre_by_handle[o.ga_handle] = max(
+                    (scorer.positive_pre_score(o, b.build) for b in builds), default=0)
+                force_keep.append(o)
+                continue
+            if relic_matches_rules(o, exclusion_rules):
+                continue  # explicit "always sell" -> dud
+            if fingerprint_owned(o) in owned_fps:
+                continue  # you already own this content -> dud
+            best_pre = max((scorer.positive_pre_score(o, b.build) for b in builds), default=0)
+            if best_pre <= 0:
+                continue  # cannot help any build -> dud
+            pre_by_handle[o.ga_handle] = best_pre
+            scored.append((best_pre, o))
+        scored.sort(key=lambda x: x[0], reverse=True)
+        if len(scored) > max_candidates:
+            scored = scored[:max_candidates]  # rest -> duds
+        candidates = [o for _, o in scored]
+
+        # 4. optimize each build once over owned + forced keepers + candidates -----
+        inv = RelicInventory.from_owned_relics(owned + force_keep + candidates)
+        build_used: dict[str, set] = {}
+        total_builds = len(builds)
+        for i, b in enumerate(builds):
+            if progress is not None:
+                progress(i + 1, total_builds, b.name)
+            build_used[b.name] = _optimize_used_fps(
+                b, inv, optimizer, executor, top_n, max_per_vessel, deadline_secs)
+        all_used: set = set()
+        for s in build_used.values():
+            all_used |= s
+
+        # 5. keepers = inclusion-forced + build-used candidates --------------------
+        seen_fp: set = set()
+        for o in force_keep:            # explicit "always keep" wins the waterfall
+            fp = fingerprint_owned(o)
+            if fp in seen_fp:
+                continue                # dedup identical copies
+            seen_fp.add(fp)
+            keepers.append(Keeper(relic=o, builds=[], reason="inclusion"))
+        for o in candidates:            # new content placed in a build's top-N
+            fp = fingerprint_owned(o)
+            if fp in seen_fp or fp in owned_fps or fp not in all_used:
+                continue
+            seen_fp.add(fp)
+            names = [name for name, used in build_used.items() if fp in used]
+            keepers.append(Keeper(relic=o, builds=names, reason="build"))
+    else:
+        # No builds selected -> NO optimizer runs (instant). Keep every generated relic
+        # except those an exclusion rule sells (inclusion still wins). Each kept instance
+        # is a distinct purchased relic (no content dedup here).
+        for o in generated:
+            incl = relic_matches_rules(o, inclusion_rules)
+            if not incl and relic_matches_rules(o, exclusion_rules):
+                continue  # explicit "always sell"
+            keepers.append(Keeper(relic=o, builds=[],
+                                  reason="inclusion" if incl else "kept"))
+
+    def _keep_priority(k: Keeper) -> tuple:
+        # inclusion outranks build/keep; then pre-score, tier, deep (trim worst first).
         return (1 if k.reason == "inclusion" else 0,
-                pre_by_handle.get(k.relic.ga_handle, 0))
+                pre_by_handle.get(k.relic.ga_handle, 0),
+                k.relic.effect_count,
+                1 if k.relic.is_deep else 0)
 
     keepers.sort(key=_keep_priority, reverse=True)
-    limited: str | None = "gen_max" if gen_max_hit else None
 
     # 6. storage cap (drop lowest-priority keepers first) ------------------------
     if storage_cap_left is not None and len(keepers) > storage_cap_left:
@@ -358,7 +377,9 @@ def unused_owned_handles(owned: list[OwnedRelic], builds: list[BuildContext], ds
                          scorer: BuildScorer | None = None,
                          optimizer: VesselOptimizer | None = None, executor=None,
                          top_n: int = 10, max_per_vessel: int = 3,
-                         deadline_secs: float = 6.0) -> list[int]:
+                         deadline_secs: float = 6.0,
+                         progress: Callable[[int, int, str], None] | None = None
+                         ) -> list[int]:
     """ga_handles of owned relics used by NO build's top-N (build-aware cull candidates).
 
     Content-equal duplicates: whichever copy the optimizer places is 'used'; the other is
@@ -369,7 +390,10 @@ def unused_owned_handles(owned: list[OwnedRelic], builds: list[BuildContext], ds
     inv = RelicInventory.from_owned_relics(owned)
 
     used_fps: set = set()
-    for b in builds:
+    total = len(builds)
+    for i, b in enumerate(builds):
+        if progress is not None:
+            progress(i + 1, total, b.name)
         used_fps |= _optimize_used_fps(b, inv, optimizer, executor, top_n,
                                        max_per_vessel, deadline_secs)
 
@@ -391,17 +415,24 @@ def select_cull_handles(owned: list[OwnedRelic], builds: list[BuildContext], ds,
                         scorer: BuildScorer | None = None,
                         optimizer: VesselOptimizer | None = None, executor=None,
                         top_n: int = 10, max_per_vessel: int = 3,
-                        deadline_secs: float = 6.0) -> list[int]:
+                        deadline_secs: float = 6.0,
+                        progress: Callable[[int, int, str], None] | None = None
+                        ) -> list[int]:
     """ga_handles of owned relics to SELL, per the cull waterfall.
 
     A relic is a cull candidate when (used by NO build's top-N OR it matches an exclusion
     rule) AND it does NOT match an inclusion rule AND it is not protected (equipped /
     bookmarked). Inclusion always wins (protects) and protected relics are never sold.
+    With no builds, culling is exclusion-rules-only (no optimizer runs).
     """
     protected = protected_handles or set()
-    build_unused = set(unused_owned_handles(
-        owned, builds, ds, scorer=scorer, optimizer=optimizer, executor=executor,
-        top_n=top_n, max_per_vessel=max_per_vessel, deadline_secs=deadline_secs))
+    if builds:
+        build_unused = set(unused_owned_handles(
+            owned, builds, ds, scorer=scorer, optimizer=optimizer, executor=executor,
+            top_n=top_n, max_per_vessel=max_per_vessel, deadline_secs=deadline_secs,
+            progress=progress))
+    else:
+        build_unused: set = set()  # no builds -> exclusion-rules-only cull, no optimizer
 
     out: list[int] = []
     for o in owned:

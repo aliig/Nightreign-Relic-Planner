@@ -1,7 +1,7 @@
 import { useSuspenseQuery } from "@tanstack/react-query"
 import { createFileRoute, Link } from "@tanstack/react-router"
 import { Coins, Package, Plus, Sparkles, Trash2, X } from "lucide-react"
-import { type ReactNode, Suspense, useMemo, useState } from "react"
+import { type ReactNode, Suspense, useMemo, useRef, useState } from "react"
 
 import { BuildsService, GameService, SavesService } from "@/client"
 import { EmptyState } from "@/components/Common/EmptyState"
@@ -82,10 +82,17 @@ const BUCKETS: Bucket[] = [
 
 type StopMode = "fixed" | "budget" | "all_murk"
 
-// Builds source: DB build ids (auth) or inline BuildDefinitions (anonymous).
+// Builds available to match against. The user opts in by selecting a subset (default
+// none -> rules-only, no optimizer). Auth sends build_ids; anon sends the matching inline
+// BuildDefinitions.
+type BuildOption = { id: string; name: string }
 type BuildsForm =
-  | { kind: "auth"; buildIds: string[] }
-  | { kind: "anon"; builds: Record<string, unknown>[] }
+  | { kind: "auth"; options: BuildOption[] }
+  | {
+      kind: "anon"
+      options: BuildOption[]
+      inlineById: Record<string, Record<string, unknown>>
+    }
 
 type EffectOption = { id: number; name: string; isDebuff: boolean }
 
@@ -447,6 +454,9 @@ function RitesTool({
   const [busy, setBusy] = useState(false)
   const [plan, setPlan] = useState<PlanResponse | null>(null)
   const [selected, setSelected] = useState<Set<number>>(new Set())
+  const [selectedBuilds, setSelectedBuilds] = useState<Set<string>>(new Set())
+  const [progress, setProgress] = useState<string>("")
+  const abortRef = useRef<AbortController | null>(null)
 
   const activeBuckets = BUCKETS.filter((b) => (qty[b.key] ?? 0) > 0)
   const fixedCost = activeBuckets.reduce(
@@ -472,12 +482,19 @@ function RitesTool({
       version: b.version,
       ...(stopMode === "fixed" ? { quantity: qty[b.key] } : {}),
     }))
+    const selIds = [...selectedBuilds]
     const form = new FormData()
     form.append("file", file, file.name || "save.sl2")
     form.append("slot_index", String(slotIndex))
     if (buildsForm.kind === "auth")
-      form.append("build_ids", JSON.stringify(buildsForm.buildIds))
-    else form.append("builds", JSON.stringify(buildsForm.builds))
+      form.append("build_ids", JSON.stringify(selIds))
+    else
+      form.append(
+        "builds",
+        JSON.stringify(
+          selIds.map((id) => buildsForm.inlineById[id]).filter(Boolean),
+        ),
+      )
     form.append("buckets", JSON.stringify(buckets))
     form.append("stop_mode", stopMode)
     if (stopMode === "budget") form.append("budget", String(budget))
@@ -486,24 +503,59 @@ function RitesTool({
     if (inc.length) form.append("inclusion_rules", JSON.stringify(inc))
     if (exc.length) form.append("exclusion_rules", JSON.stringify(exc))
 
+    const ctrl = new AbortController()
+    abortRef.current = ctrl
     setBusy(true)
+    setPlan(null)
+    setProgress(selIds.length ? "Starting…" : "Rolling…")
     try {
-      const res = await fetch("/api/v1/saves/rites/plan", {
+      // Streaming (SSE): show progress while the plan runs, so many builds don't
+      // look like a hang. Falls through to a single result event at the end.
+      const res = await fetch("/api/v1/saves/rites/plan/stream", {
         method: "POST",
         headers: authHeaders(),
         body: form,
+        signal: ctrl.signal,
       })
-      if (!res.ok) throw new Error(await planDetail(res))
-      const data: PlanResponse = await res.json()
-      setPlan(data)
-      setSelected(new Set(data.keepers.map((_, i) => i)))
+      if (!res.ok || !res.body) throw new Error(await planDetail(res))
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buf = ""
+      let result: PlanResponse | null = null
+      let streamErr: string | null = null
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buf += decoder.decode(value, { stream: true })
+        const chunks = buf.split("\n\n")
+        buf = chunks.pop() ?? ""
+        for (const chunk of chunks) {
+          const dataLine = chunk.split("\n").find((l) => l.startsWith("data:"))
+          if (!dataLine) continue
+          const evt = JSON.parse(dataLine.slice(5).trim())
+          if (evt.type === "progress") setProgress(evt.message || "Working…")
+          else if (evt.type === "result") result = evt.data as PlanResponse
+          else if (evt.type === "error") streamErr = evt.detail
+        }
+      }
+      if (streamErr) throw new Error(streamErr)
+      if (!result) throw new Error("No plan was returned.")
+      setPlan(result)
+      setSelected(new Set(result.keepers.map((_, i) => i)))
     } catch (err) {
-      showErrorToast(
-        err instanceof Error ? err.message : "Failed to find keepers.",
-      )
+      if ((err as Error)?.name !== "AbortError")
+        showErrorToast(
+          err instanceof Error ? err.message : "Failed to find keepers.",
+        )
     } finally {
+      abortRef.current = null
       setBusy(false)
+      setProgress("")
     }
+  }
+
+  function cancelFind() {
+    abortRef.current?.abort()
   }
 
   function stageKeepers() {
@@ -561,6 +613,61 @@ function RitesTool({
           <strong>{murks != null ? formatMurks(murks) : "—"}</strong> Murk
         </span>
         <span className="text-muted-foreground">Storage cap: {RELIC_CAP}</span>
+      </div>
+
+      {/* Match against builds (opt-in + scoped — avoids optimizing every build) */}
+      <div className="space-y-2 rounded-lg border p-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <span className="text-sm font-medium">Match against builds</span>
+          <span className="text-xs text-muted-foreground">
+            {selectedBuilds.size === 0
+              ? "None — keepers decided by your rules only (instant)"
+              : `${selectedBuilds.size} selected — runs the optimizer per build (slower; progress shown)`}
+          </span>
+        </div>
+        {buildsForm.options.length === 0 ? (
+          <p className="text-xs text-muted-foreground">
+            No builds yet —{" "}
+            <Link to="/builds" className="underline">
+              create one
+            </Link>{" "}
+            to keep relics your builds would actually use.
+          </p>
+        ) : (
+          <div className="flex flex-wrap gap-1.5">
+            {buildsForm.options.map((b) => {
+              const on = selectedBuilds.has(b.id)
+              return (
+                <button
+                  key={b.id}
+                  type="button"
+                  onClick={() =>
+                    setSelectedBuilds((s) => {
+                      const n = new Set(s)
+                      if (n.has(b.id)) n.delete(b.id)
+                      else n.add(b.id)
+                      return n
+                    })
+                  }
+                  className={cn(
+                    "rounded-full border px-2.5 py-1 text-xs transition-colors",
+                    on
+                      ? "border-primary bg-primary text-primary-foreground"
+                      : "border-muted-foreground/30 text-muted-foreground hover:border-foreground",
+                  )}
+                >
+                  {b.name}
+                </button>
+              )
+            })}
+          </div>
+        )}
+        {selectedBuilds.size > 10 && (
+          <p className="text-xs text-amber-600 dark:text-amber-500">
+            {selectedBuilds.size} builds selected — this runs the optimizer that
+            many times and can take a while. Progress is shown as it works.
+          </p>
+        )}
       </div>
 
       {/* Buckets */}
@@ -651,9 +758,20 @@ function RitesTool({
             className="gap-1.5"
           >
             <Sparkles className="h-4 w-4" />
-            {busy ? "Rolling…" : "Find keepers"}
+            {busy ? "Working…" : "Find keepers"}
           </Button>
+          {busy && (
+            <Button variant="ghost" size="sm" onClick={cancelFind}>
+              Cancel
+            </Button>
+          )}
         </div>
+        {busy && (
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <span className="h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent" />
+            {progress || "Working…"}
+          </div>
+        )}
       </div>
 
       {/* Cull rules */}
@@ -838,8 +956,11 @@ function AuthRitesBody() {
   )
 
   if (!profiles.data?.length) return <NoSave />
-  const buildIds = (builds.data ?? []).map((b) => b.id)
-  if (!buildIds.length) return <NoBuilds />
+  const buildOptions = (builds.data ?? []).map((b) => ({
+    id: b.id,
+    name: b.name,
+  }))
+  if (!buildOptions.length) return <NoBuilds />
 
   const selected =
     profiles.data.find((p) => p.id === selectedId) ?? profiles.data[0]
@@ -864,7 +985,7 @@ function AuthRitesBody() {
         key={selected.id}
         slotIndex={selected.slot_index}
         murks={selected.murks ?? 0}
-        buildsForm={{ kind: "auth", buildIds }}
+        buildsForm={{ kind: "auth", options: buildOptions }}
         effectMap={effectMap}
         effectOptions={effectOptions}
       />
@@ -922,7 +1043,10 @@ function AnonRitesBody() {
 
   const selected =
     allProfiles.find((p) => p.slot_index === slot) ?? allProfiles[0]
-  const inlineBuilds = builds.map(toInlineBuild)
+  const buildOptions = builds.map((b) => ({ id: b.id, name: b.name }))
+  const inlineById = Object.fromEntries(
+    builds.map((b) => [b.id, toInlineBuild(b)]),
+  )
 
   return (
     <div className="space-y-4">
@@ -954,7 +1078,7 @@ function AnonRitesBody() {
         key={selected.slot_index}
         slotIndex={selected.slot_index}
         murks={selected.murks ?? null}
-        buildsForm={{ kind: "anon", builds: inlineBuilds }}
+        buildsForm={{ kind: "anon", options: buildOptions, inlineById }}
         effectMap={effectMap}
         effectOptions={effectOptions}
       />

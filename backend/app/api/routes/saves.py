@@ -1,6 +1,8 @@
 """Save file upload, profile discovery, and relic inventory endpoints."""
 import json
+import queue
 import tempfile
+import threading
 import uuid
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -1551,12 +1553,7 @@ def _resolve_rites_builds(
                 name=getattr(bdef, "name", None) or f"Build {i + 1}",
             ))
 
-    if not ctxs:
-        raise HTTPException(
-            status_code=422,
-            detail="Define at least one build first — keeping and culling are build-aware.",
-        )
-    return ctxs
+    return ctxs  # may be empty: no builds -> rules-only keep/cull, no optimizer runs
 
 
 def _resolve_buckets(buckets_raw: str) -> list[PurchaseBucket]:
@@ -1617,14 +1614,21 @@ def _rites_plan(
     include_cull: bool,
     inclusion_rules: list[dict] | None = None,
     exclusion_rules: list[dict] | None = None,
+    progress: Any = None,
 ) -> dict:
     """Compute a bulk-purchase + cull plan. Reads current Murk, owned relics, and
     capacity from the uploaded save (1:1 fidelity — never client-supplied). Persists
-    nothing. Runs the optimizer per build (heavy); call inside a threadpool.
+    nothing.
 
-    Perf note: bulk_acquire and the cull each run one optimize pass per build; for a
-    pure-cull or purchase-only request only the needed pass runs.
+    With no builds selected, keeping/culling are rules-only and NO optimizer runs
+    (instant). With builds, one optimize pass runs per build for the purchase and one per
+    build for the cull. ``progress`` (if given) is called (phase, current, total, message)
+    so callers can stream feedback.
     """
+    def _emit(phase: str, current: int, total: int, message: str) -> None:
+        if progress is not None:
+            progress(phase, current, total, message)
+
     blob = _decrypt_slot_blob(file_bytes, filename, slot_index)
     raw_relics, items_end = parse_relics(blob)
     owned = RelicInventory(raw_relics, get_items_json(), ds).relics
@@ -1641,6 +1645,7 @@ def _rites_plan(
     limited_by: str | None = None
 
     if buckets:
+        _emit("generating", 0, len(build_ctxs), "Rolling purchases…")
         r = bulk_acquire(
             builds=build_ctxs, owned=owned, current_murk=current_murk,
             buckets=buckets, generator=get_relic_generator(), ds=ds,
@@ -1648,6 +1653,8 @@ def _rites_plan(
             inclusion_rules=inclusion_rules, exclusion_rules=exclusion_rules,
             storage_cap_left=storage_left,
             scorer=scorer, optimizer=optimizer, executor=executor, top_n=top_n,
+            progress=(lambda i, t, name: _emit(
+                "matching", i, t, f"Matching build {i}/{t}: {name}")),
         )
         for k in r.keepers:
             rel = k.relic
@@ -1668,12 +1675,16 @@ def _rites_plan(
         loadout.parse(blob)
         protected = set(loadout.relic_ga_hero_map.keys()) | read_favorite_handles(
             blob, items_end)
+        _emit("culling", 0, len(build_ctxs), "Checking inventory to cull…")
         cull = select_cull_handles(
             owned, build_ctxs, ds,
             inclusion_rules=inclusion_rules, exclusion_rules=exclusion_rules,
             protected_handles=protected,
-            scorer=scorer, optimizer=optimizer, executor=executor, top_n=top_n)
+            scorer=scorer, optimizer=optimizer, executor=executor, top_n=top_n,
+            progress=(lambda i, t, name: _emit(
+                "culling", i, t, f"Cull check {i}/{t}: {name}")))
 
+    _emit("finalizing", 1, 1, "Finalizing plan…")
     return {
         "keepers": keepers,
         "generated": generated, "kept": kept, "duds": duds,
@@ -1733,6 +1744,93 @@ async def rites_plan(
         stop_mode, budget, ds, executor, top_n, include_cull, incl, excl,
     )
     return RitesPlanResponse(**plan)
+
+
+@router.post("/rites/plan/stream")
+async def rites_plan_stream(
+    file: UploadFile,
+    ds: GameDataDep,
+    current_user: OptionalUser,
+    session: SessionDep,
+    executor: OptimizerPoolDep = None,
+    slot_index: int = Form(...),
+    build_ids: str = Form("[]"),
+    builds: str = Form("[]"),
+    buckets: str = Form("[]"),
+    stop_mode: str = Form("fixed"),
+    budget: int | None = Form(None),
+    top_n: int = Form(10),
+    include_cull: bool = Form(True),
+    inclusion_rules: str = Form("[]"),
+    exclusion_rules: str = Form("[]"),
+) -> StreamingResponse:
+    """Streaming (SSE) form of /rites/plan — emits progress while it runs.
+
+    Same inputs as /rites/plan. Emits ``data:`` lines::
+
+        {"type":"progress","phase":str,"current":int,"total":int,"message":str}
+        {"type":"result","data": <RitesPlanResponse>}
+        {"type":"error","detail":"..."}
+
+    Auth/validation errors surface as normal HTTP errors before streaming begins. The
+    heavy plan runs in a worker thread; its per-build progress callback is bridged to the
+    SSE stream through a thread-safe queue.
+    """
+    if stop_mode not in ("fixed", "budget", "all_murk"):
+        raise HTTPException(
+            status_code=422, detail="stop_mode must be one of fixed|budget|all_murk.")
+
+    build_ctxs = _resolve_rites_builds(build_ids, builds, current_user, session)
+    parsed_buckets = _resolve_buckets(buckets)
+    incl = _parse_rules(inclusion_rules, "inclusion_rules")
+    excl = _parse_rules(exclusion_rules, "exclusion_rules")
+
+    file_bytes = await file.read()
+    if not file_bytes:
+        raise HTTPException(status_code=422, detail="Empty save file.")
+    filename = file.filename or "save.sl2"
+
+    def _events():
+        q: queue.Queue = queue.Queue()
+        holder: dict[str, Any] = {}
+
+        def _progress(phase, current, total, message):
+            q.put({"type": "progress", "phase": phase, "current": current,
+                   "total": total, "message": message})
+
+        def _work():
+            try:
+                holder["plan"] = _rites_plan(
+                    file_bytes, filename, slot_index, build_ctxs, parsed_buckets,
+                    stop_mode, budget, ds, executor, top_n, include_cull, incl, excl,
+                    progress=_progress)
+            except HTTPException as exc:
+                holder["error"] = exc.detail
+            except Exception as exc:  # noqa: BLE001 - surfaced as an SSE error event
+                holder["error"] = str(exc)
+            finally:
+                q.put(None)  # sentinel: work finished
+
+        worker = threading.Thread(target=_work, daemon=True)
+        worker.start()
+        while True:
+            item = q.get()
+            if item is None:
+                break
+            yield f"data: {json.dumps(item)}\n\n"
+        worker.join()
+        if "error" in holder:
+            yield f"data: {json.dumps({'type': 'error', 'detail': holder['error']})}\n\n"
+        else:
+            payload = {"type": "result",
+                       "data": RitesPlanResponse(**holder["plan"]).model_dump(mode="json")}
+            yield f"data: {json.dumps(payload)}\n\n"
+
+    return StreamingResponse(
+        _events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 # ---------------------------------------------------------------------------
