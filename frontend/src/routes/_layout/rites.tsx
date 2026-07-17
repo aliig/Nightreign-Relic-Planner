@@ -103,8 +103,6 @@ type Rule = {
   id: string
   counts: number[] // 1|2|3
   colors: string[]
-  deep: "any" | "deep" | "normal"
-  anyCurse: "any" | "yes" | "no"
   effectIds: number[]
   curseIds: number[]
 }
@@ -166,8 +164,6 @@ function newRule(): Rule {
     id: crypto.randomUUID(),
     counts: [],
     colors: [],
-    deep: "any",
-    anyCurse: "any",
     effectIds: [],
     curseIds: [],
   }
@@ -177,8 +173,6 @@ function ruleHasCondition(r: Rule): boolean {
   return (
     r.counts.length > 0 ||
     r.colors.length > 0 ||
-    r.deep !== "any" ||
-    r.anyCurse !== "any" ||
     r.effectIds.length > 0 ||
     r.curseIds.length > 0
   )
@@ -188,8 +182,6 @@ function serializeRule(r: Rule): Record<string, unknown> {
   const out: Record<string, unknown> = {}
   if (r.counts.length) out.effect_counts = r.counts
   if (r.colors.length) out.colors = r.colors
-  if (r.deep !== "any") out.is_deep = r.deep === "deep"
-  if (r.anyCurse !== "any") out.has_any_curse = r.anyCurse === "yes"
   if (r.effectIds.length) out.has_effect_ids = r.effectIds
   if (r.curseIds.length) out.has_curse_ids = r.curseIds
   return out
@@ -356,34 +348,6 @@ function RuleBuilder({
             ))}
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <Select
-              value={r.deep}
-              onValueChange={(v) => patch(r.id, { deep: v as Rule["deep"] })}
-            >
-              <SelectTrigger className="h-7 w-28 text-xs">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="any">Any depth</SelectItem>
-                <SelectItem value="deep">Deep only</SelectItem>
-                <SelectItem value="normal">Normal only</SelectItem>
-              </SelectContent>
-            </Select>
-            <Select
-              value={r.anyCurse}
-              onValueChange={(v) =>
-                patch(r.id, { anyCurse: v as Rule["anyCurse"] })
-              }
-            >
-              <SelectTrigger className="h-7 w-32 text-xs">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="any">Any curses</SelectItem>
-                <SelectItem value="yes">Has a curse</SelectItem>
-                <SelectItem value="no">No curse</SelectItem>
-              </SelectContent>
-            </Select>
             <Button
               size="sm"
               variant="ghost"
