@@ -22,12 +22,20 @@ from app.api.deps import (
 from app.core.build_def import build_def_from_db
 from app.core.config import settings
 from app.core.db import engine
-from app.core.game_data import game_data_version, get_items_json
+from app.core.game_data import (
+    game_data_version,
+    get_items_json,
+    get_relic_generator,
+    get_relic_lots,
+)
 from app.models import (
+    AddRelicSpec,
     Build,
     LoadoutOp,
     LoadoutsPublic,
     OptimizationSnapshot,
+    RitesKeeper,
+    RitesPlanResponse,
     ProfilePublic,
     ProfilesPublic,
     Profile,
@@ -43,10 +51,17 @@ from app.models import (
     UploadResponse,
 )
 from nrplanner import (
+    AddCapacityError,
+    InvalidReason,
     LoadoutHandler,
+    RelicChecker,
     RelicInventory,
     VesselWriteError,
+    add_capacity,
     add_preset,
+    add_relics,
+    adjust_murks,
+    build_relic_record,
     delete_preset,
     discover_characters,
     decrypt_sl2,
@@ -65,7 +80,7 @@ from nrplanner import (
     set_favorites,
     split_memory_dat,
 )
-from nrplanner.constants import CHARACTER_NAMES
+from nrplanner.constants import CHARACTER_NAMES, EMPTY_EFFECT
 from nrplanner.cumulative import summarize_cumulative_effects
 from nrplanner.changes import (
     build_signature,
@@ -86,6 +101,12 @@ from nrplanner.models import (
     WeightGroup,
 )
 from nrplanner.optimizer import OPTIMIZER_VERSION, VesselOptimizer
+from nrplanner.rites import (
+    BuildContext,
+    PurchaseBucket,
+    bulk_acquire,
+    unused_owned_handles,
+)
 from nrplanner.scoring import BuildScorer
 
 router = APIRouter(prefix="/saves", tags=["saves"])
@@ -1322,6 +1343,374 @@ async def export_save(
             ),
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# Relic minting ("purchase" generated relics into a save)
+# ---------------------------------------------------------------------------
+
+_RELIC_RECORD_SIZE = 80  # full relic ItemState record (see nrplanner.save)
+
+
+def _export_added_save(
+    file_bytes: bytes,
+    filename: str,
+    slot_index: int,
+    specs: list[AddRelicSpec],
+    ds: Any,
+    murk_delta: int = 0,
+) -> tuple[bytes, dict]:
+    """Mint generated relics into one character slot and re-encrypt.
+
+    Each spec is re-validated as a legal relic, packed into an 80-byte ItemState
+    record templated from one of the save's OWN relics (so durability/unknown/
+    trailing bytes are provably correct), added via ghost resurrection, and the
+    slot re-encrypted. Returns (new_save_bytes, summary). Raises HTTPException on
+    validation/capacity errors. The embedded Steam ID is left unchanged.
+    """
+    blob = _decrypt_slot_blob(file_bytes, filename, slot_index)
+
+    raw_relics, _ = parse_relics(blob)
+    donor = next((r for r in raw_relics if r.size == _RELIC_RECORD_SIZE), None)
+    if donor is None:
+        raise HTTPException(
+            status_code=422,
+            detail="This save has no existing relic to use as a record template. "
+                   "Acquire at least one relic in-game first.",
+        )
+    template = blob[donor.offset:donor.offset + _RELIC_RECORD_SIZE]
+
+    checker = RelicChecker([], ds)
+    safe_ids = set(ds.get_safe_relic_ids())
+
+    records = []
+    for i, spec in enumerate(specs):
+        if spec.real_id not in safe_ids:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Relic #{i} (id {spec.real_id}) is not a mintable relic.",
+            )
+        effects = (list(spec.effects) + [EMPTY_EFFECT] * 3)[:3]
+        curses = (list(spec.curses) + [EMPTY_EFFECT] * 3)[:3]
+        reason = checker.check_invalidity(spec.real_id, effects + curses)
+        if reason != InvalidReason.NONE:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Relic #{i} is not a legal relic ({reason.name}).",
+            )
+        records.append(build_relic_record(spec.real_id, effects, curses, template))
+
+    cap = add_capacity(blob)
+    if len(records) > cap:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "add_capacity",
+                "message": f"This save can accept only {cap} more relic(s) at once "
+                           "(limited by reusable inventory records). Add fewer at a time.",
+                "capacity": cap,
+                "requested": len(records),
+            },
+        )
+
+    try:
+        new_blob, add_result = add_relics(blob, records)
+    except AddCapacityError as exc:  # pragma: no cover - guarded by cap check above
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "add_capacity", "message": str(exc), "capacity": cap},
+        ) from exc
+
+    # Apply the net purchase Murk delta (negative = spent, positive = refund) so the
+    # buy/sell economy is faithful on export. Fidelity: never lets Murk go negative.
+    murks_after: int | None = None
+    if murk_delta:
+        new_blob, _before, murks_after = adjust_murks(new_blob, murk_delta)
+
+    new_save = repack_sl2(file_bytes, {slot_index: new_blob})
+    summary = {
+        "added": len(add_result.added_handles),
+        "capacity": cap,
+        "murks_after": murks_after,
+    }
+    return new_save, summary
+
+
+@router.post("/export-add-relics")
+async def export_add_relics(
+    file: UploadFile,
+    ds: GameDataDep,
+    current_user: OptionalUser,
+    slot_index: int = Form(...),
+    specs: str = Form("[]"),
+    murk_delta: int = Form(0),
+) -> Response:
+    """Mint generated relics into one character slot and return a modified .sl2.
+
+    ``specs``: JSON array of {real_id, effects, curses} from prior rolls.
+    ``murk_delta``: signed net Murk to apply (e.g. a bulk-purchase cost minus dud
+    refunds). Stateless (the save is uploaded in the request); anonymous + auth alike.
+    """
+    from pydantic import TypeAdapter, ValidationError
+
+    try:
+        parsed = TypeAdapter(list[AddRelicSpec]).validate_python(json.loads(specs))
+    except (json.JSONDecodeError, ValidationError, TypeError) as exc:
+        raise HTTPException(
+            status_code=422, detail=f"Invalid specs payload: {exc}"
+        ) from exc
+
+    if not parsed:
+        raise HTTPException(status_code=422, detail="No relics to add.")
+
+    file_bytes = await file.read()
+    if not file_bytes:
+        raise HTTPException(status_code=422, detail="Empty save file.")
+    filename = file.filename or "save.sl2"
+
+    new_save, summary = await run_in_threadpool(
+        _export_added_save, file_bytes, filename, slot_index, parsed, ds, murk_delta,
+    )
+
+    out_name = _edited_filename(filename)
+    murks_after = summary.get("murks_after")
+    return Response(
+        content=new_save,
+        media_type="application/octet-stream",
+        headers={
+            "Content-Disposition": f'attachment; filename="{out_name}"',
+            "X-Relics-Added": str(summary["added"]),
+            "X-Add-Capacity": str(summary["capacity"]),
+            "X-Murks-Total": "" if murks_after is None else str(murks_after),
+            "Access-Control-Expose-Headers": (
+                "Content-Disposition, X-Relics-Added, X-Add-Capacity, X-Murks-Total"
+            ),
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# Relic Rites (bulk purchase + build-aware cull)
+# ---------------------------------------------------------------------------
+
+_RELIC_CAP = 1950  # in-game per-character relic storage cap (mirrors frontend RELIC_CAP)
+
+
+def _resolve_rites_builds(
+    build_ids_raw: str, builds_raw: str, current_user: Any, session: Session
+) -> list[BuildContext]:
+    """Resolve saved (auth) or inline (anon) builds into BuildContexts.
+
+    Mirrors optimize.py's dual mode: ``build_ids`` (DB, ownership-checked) OR inline
+    ``builds`` — not both. Owned relics come from the uploaded save, not from here.
+    """
+    from pydantic import TypeAdapter, ValidationError
+
+    try:
+        ids = [uuid.UUID(str(x)) for x in json.loads(build_ids_raw or "[]")]
+    except (ValueError, TypeError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid build_ids: {exc}") from exc
+    try:
+        inline = json.loads(builds_raw or "[]")
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid builds: {exc}") from exc
+
+    if ids and inline:
+        raise HTTPException(
+            status_code=422, detail="Provide build_ids OR inline builds, not both."
+        )
+
+    ctxs: list[BuildContext] = []
+    if ids:
+        if current_user is None:
+            raise HTTPException(
+                status_code=401, detail="Authentication required to use saved builds."
+            )
+        for bid in ids:
+            db_build = session.get(Build, bid)
+            if not db_build or db_build.owner_id != current_user.id:
+                raise HTTPException(status_code=404, detail=f"Build {bid} not found.")
+            bdef = build_def_from_db(db_build)
+            ctxs.append(BuildContext(
+                build=bdef,
+                hero_type=_resolve_hero_type(bdef.character),
+                name=db_build.name,
+            ))
+    elif inline:
+        try:
+            bdefs = TypeAdapter(list[BuildDefinition]).validate_python(inline)
+        except ValidationError as exc:
+            raise HTTPException(
+                status_code=422, detail=f"Invalid inline builds: {exc}"
+            ) from exc
+        for i, bdef in enumerate(bdefs):
+            ctxs.append(BuildContext(
+                build=bdef,
+                hero_type=_resolve_hero_type(bdef.character),
+                name=getattr(bdef, "name", None) or f"Build {i + 1}",
+            ))
+
+    if not ctxs:
+        raise HTTPException(
+            status_code=422,
+            detail="Define at least one build first — keeping and culling are build-aware.",
+        )
+    return ctxs
+
+
+def _resolve_buckets(buckets_raw: str) -> list[PurchaseBucket]:
+    """Parse purchase buckets, pulling buy_cost from relic_lots.json (never the client).
+
+    1:1 fidelity: prices come from the extracted game data. MVP supports only the
+    Murk-priced Scenic / Deep Scenic flatstones; the Sigil-priced Large flatstones are
+    rejected until the Sovereign-Sigil save offset is known.
+    """
+    lots = get_relic_lots()
+    try:
+        raw = json.loads(buckets_raw or "[]")
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid buckets: {exc}") from exc
+
+    out: list[PurchaseBucket] = []
+    for b in raw:
+        is_deep = bool(b.get("is_deep", False))
+        version = str(b.get("version", "1.03"))
+        quantity = b.get("quantity")
+        key = f"{'deep' if is_deep else 'scenic'}_{version}"
+        lot = lots.get(key)
+        if not lot or "buy_cost" not in lot:
+            raise HTTPException(
+                status_code=422, detail=f"No price data for flatstone '{key}'."
+            )
+        if str(lot.get("buy_currency", "Murk")).lower() != "murk":
+            raise HTTPException(
+                status_code=422,
+                detail=f"'{key}' is priced in Sovereign Sigils — not yet supported.",
+            )
+        out.append(PurchaseBucket(
+            is_deep=is_deep,
+            version=version,
+            buy_cost=int(lot["buy_cost"]),
+            quantity=int(quantity) if quantity is not None else None,
+        ))
+    return out
+
+
+def _rites_plan(
+    file_bytes: bytes, filename: str, slot_index: int,
+    build_ctxs: list[BuildContext], buckets: list[PurchaseBucket],
+    stop_mode: str, budget: int | None, ds: Any, executor: Any, top_n: int,
+    include_cull: bool,
+) -> dict:
+    """Compute a bulk-purchase + cull plan. Reads current Murk, owned relics, and
+    capacity from the uploaded save (1:1 fidelity — never client-supplied). Persists
+    nothing. Runs the optimizer per build (heavy); call inside a threadpool.
+
+    Perf note: bulk_acquire and the cull each run one optimize pass per build; for a
+    pure-cull or purchase-only request only the needed pass runs.
+    """
+    blob = _decrypt_slot_blob(file_bytes, filename, slot_index)
+    raw_relics, items_end = parse_relics(blob)
+    owned = RelicInventory(raw_relics, get_items_json(), ds).relics
+    current_murk = read_murks(blob, items_end)
+    cap = add_capacity(blob)
+    storage_left = max(0, min(_RELIC_CAP - len(owned), cap))
+
+    scorer = BuildScorer(ds)
+    optimizer = VesselOptimizer(ds, scorer)
+
+    keepers: list[RitesKeeper] = []
+    generated = kept = duds = 0
+    murk_after, murk_cost, murk_refunded = current_murk, 0, 0
+    limited_by: str | None = None
+
+    if buckets:
+        r = bulk_acquire(
+            builds=build_ctxs, owned=owned, current_murk=current_murk,
+            buckets=buckets, generator=get_relic_generator(), ds=ds,
+            stop_mode=stop_mode, budget=budget, storage_cap_left=storage_left,
+            scorer=scorer, optimizer=optimizer, executor=executor, top_n=top_n,
+        )
+        for k in r.keepers:
+            rel = k.relic
+            keepers.append(RitesKeeper(
+                real_id=rel.real_id, item_id=rel.item_id, color=rel.color,
+                tier=rel.effect_count, is_deep=rel.is_deep, name=rel.name,
+                effects=list(rel.effects), curses=list(rel.curses), builds=k.builds,
+            ))
+        generated, kept, duds = r.generated, r.kept, r.duds
+        murk_after, murk_cost, murk_refunded = (
+            r.murk_after, r.murk_gross_cost, r.murk_refunded)
+        limited_by = r.limited_by
+
+    cull: list[int] = []
+    if include_cull:
+        loadout = LoadoutHandler(ds)
+        loadout.parse(blob)
+        protected = set(loadout.relic_ga_hero_map.keys()) | read_favorite_handles(
+            blob, items_end)
+        cull = [
+            h for h in unused_owned_handles(
+                owned, build_ctxs, ds, scorer=scorer, optimizer=optimizer,
+                executor=executor, top_n=top_n)
+            if h not in protected
+        ]
+
+    return {
+        "keepers": keepers,
+        "generated": generated, "kept": kept, "duds": duds,
+        "murk_before": current_murk, "murk_after": murk_after,
+        "murk_cost": murk_cost, "murk_refunded": murk_refunded,
+        "murk_delta": murk_after - current_murk,
+        "limited_by": limited_by,
+        "add_capacity": cap, "storage_left": storage_left,
+        "cull_candidates": cull,
+    }
+
+
+@router.post("/rites/plan", response_model=RitesPlanResponse)
+async def rites_plan(
+    file: UploadFile,
+    ds: GameDataDep,
+    current_user: OptionalUser,
+    session: SessionDep,
+    executor: OptimizerPoolDep = None,
+    slot_index: int = Form(...),
+    build_ids: str = Form("[]"),
+    builds: str = Form("[]"),
+    buckets: str = Form("[]"),
+    stop_mode: str = Form("fixed"),
+    budget: int | None = Form(None),
+    top_n: int = Form(10),
+    include_cull: bool = Form(True),
+) -> RitesPlanResponse:
+    """Plan a bulk relic purchase + build-aware cull against the uploaded save.
+
+    Reads Murk / owned relics / capacity from the save (never client-supplied — 1:1
+    fidelity), rolls purchases with exact effect odds, keeps only relics used in a saved
+    build's top-N loadouts, and returns the keepers (to mint), the cull candidates (owned
+    relics no build uses, minus equipped/bookmarked), and the exact Murk math. Writes
+    NOTHING — the frontend stages this and applies it via /saves/export-add-relics
+    (mints + murk_delta) and /saves/export (cull sells). Synchronous MVP; a background/
+    SSE variant is a follow-up for very large batches.
+    """
+    if stop_mode not in ("fixed", "budget", "all_murk"):
+        raise HTTPException(
+            status_code=422, detail="stop_mode must be one of fixed|budget|all_murk.")
+
+    build_ctxs = _resolve_rites_builds(build_ids, builds, current_user, session)
+    parsed_buckets = _resolve_buckets(buckets)
+
+    file_bytes = await file.read()
+    if not file_bytes:
+        raise HTTPException(status_code=422, detail="Empty save file.")
+    filename = file.filename or "save.sl2"
+
+    plan = await run_in_threadpool(
+        _rites_plan, file_bytes, filename, slot_index, build_ctxs, parsed_buckets,
+        stop_mode, budget, ds, executor, top_n, include_cull,
+    )
+    return RitesPlanResponse(**plan)
 
 
 # ---------------------------------------------------------------------------

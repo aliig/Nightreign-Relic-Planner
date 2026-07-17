@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
-from nrplanner.constants import ITEM_TYPE_RELIC
+from nrplanner.constants import EMPTY_EFFECT, ITEM_TYPE_RELIC
 from nrplanner.save import (
     _DS2_KEY,
     _ITEM_ENTRY_SIZE,
@@ -274,6 +274,81 @@ def delete_relics(blob: bytes, ga_handles, murk_credit: int = 0) -> tuple[bytes,
 
 
 _RELIC_STATE_SIZE = 80  # full relic ItemState record (see save.Item.from_bytes)
+
+
+def build_relic_record(real_id: int, effects, curses, template: bytes) -> bytes:
+    """Build an 80-byte relic ItemState record from a spec + a real donor template.
+
+    Every byte except item_id (0x04), the three effects (0x10/0x14/0x18) and the three
+    curses (0x38/0x3C/0x40) is copied verbatim from ``template`` — a real 80-byte relic
+    record taken from a save of the same game/patch. That preserves durability, the
+    unknown fields, the 28-byte padding, and the 8 trailing bytes (0x48..0x4F) that
+    ``save.Item.from_bytes`` never parses. The leading ga_handle (0x00) is left as-is; it
+    is a placeholder that ``add_relics`` overwrites with a ghost's game-allocated handle.
+
+    Args:
+        real_id: the EquipParamAntique row id; stored as ``real_id + 0x80000000``.
+        effects: up to 3 primary effect IDs (EMPTY_EFFECT / omitted = empty slot).
+        curses:  up to 3 curse effect IDs (EMPTY_EFFECT / omitted = empty slot).
+        template: a real 80-byte relic ItemState record to copy constant fields from.
+
+    Returns an 80-byte record ready to hand to ``add_relics``.
+    """
+    if len(template) != _RELIC_STATE_SIZE:
+        raise ValueError(
+            f"template is {len(template)} bytes; expected {_RELIC_STATE_SIZE}")
+    eff = (list(effects) + [EMPTY_EFFECT] * 3)[:3]
+    cur = (list(curses) + [EMPTY_EFFECT] * 3)[:3]
+
+    rec = bytearray(template)
+    struct.pack_into("<I", rec, 0x04, (real_id + 0x80000000) & _U32_MAX)
+    struct.pack_into("<III", rec, 0x10, *(e & _U32_MAX for e in eff))
+    struct.pack_into("<III", rec, 0x38, *(c & _U32_MAX for c in cur))
+    return bytes(rec)
+
+
+def adjust_murks(blob: bytes, delta: int) -> tuple[bytes, int, int]:
+    """Apply a signed Murk delta to a character blob (clamped to [0, U32_MAX]).
+
+    Used by relic purchasing: negative for buys, positive for sell refunds. Mirrors the
+    Murk field location/handling in delete_relics. Returns (new_blob, before, after);
+    length-preserving.
+    """
+    data = bytearray(blob)
+    _, items_end = _parse_items(data, start_offset=0x14, slot_count=5120)
+    off = items_end + _MURKS_REL_OFFSET
+    before = struct.unpack_from("<I", data, off)[0]
+    after = max(0, min(before + delta, _U32_MAX))
+    struct.pack_into("<I", data, off, after)
+    return bytes(data), before, after
+
+
+def add_capacity(blob: bytes) -> int:
+    """Max relics addable to this character blob via ``add_relics``, without growing it.
+
+    Equals ``min(#reusable ghost relic records, #free ItemEntry slots)``. ``add_relics``
+    raises AddCapacityError for any add beyond this. Read-only.
+    """
+    data = bytearray(blob)
+    items, items_end = _parse_items(data, start_offset=0x14, slot_count=5120)
+    active = _parse_active_handles(data, items_end)
+    ghosts = sum(
+        1 for item in items
+        if (item.gaitem_handle & 0xF0000000) == ITEM_TYPE_RELIC
+        and item.size == _RELIC_STATE_SIZE
+        and item.gaitem_handle not in active
+    )
+
+    count_off = items_end + _ENTRY_COUNT_REL_OFFSET
+    entries_start = count_off + 4
+    free_slots = 0
+    for i in range(_ITEM_ENTRY_SLOT_COUNT):
+        off = entries_start + i * _ITEM_ENTRY_SIZE
+        if off + _ITEM_ENTRY_SIZE > len(data):
+            break
+        if struct.unpack_from("<I", data, off)[0] == 0:
+            free_slots += 1
+    return min(ghosts, free_slots)
 
 
 def add_relics(blob: bytes, records) -> tuple[bytes, AddResult]:

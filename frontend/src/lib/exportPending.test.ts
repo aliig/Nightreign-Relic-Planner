@@ -55,6 +55,8 @@ describe("exportPendingChanges", () => {
           },
           { id: "b", kind: "rename", index: 1, name: "y", oldName: "z" },
         ],
+        mints: [],
+        murkDelta: 0,
         meta: {},
       },
     }
@@ -82,6 +84,8 @@ describe("exportPendingChanges", () => {
         sells: [],
         favorites: {},
         loadoutOps: [{ id: "d", kind: "delete", index: 0, name: "n" }],
+        mints: [],
+        murkDelta: 0,
         meta: {},
       },
     }
@@ -103,7 +107,14 @@ describe("exportPendingChanges", () => {
       })),
     )
     const pending: Record<number, SlotPending> = {
-      0: { sells: [1], favorites: {}, loadoutOps: [], meta: {} },
+      0: {
+        sells: [1],
+        favorites: {},
+        loadoutOps: [],
+        mints: [],
+        murkDelta: 0,
+        meta: {},
+      },
     }
     await expect(
       exportPendingChanges(new File([new Uint8Array([0])], "s.sl2"), pending),

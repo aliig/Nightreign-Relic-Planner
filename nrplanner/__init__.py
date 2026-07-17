@@ -23,8 +23,14 @@ from nrplanner.models import (
 from nrplanner.scoring import BuildScorer
 from nrplanner.optimizer import VesselOptimizer
 from nrplanner.writer import (
+    AddCapacityError,
+    AddResult,
     DeleteResult,
     FavoriteResult,
+    add_capacity,
+    add_relics,
+    adjust_murks,
+    build_relic_record,
     delete_relics,
     read_acquisition_ids,
     read_favorite_handles,
@@ -32,6 +38,11 @@ from nrplanner.writer import (
     repack_sl2,
     sell_value,
     set_favorites,
+)
+from nrplanner.generator import (
+    GeneratedRelic,
+    GenerationError,
+    RelicGenerator,
 )
 from nrplanner.vessel_writer import (
     PresetRecord,
@@ -67,9 +78,12 @@ __all__ = [
     # Optimizer
     "BuildScorer", "VesselOptimizer",
     # Save write-back
-    "DeleteResult", "FavoriteResult", "delete_relics", "read_acquisition_ids",
-    "read_favorite_handles", "read_murks", "repack_sl2", "sell_value",
-    "set_favorites",
+    "AddCapacityError", "AddResult", "DeleteResult", "FavoriteResult",
+    "add_capacity", "add_relics", "adjust_murks", "build_relic_record", "delete_relics",
+    "read_acquisition_ids", "read_favorite_handles", "read_murks", "repack_sl2",
+    "sell_value", "set_favorites",
+    # Relic generation
+    "RelicGenerator", "GeneratedRelic", "GenerationError",
     # Loadout / vessel write-back
     "PresetRecord", "VesselWriteError", "add_preset", "delete_preset",
     "now_filetime", "overwrite_preset", "parse_presets", "rename_preset",

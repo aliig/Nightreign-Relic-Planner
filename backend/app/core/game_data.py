@@ -7,12 +7,32 @@ from typing import Annotated
 
 from fastapi import Depends
 
-from nrplanner import SourceDataHandler
+from nrplanner import RelicGenerator, SourceDataHandler
 
 
 @lru_cache(maxsize=1)
 def get_game_data() -> SourceDataHandler:
     return SourceDataHandler(language="en_US")
+
+
+@lru_cache(maxsize=1)
+def get_relic_lots() -> dict:
+    """Acquisition-odds table for relic purchases (real color/tier weights).
+
+    Loaded from relic_lots.json if present; otherwise {} and the generator falls
+    back to labelled approximate odds. The effect roll is exact either way.
+    """
+    import nrplanner as _pkg
+    path = Path(_pkg.__file__).parent / "resources" / "json" / "relic_lots.json"
+    if not path.exists():
+        return {}
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+@lru_cache(maxsize=1)
+def get_relic_generator() -> RelicGenerator:
+    """Shared RelicGenerator singleton (its pool/template caches persist across rolls)."""
+    return RelicGenerator(get_game_data(), lots=get_relic_lots())
 
 
 @lru_cache(maxsize=1)
@@ -45,3 +65,4 @@ def game_data_version() -> str:
 
 
 GameDataDep = Annotated[SourceDataHandler, Depends(get_game_data)]
+RelicGeneratorDep = Annotated[RelicGenerator, Depends(get_relic_generator)]

@@ -7,10 +7,11 @@
  * blob is fed as the input to the loadout export, so one download carries every
  * change for a slot. Repeats per slot that has pending changes.
  */
-import type { PendingLoadoutOp, SlotPending } from "./pendingChanges"
+import type { MintSpec, PendingLoadoutOp, SlotPending } from "./pendingChanges"
 
 export type PendingExportSummary = {
   filename: string
+  minted: number
   sold: number
   bookmarks: number
   added: number
@@ -96,6 +97,42 @@ function filenameFrom(res: Response, fallback: string): string {
   return cd.match(/filename="?([^"]+)"?/)?.[1] ?? fallback
 }
 
+/**
+ * POST /saves/export-add-relics — mint purchased relics + apply the net Murk delta.
+ * Returns the modified blob (fed to the next chain step). Runs FIRST in the chain so
+ * ga_handles are assigned before anything downstream; a minted relic therefore cannot be
+ * referenced by a same-export loadout op (its handle only exists after this call).
+ */
+async function postAddRelicsExport(
+  file: Blob,
+  filename: string,
+  slotIndex: number,
+  mints: MintSpec[],
+  murkDelta: number,
+): Promise<{ blob: Blob; filename: string; headers: Headers }> {
+  const specs = mints.map((m) => ({
+    real_id: m.real_id,
+    effects: m.effects,
+    curses: m.curses,
+  }))
+  const form = new FormData()
+  form.append("file", file, filename)
+  form.append("slot_index", String(slotIndex))
+  form.append("specs", JSON.stringify(specs))
+  form.append("murk_delta", String(murkDelta))
+  const res = await fetch("/api/v1/saves/export-add-relics", {
+    method: "POST",
+    headers: authHeaders(),
+    body: form,
+  })
+  if (!res.ok) throw new PendingExportError(await detailMessage(res))
+  return {
+    blob: await res.blob(),
+    filename: filenameFrom(res, filename),
+    headers: res.headers,
+  }
+}
+
 /** POST /saves/export — returns the modified blob + summary headers (no download). */
 async function postRelicExport(
   file: Blob,
@@ -167,6 +204,7 @@ export async function exportPendingChanges(
   let filename = file.name || "save.sl2"
   const sum: PendingExportSummary = {
     filename,
+    minted: 0,
     sold: 0,
     bookmarks: 0,
     added: 0,
@@ -179,6 +217,21 @@ export async function exportPendingChanges(
 
   for (const [slotStr, slot] of Object.entries(pending)) {
     const slotIndex = Number(slotStr)
+
+    // Mints first: they assign new ga_handles, so downstream steps operate on the
+    // final relic set. The net Murk delta (purchase cost − dud refunds) rides along.
+    if (slot.mints.length) {
+      const r = await postAddRelicsExport(
+        current,
+        filename,
+        slotIndex,
+        slot.mints,
+        slot.murkDelta,
+      )
+      current = r.blob
+      filename = r.filename
+      sum.minted += Number(r.headers.get("x-relics-added") ?? 0)
+    }
 
     if (slot.sells.length || Object.keys(slot.favorites).length) {
       const r = await postRelicExport(

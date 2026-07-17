@@ -19,6 +19,7 @@ import {
   type PendingLoadoutOp,
   readAll,
   removeLoadoutOp,
+  removeMint,
   setFavorite,
   toggleSell,
   usePendingAll,
@@ -102,6 +103,31 @@ export function PendingExportButton() {
         undo: () => removeLoadoutOp(slot, op.id),
       })
     }
+    for (const m of s.mints) {
+      const odds =
+        m.oddsSource && m.oddsSource !== "exact" ? " · odds: estimated" : ""
+      entries.push({
+        id: `mint-${m.id}`,
+        label: `Buy ${m.name}`,
+        sub: `${m.tier} ${m.color}${m.isDeep ? " · Deep" : ""}${odds}`,
+        warn: m.builds?.length
+          ? `Keeps for: ${m.builds.join(", ")}`
+          : undefined,
+        undo: () => removeMint(slot, m.id),
+      })
+    }
+    if (s.murkDelta) {
+      entries.push({
+        id: `murk-${slot}`,
+        label:
+          s.murkDelta < 0
+            ? `Spend ${formatMurks(-s.murkDelta)} Murk on purchases`
+            : `Net +${formatMurks(s.murkDelta)} Murk from purchases`,
+        undo: () => {
+          for (const m of s.mints) removeMint(slot, m.id)
+        },
+      })
+    }
     count += entries.length
     if (entries.length) groups.push({ slot, entries })
   }
@@ -149,6 +175,7 @@ export function PendingExportButton() {
       // clearAll() here; doing so would snap the views back to the original.
       setOpen(false)
       const parts: string[] = []
+      if (r.minted) parts.push(`${r.minted} relic(s) added`)
       if (r.sold) parts.push(`${r.sold} relic(s) sold`)
       if (r.bookmarks) parts.push(`${r.bookmarks} bookmark change(s)`)
       if (r.added) parts.push(`${r.added} loadout(s) added`)

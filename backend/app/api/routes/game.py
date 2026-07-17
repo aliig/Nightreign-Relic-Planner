@@ -4,12 +4,15 @@ All data is static and loaded once at startup via the SourceDataHandler singleto
 """
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from app.api.deps import GameDataDep
+from app.core.game_data import RelicGeneratorDep
+from app.models import GeneratedRelicPublic, RollRelicRequest
 from nrplanner.constants import CHARACTER_NAME_ID, CHARACTER_NAMES, RELIC_COLOR_HEX
 from nrplanner.cumulative import summarize_cumulative_effects
+from nrplanner.generator import GenerationError
 from nrplanner.models import CumulativeEffectGroup
 
 router = APIRouter(prefix="/game", tags=["game"])
@@ -70,3 +73,43 @@ def cumulative_effects(
     same % bonuses the optimizer does. Mirrors the optimizer's per-vessel summary.
     """
     return [summarize_cumulative_effects(ids, ds) for ids in body.effect_id_groups]
+
+
+@router.post("/roll-relic", response_model=GeneratedRelicPublic)
+def roll_relic(
+    body: RollRelicRequest, generator: RelicGeneratorDep
+) -> GeneratedRelicPublic:
+    """Roll one relic the way an in-game purchase does (weighted-random effects).
+
+    Stateless game-data computation (no auth). ``mode="random"`` is a surprise
+    purchase (color/tier from the acquisition odds); ``mode="targeted"`` uses the
+    given color+tier. The effect roll is always exact; ``odds_source`` reports the
+    fidelity of the color/tier meta-roll.
+    """
+    try:
+        relic = generator.roll(
+            is_deep=body.is_deep,
+            version=body.version,
+            mode=body.mode,
+            color=body.color,
+            tier=body.tier,
+            seed=body.seed,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except GenerationError as exc:  # pragma: no cover - defensive
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return GeneratedRelicPublic(
+        real_id=relic.real_id,
+        item_id=relic.item_id,
+        color=relic.color,
+        tier=relic.tier,
+        is_deep=relic.is_deep,
+        effects=list(relic.effects),
+        curses=list(relic.curses),
+        odds_source=relic.odds_source,
+        name=relic.name,
+        effect_names=list(relic.effect_names),
+        curse_names=list(relic.curse_names),
+    )

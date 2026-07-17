@@ -82,3 +82,58 @@ describe("pendingChanges staleness guard", () => {
     expect(pc.noteSlotBase(0, "profB")).toBe(false)
   })
 })
+
+describe("pendingChanges mints (Relic Rites)", () => {
+  beforeEach(() => {
+    localStorage.clear()
+  })
+
+  const spec = (realId: number) => ({
+    real_id: realId,
+    item_id: realId + 0x80000000,
+    effects: [1, 2, 3],
+    curses: [4294967295, 4294967295, 4294967295],
+    name: `Relic ${realId}`,
+    color: "Red",
+    tier: "Grand",
+    isDeep: false,
+    oddsSource: "exact",
+  })
+
+  it("stages mints with stable ids and accumulates the murk delta", async () => {
+    const pc = await freshStore()
+    pc.addMints(0, [spec(200), spec(201)], -1200)
+    const s = pc.readSlot(0)
+    expect(s.mints).toHaveLength(2)
+    expect(s.mints[0].id).toBeTruthy()
+    expect(s.mints[0].real_id).toBe(200)
+    expect(s.murkDelta).toBe(-1200)
+    pc.addMints(0, [spec(202)], -600)
+    expect(pc.readSlot(0).mints).toHaveLength(3)
+    expect(pc.readSlot(0).murkDelta).toBe(-1800)
+  })
+
+  it("drops the slot once the last mint is removed", async () => {
+    const pc = await freshStore()
+    pc.addMints(0, [spec(200), spec(201)], -1200)
+    const firstId = pc.readSlot(0).mints[0].id
+    pc.removeMint(0, firstId)
+    expect(pc.readSlot(0).mints).toHaveLength(1)
+    pc.removeMint(0, pc.readSlot(0).mints[0].id)
+    expect(pc.readAll()[0]).toBeUndefined()
+  })
+
+  it("is a no-op for an empty batch", async () => {
+    const pc = await freshStore()
+    pc.addMints(0, [], 0)
+    expect(pc.readAll()[0]).toBeUndefined()
+  })
+
+  it("clears staged mints on a re-upload (stale save)", async () => {
+    const pc = await freshStore()
+    pc.noteSlotBase(0, "profA")
+    pc.addMints(0, [spec(200)], -600)
+    expect(pc.noteSlotBase(0, "profB")).toBe(true)
+    expect(pc.readAll()[0]).toBeUndefined()
+  })
+})

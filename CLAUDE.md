@@ -12,6 +12,19 @@ Your philosophy:
 
 ---
 
+# PRODUCT PRINCIPLE — 1:1 WITH THE GAME, NO EXPLOITS (CRITICAL)
+
+This app (relic purchasing, culling, build optimization, save editing) exists to **expedite
+legitimate in-game workflows for players who do NOT cheat** — never to exploit or cheat the game.
+Everything must mimic the game **1:1**: only relics the game could actually produce (legal +
+correct acquisition odds), faithful currencies and prices (Scenic Flatstone 600 Murk, Deep Scenic
+1800 Murk; Large / Deep-Large cost Sovereign Sigils, not Murk), real caps (1950 relic storage,
+ghost add-capacity, affordability), and refunds at the true sell price. No free currency, no
+impossible relics, no bypassing limits. **When fidelity and convenience conflict, choose fidelity**
+— the 1:1 faithfulness is the product's whole value to non-cheaters.
+
+---
+
 # CORE BEHAVIORS (CRITICAL)
 
 ## 1. Assumption Surfacing

@@ -49,10 +49,37 @@ export type RelicMeta = {
   builds?: number
 }
 
+/**
+ * A relic to MINT (add) into the save — from a Relic Rites purchase. Self-contained:
+ * carries the full spec so it never depends on a ga_handle or index (those don't exist
+ * until the game assigns them at add time). Never re-rolled; the concrete relic is fixed
+ * at "purchase" time.
+ */
+export type MintSpec = {
+  id: string
+  real_id: number
+  item_id: number
+  effects: number[] // 3, EMPTY (0xFFFFFFFF) for empty slots
+  curses: number[] // 3
+  name: string
+  color: string
+  tier: string
+  isDeep: boolean
+  /** "exact" | "approximate" | "targeted" — provenance of the color/tier odds. */
+  oddsSource: string
+  /** Build names whose top-N loadouts use this relic (why it's a keeper). */
+  builds?: string[]
+}
+
 export type SlotPending = {
   sells: number[] // ga_handles to sell
   favorites: Record<number, boolean> // ga_handle -> desired bookmark state
   loadoutOps: PendingLoadoutOp[]
+  // Relics to mint (Relic Rites purchases). Applied on export via export-add-relics.
+  mints: MintSpec[]
+  // Net Murk delta from purchases (negative = cost, after dud sell-refunds). Applied
+  // on export alongside the mints. Tied to mints — reset to 0 when no mints remain.
+  murkDelta: number
   // Label cache keyed by ga_handle (relic name / murk value) for the change log.
   // Purely cosmetic; pruned to the handles still referenced by sells/favorites.
   meta: Record<number, RelicMeta>
@@ -67,7 +94,14 @@ type State = Record<number, SlotPending>
 const STORAGE_KEY = "pendingChanges"
 
 function emptySlot(): SlotPending {
-  return { sells: [], favorites: {}, loadoutOps: [], meta: {} }
+  return {
+    sells: [],
+    favorites: {},
+    loadoutOps: [],
+    mints: [],
+    murkDelta: 0,
+    meta: {},
+  }
 }
 
 function load(): State {
@@ -158,7 +192,8 @@ function updateSlot(slot: number, fn: (s: SlotPending) => SlotPending) {
   if (
     s.sells.length === 0 &&
     Object.keys(s.favorites).length === 0 &&
-    s.loadoutOps.length === 0
+    s.loadoutOps.length === 0 &&
+    s.mints.length === 0
   ) {
     delete next[slot]
   }
@@ -227,6 +262,31 @@ export function removeLoadoutOp(slot: number, id: string) {
     ...s,
     loadoutOps: s.loadoutOps.filter((o) => o.id !== id),
   }))
+}
+
+/**
+ * Stage relics to mint (a Relic Rites purchase batch) and the batch's net Murk delta
+ * (negative = cost after dud sell-refunds). Each spec gets a stable id.
+ */
+export function addMints(
+  slot: number,
+  specs: Array<Omit<MintSpec, "id">>,
+  murkDelta: number,
+): void {
+  if (!specs.length && murkDelta === 0) return
+  updateSlot(slot, (s) => ({
+    ...s,
+    mints: [...s.mints, ...specs.map((spec) => ({ ...spec, id: nextId() }))],
+    murkDelta: s.murkDelta + murkDelta,
+  }))
+}
+
+/** Un-stage one minted relic. Resets the Murk delta once the last mint is removed. */
+export function removeMint(slot: number, id: string): void {
+  updateSlot(slot, (s) => {
+    const mints = s.mints.filter((m) => m.id !== id)
+    return { ...s, mints, murkDelta: mints.length === 0 ? 0 : s.murkDelta }
+  })
 }
 
 export function clearSlot(slot: number) {

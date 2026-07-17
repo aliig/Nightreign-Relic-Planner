@@ -885,6 +885,22 @@ class SourceDataHandler:
         e = self.effect_table[self.effect_table["ID"] == pool_id]
         return _filter_nonzero_weight(e)["attachEffectId"].values.tolist()
 
+    def get_pool_weighted_effects(self, pool_id: int) -> list[tuple[int, int]]:
+        """[(effect_id, effective_weight)] for a SPECIFIC pool (no deep-pool merging).
+
+        Effective weight = chanceWeight_dlc when it is > 0, else chanceWeight. Membership
+        is identical to get_pool_effects_strict (both use _filter_nonzero_weight), so a
+        weighted draw over this list reproduces the game's in-slot roll odds exactly.
+        """
+        if pool_id == -1:
+            return []
+        e = self.effect_table[self.effect_table["ID"] == pool_id]
+        kept = _filter_nonzero_weight(e).copy()
+        kept["w"] = kept["chanceWeight_dlc"].where(
+            kept["chanceWeight_dlc"] > 0, kept["chanceWeight"]
+        )
+        return [(int(eid), int(w)) for eid, w in zip(kept["attachEffectId"], kept["w"])]
+
     def get_effect_pools(self, effect_id: int) -> list[int]:
         return (self.effect_table[self.effect_table["attachEffectId"] == effect_id]
                 ["ID"].values.tolist())

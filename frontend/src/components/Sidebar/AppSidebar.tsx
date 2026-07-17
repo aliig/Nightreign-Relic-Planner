@@ -1,4 +1,12 @@
-import { BookMarked, Home, Layers, Package, Upload, Users } from "lucide-react"
+import {
+  BookMarked,
+  Home,
+  Layers,
+  Package,
+  Sparkles,
+  Upload,
+  Users,
+} from "lucide-react"
 
 import { Logo } from "@/components/Common/Logo"
 import {
@@ -29,6 +37,12 @@ const baseItems: Item[] = [
     title: "Inventory",
     path: "/inventory",
     description: "Browse, filter & cull your relics",
+  },
+  {
+    icon: Sparkles,
+    title: "Relic Rites",
+    path: "/rites",
+    description: "Bulk-buy & keep only build-worthy relics",
   },
   {
     icon: BookMarked,

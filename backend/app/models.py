@@ -231,6 +231,72 @@ class RelicsPublic(SQLModel):
     count: int
 
 
+# --- Relic generation ("purchase") ----------------------------------------
+
+class RollRelicRequest(SQLModel):
+    """Parameters for one relic-purchase roll."""
+    is_deep: bool = False
+    version: str = "1.03"
+    mode: str = "random"            # "random" (surprise purchase) | "targeted"
+    color: str | None = None        # required for mode="targeted"
+    tier: int | None = None         # 1..3, required for mode="targeted"
+    seed: int | None = None         # omit for a true random roll; set only to reproduce
+
+
+class GeneratedRelicPublic(SQLModel):
+    """A rolled relic (effects/curses already in canonical save order)."""
+    real_id: int
+    item_id: int
+    color: str
+    tier: int
+    is_deep: bool
+    effects: list[int]
+    curses: list[int]
+    odds_source: str                # "exact" | "approximate" | "targeted" (color/tier only)
+    name: str
+    effect_names: list[str]
+    curse_names: list[str]
+
+
+class AddRelicSpec(SQLModel):
+    """A concrete relic to mint into a save (from a prior roll)."""
+    real_id: int
+    effects: list[int]
+    curses: list[int]
+
+
+# --- Relic Rites (bulk purchase + build-aware cull) ------------------------
+
+class RitesKeeper(SQLModel):
+    """A generated relic worth keeping, and which builds' top-N use it."""
+    real_id: int
+    item_id: int
+    color: str
+    tier: int                       # 1..3 = number of properties
+    is_deep: bool
+    name: str
+    effects: list[int]
+    curses: list[int]
+    builds: list[str]               # names of builds whose top-N use this relic
+
+
+class RitesPlanResponse(SQLModel):
+    """The plan a bulk-purchase + cull request produces (nothing is written yet)."""
+    keepers: list[RitesKeeper]      # relics to mint (feed to /saves/export-add-relics)
+    generated: int
+    kept: int
+    duds: int
+    murk_before: int
+    murk_after: int                 # after net purchase cost (buys − dud refunds)
+    murk_cost: int                  # gross Murk spent buying everything generated
+    murk_refunded: int              # Murk credited from selling the duds
+    murk_delta: int                 # signed net to apply on export (= murk_after − murk_before)
+    limited_by: str | None = None   # "murk" | "storage" | "gen_max" | None
+    add_capacity: int               # max relics the save can accept this export
+    storage_left: int               # min(1950 − owned, add_capacity)
+    cull_candidates: list[int]      # ga_handles of owned relics no build's top-N uses
+
+
 # ---------------------------------------------------------------------------
 # Build models
 # ---------------------------------------------------------------------------

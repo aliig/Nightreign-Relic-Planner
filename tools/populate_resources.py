@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import ctypes
 import json
+import math
 import struct
 import sys
 import zlib
@@ -67,12 +68,26 @@ FMG_STEMS = [
     "AntiqueName_dlc01", "AttachEffectName_dlc01", "NpcName_dlc01", "GoodsName_dlc01",
 ]
 
-# Param files we need from regulation.bin (matched by filename stem)
+# Param files written as CSVs into resources/param/ (game_data_version hashes these,
+# so keep this to the relic-effect params ONLY — acquisition-side params below are
+# parsed in-memory for relic_lots.json and never emitted as CSV).
 TARGET_PARAMS: dict[str, str] = {
     "EquipParamAntique": "EquipParamAntique.param",
     "AttachEffectParam": "AttachEffectParam.param",
     "AttachEffectTableParam": "AttachEffectTableParam.param",
     "AntiqueStandParam": "AntiqueStandParam.param",
+}
+
+# Acquisition-side params parsed in-memory ONLY (relic purchase / drop lots, Phase 2).
+# NOT written as CSVs — see PARAM_PARSERS note. ItemTableParam is huge (34730 rows)
+# and MUST stay in-memory: it is the "Item Table" a flatstone shop row rolls (Phase 2
+# relic_lots.json). See generate_relic_lots_json for the shop -> table -> template chain.
+ACQUISITION_PARAMS: dict[str, str] = {
+    "ShopLineupParam": "ShopLineupParam.param",
+    "ItemTableParam": "ItemTableParam.param",
+    "ItemLotParam_map": "ItemLotParam_map.param",
+    "ItemLotParam_enemy": "ItemLotParam_enemy.param",
+    "EquipParamGoods": "EquipParamGoods.param",
 }
 
 # RSA public keys for BHD5 archives (PKCS#1 PEM, from Smithbox ArchiveKeys.cs)
@@ -571,6 +586,107 @@ def _parse_antique_stand_param(row: bytes) -> dict[str, str]:
     return result
 
 
+# ---------------------------------------------------------------------------
+# Acquisition-side params (Phase 2): shop lineup, item lots, goods.
+# Field offsets verified against Smithbox NR paramdefs (vawser/Smithbox
+# src/Smithbox.Data/Assets/PARAM/NR/Defs) AND the raw regulation bytes.
+# ---------------------------------------------------------------------------
+
+# ITEMLOT_PARAM_ST (224 bytes). ITEMLOT_ITEMCATEGORY: 0=None 1=Good 2=Weapon
+# 3=Armor 4=Accessory 5=Relic 6=CustomWeapon 7=ItemTable(nested lot).
+ITEM_LOT_PARAM_COLS = (
+    [f"lotItemId{i:02d}" for i in range(1, 9)]
+    + [f"lotItemCategory{i:02d}" for i in range(1, 9)]
+    + [f"lotItemBasePoint{i:02d}" for i in range(1, 9)]
+    + [f"cumulateLotPoint{i:02d}" for i in range(1, 9)]
+    + [f"lotItemNum{i:02d}" for i in range(1, 9)]
+    + ["getItemFlagId"]
+)
+
+# SHOP_LINEUP_PARAM (64 bytes). SHOP_LINEUP_EQUIPTYPE: 0=Weapon 1=Protector
+# 2=Accessory 3=Good 4=Relic 5=ItemTable(rolls a lot) 6=CustomWeapon.
+SHOP_LINEUP_PARAM_COLS = [
+    "equipId", "value", "mtrlId", "eventFlag_forStock", "eventFlag_forRelease",
+    "sellQuantity", "equipType", "costType", "setNum",
+    "value_Add", "value_Magnification", "iconId", "nameMsgId", "menuTitleMsgId",
+]
+
+# EQUIP_PARAM_GOODS_ST (224 bytes) — focused subset of leading fields.
+EQUIP_PARAM_GOODS_COLS = [
+    "refId_default", "sellValue", "sortId", "goodsType", "refCategory",
+    "goodsUseAnim", "maxNum", "refId_1", "vagrantItemLotId",
+]
+
+
+def _parse_item_lot_param(row: bytes) -> dict[str, str]:
+    """224-byte ITEMLOT_PARAM_ST row -> CSV column values (8 weighted slots)."""
+    ids = struct.unpack_from("<8i", row, 0x00)
+    cats = struct.unpack_from("<8i", row, 0x20)
+    base = struct.unpack_from("<8H", row, 0x40)
+    cumulate = struct.unpack_from("<8H", row, 0x50)
+    nums = struct.unpack_from("<8B", row, 0x8A)
+    get_item_flag = struct.unpack_from("<I", row, 0x80)[0]
+    out: dict[str, str] = {}
+    for i in range(8):
+        out[f"lotItemId{i + 1:02d}"] = str(ids[i])
+        out[f"lotItemCategory{i + 1:02d}"] = str(cats[i])
+        out[f"lotItemBasePoint{i + 1:02d}"] = str(base[i])
+        out[f"cumulateLotPoint{i + 1:02d}"] = str(cumulate[i])
+        out[f"lotItemNum{i + 1:02d}"] = str(nums[i])
+    out["getItemFlagId"] = str(get_item_flag)
+    return out
+
+
+def _parse_shop_lineup_param(row: bytes) -> dict[str, str]:
+    """64-byte SHOP_LINEUP_PARAM row -> CSV column values."""
+    equip_id, value, mtrl_id = struct.unpack_from("<3i", row, 0x04)
+    stock, release = struct.unpack_from("<2I", row, 0x10)
+    sell_qty = struct.unpack_from("<h", row, 0x18)[0]
+    value_add = struct.unpack_from("<i", row, 0x20)[0]
+    value_mag = struct.unpack_from("<f", row, 0x24)[0]
+    icon_id, name_msg, menu_title = struct.unpack_from("<3i", row, 0x28)
+    return {
+        "equipId": str(equip_id),
+        "value": str(value),
+        "mtrlId": str(mtrl_id),
+        "eventFlag_forStock": str(stock),
+        "eventFlag_forRelease": str(release),
+        "sellQuantity": str(sell_qty),
+        "equipType": str(row[0x1B]),
+        "costType": str(row[0x1C]),
+        "setNum": str(struct.unpack_from("<H", row, 0x1E)[0]),
+        "value_Add": str(value_add),
+        "value_Magnification": f"{value_mag:g}",
+        "iconId": str(icon_id),
+        "nameMsgId": str(name_msg),
+        "menuTitleMsgId": str(menu_title),
+    }
+
+
+def _parse_equip_param_goods(row: bytes) -> dict[str, str]:
+    """224-byte EQUIP_PARAM_GOODS_ST row -> CSV column values (leading subset)."""
+    ref_default = struct.unpack_from("<i", row, 0x04)[0]
+    sell_value = struct.unpack_from("<i", row, 0x14)[0]
+    sort_id = struct.unpack_from("<i", row, 0x20)[0]
+    max_num = struct.unpack_from("<h", row, 0x3A)[0]
+    ref_1 = struct.unpack_from("<i", row, 0x4C)[0]
+    vagrant_lot = struct.unpack_from("<i", row, 0x54)[0]
+    return {
+        "refId_default": str(ref_default),
+        "sellValue": str(sell_value),
+        "sortId": str(sort_id),
+        "goodsType": str(row[0x3E]),
+        "refCategory": str(row[0x3F]),
+        "goodsUseAnim": str(row[0x42]),
+        "maxNum": str(max_num),
+        "refId_1": str(ref_1),
+        "vagrantItemLotId": str(vagrant_lot),
+    }
+
+
+# CSV emitters — ONLY these params are written to resources/param/ (game_data_version
+# hashes those CSVs). The acquisition parsers above (_parse_shop_lineup_param etc.) are
+# intentionally NOT registered here: they're used in-memory by generate_relic_lots_json.
 PARAM_PARSERS: dict[str, tuple[list[str], callable]] = {
     "EquipParamAntique": (EQUIP_PARAM_ANTIQUE_COLS, _parse_equip_param_antique),
     "AttachEffectParam": (ATTACH_EFFECT_PARAM_COLS, _parse_attach_effect_param),
@@ -874,6 +990,254 @@ def generate_effects_json(
 
 
 # ---------------------------------------------------------------------------
+# relic_lots.json — flatstone purchase acquisition odds (Phase 2) — EXACT
+# ---------------------------------------------------------------------------
+#
+# A flatstone bought from the Small Jar Bazaar generates ONE random relic:
+# random color + random tier (Delicate/Polished/Grand = 1/2/3 effect slots) +
+# rolled effects. The FULL acquisition chain lives inside regulation.bin
+# (reverse-engineered 2026-07; byte-level trace in tools/RELIC_GENERATION_RE.md):
+#
+#   ShopLineupParam row (equipType @0x1B == 5 "Item Table"; equipId @0x04)
+#      -> ItemTableParam table whose row-id == that equipId (ids repeat; each
+#         row is ONE weighted entry) — fields we read per row:
+#           itemCategory @0x04 (5 = Relic leaf, 7 = nested ItemTable),
+#           itemId       @0x08 (relic template id, or nested table id),
+#           chanceWeight @0x0C (int16, low 16 bits; @0x0E is a separate =1 field)
+#      -> EquipParamAntique relic templates (the rolled relic)
+#
+# equipType=5 literally means "Item Table" -> ItemTableParam (NOT ItemLotParam,
+# which is why lot ids 49020/49300/... were never found in ItemLotParam_map/enemy).
+# The tier split is therefore EXACT, read straight from ItemTableParam chanceWeight:
+#   * Scenic (tables 49000 v1.02 / 49020 v1.03): flat table, per-template weights
+#     45/35/20 by tier -> Delicate 45% / Polished 35% / Grand 20% (uniform in tier).
+#   * Deep   (tables 49100 v1.02 / 49300 v1.03): nested (cat=7) into per-tier
+#     sub-tables weighted 100/500/400 -> Delicate 10% / Polished 50% / Grand 40%
+#     (per-template weights are NON-uniform within a tier — real sub-tier structure).
+#   * Large scenic (49010/49030) & Deep large (49200/49400): Grand-only tables.
+# Color is UNIFORM 25% in every pool: summing ItemTableParam weights per color
+# gives exactly 300/1200 (= 25%) for each of Red/Blue/Yellow/Green, and the tables
+# reference NO White templates. Corroborated by the EquipParamAntique color x tier
+# grid symmetry and by community EFFECT calculators (slavone
+# github.com/slavone/nighreign_relic_calculator + ip1259
+# github.com/ip1259/Elden-Ring-Nightreign-Legal-Relic-Generator) which confirm
+# 100-135 = v1.02 / 200-235 = v1.03 store templates but do NOT model the tier
+# meta-roll — that is this ItemTableParam finding.
+
+# ITEMLOT_ITEMCATEGORY (Smithbox NR paramdef): the ItemTableParam entry kinds we
+# follow. 5 = a relic template (EquipParamAntique id); 7 = a nested Item Table.
+_ITEM_TABLE_CAT_RELIC = 5
+_ITEM_TABLE_CAT_TABLE = 7
+
+# key -> (is_deep, version). The two base keys follow the generator's _lot_key
+# (f"{'deep' if is_deep else 'scenic'}_{version}"); the large_* / deep_large_* keys
+# reuse (is_deep, version) and are distinguished by their own ItemTableParam table
+# id (see RELIC_LOT_SHOP_EQUIPID). Order here sets the JSON key order.
+RELIC_LOT_POOLS: dict[str, tuple[bool, str]] = {
+    "scenic_1.02":       (False, "1.02"),
+    "scenic_1.03":       (False, "1.03"),
+    "deep_1.02":         (True, "1.02"),
+    "deep_1.03":         (True, "1.03"),
+    "large_scenic_1.02": (False, "1.02"),
+    "large_scenic_1.03": (False, "1.03"),
+    "deep_large_1.02":   (True, "1.02"),
+    "deep_large_1.03":   (True, "1.03"),
+}
+
+# Each flatstone is a ShopLineupParam row (equipType @0x1B == 5 "Item Table") whose
+# equipId (@0x04) is BOTH (a) the ItemTableParam table-id we roll for templates and
+# (b) the key to that row's price (value @0x08) + currency (costType @0x1C). Verified
+# ShopLineupParam rows (regulation.bin): 10110/10112->49000, 10114->49020,
+# 10111/10113->49100, 10115->49300, 13100/13101->49010, 13102->49030,
+# 13110/13111->49200, 13112->49400. Both patch versions of a flatstone share the price.
+RELIC_LOT_SHOP_EQUIPID: dict[str, int] = {
+    "scenic_1.02": 49000, "scenic_1.03": 49020,
+    "deep_1.02": 49100, "deep_1.03": 49300,
+    "large_scenic_1.02": 49010, "large_scenic_1.03": 49030,
+    "deep_large_1.02": 49200, "deep_large_1.03": 49400,
+}
+# Known in-game prices, used only if a shop row is missing/zero. These EXACTLY match
+# the ShopLineupParam value/costType read at runtime (verified: scenic 600 Murk,
+# deep 1800 Murk [costType 4]; large 5 Sigil, deep_large 10 Sigil [costType 5]).
+RELIC_LOT_FALLBACK_COST: dict[str, tuple[int, str]] = {
+    "scenic_1.02": (600, "Murk"), "scenic_1.03": (600, "Murk"),
+    "deep_1.02": (1800, "Murk"), "deep_1.03": (1800, "Murk"),
+    "large_scenic_1.02": (5, "Sovereign Sigil"), "large_scenic_1.03": (5, "Sovereign Sigil"),
+    "deep_large_1.02": (10, "Sovereign Sigil"), "deep_large_1.03": (10, "Sovereign Sigil"),
+}
+# SHOP_LINEUP_COSTTYPE enum (Smithbox NR): the currencies the flatstones use.
+_SHOP_COSTTYPE_CURRENCY = {0: "Runes", 4: "Murk", 5: "Sovereign Sigil"}
+_SHOP_EQUIPTYPE_ITEM_TABLE = 5  # SHOP_LINEUP_EQUIPTYPE: 5 = Item Table (rolls a lot)
+
+
+def _flatstone_shop_prices(
+    shop_rows: list[tuple[int, bytes]] | None,
+) -> dict[int, tuple[int, int]]:
+    """Map flatstone lot equipId -> (price, costType) from equipType=5 shop rows."""
+    prices: dict[int, tuple[int, int]] = {}
+    if not shop_rows:
+        return prices
+    for _rid, row in shop_rows:
+        vals = _parse_shop_lineup_param(row)
+        if int(vals["equipType"]) != _SHOP_EQUIPTYPE_ITEM_TABLE:
+            continue
+        equip_id = int(vals["equipId"])
+        if equip_id not in prices:  # first (all copies of a flatstone share the price)
+            prices[equip_id] = (int(vals["value"]), int(vals["costType"]))
+    return prices
+
+
+def _index_item_table(
+    item_table_rows: list[tuple[int, bytes]],
+) -> dict[int, list[bytes]]:
+    """Group ItemTableParam rows by table id. Ids repeat: each row is one entry."""
+    by_id: dict[int, list[bytes]] = {}
+    for rid, row in item_table_rows:
+        by_id.setdefault(rid, []).append(row)
+    return by_id
+
+
+def _resolve_item_table(
+    by_id: dict[int, list[bytes]], table_id: int
+) -> list[tuple[int, int]]:
+    """Flatten an ItemTableParam table to ``[(relic_template_id, weight)]``.
+
+    Follows the shop's Item Table exactly (see the module comment above): each row is
+    itemCategory @0x04, itemId @0x08, chanceWeight @0x0C (int16, low 16 bits).
+    category=5 (``_ITEM_TABLE_CAT_RELIC``) is a relic-template leaf; category=7
+    (``_ITEM_TABLE_CAT_TABLE``) is a nested Item Table resolved recursively. Nested
+    siblings are brought to a common multiple of their sub-totals so the returned
+    integer weights preserve the EXACT within-pool probability ratios (a flat table
+    keeps its literal chanceWeights, e.g. scenic 45/35/20).
+    """
+    children: list[tuple[list[tuple[int, int]], int, int]] = []  # (leaves, subtotal, w)
+    for row in by_id.get(table_id, []):
+        category = struct.unpack_from("<i", row, 0x04)[0]
+        item_id = struct.unpack_from("<i", row, 0x08)[0]
+        weight = struct.unpack_from("<h", row, 0x0C)[0]
+        if category == _ITEM_TABLE_CAT_RELIC:
+            children.append(([(item_id, 1)], 1, weight))
+        elif category == _ITEM_TABLE_CAT_TABLE:
+            leaves = _resolve_item_table(by_id, item_id)
+            subtotal = sum(w for _, w in leaves)
+            children.append((leaves, subtotal, weight))
+        # any other category is not expected for flatstones and is ignored
+    common = 1
+    for _leaves, subtotal, _w in children:
+        if subtotal:
+            common = math.lcm(common, subtotal)
+    out: dict[int, int] = {}
+    for leaves, subtotal, weight in children:
+        if not subtotal:
+            continue
+        factor = weight * (common // subtotal)
+        for leaf, w in leaves:
+            out[leaf] = out.get(leaf, 0) + w * factor
+    return list(out.items())
+
+
+def generate_relic_lots_json(
+    antique_rows: list[tuple[int, bytes]],
+    output_path: Path,
+    shop_rows: list[tuple[int, bytes]] | None = None,
+    item_table_rows: list[tuple[int, bytes]] | None = None,
+) -> None:
+    """Generate relic_lots.json (EXACT flatstone purchase odds) from ItemTableParam.
+
+    Emits ``entries`` as ``[real_id, weight]`` pairs read straight from the game:
+    each flatstone's ShopLineupParam row (equipType=5) names an ItemTableParam table
+    (``RELIC_LOT_SHOP_EQUIPID``) that enumerates the EquipParamAntique templates with
+    exact chanceWeights. ``_resolve_item_table`` flattens it (following nested tables)
+    to per-template integer weights whose ratios equal the in-game probabilities — an
+    EXACT color+tier+template distribution, so ``approximate`` is False.
+
+    ``shop_rows`` (in-memory ShopLineupParam) supplies price/currency; a documented
+    fallback (matching the verified in-game values) is used only if absent. When
+    ``item_table_rows`` is missing a pool is skipped (no approximation is emitted).
+    """
+    antique_by_id = {rid: row for rid, row in antique_rows}
+
+    def tier_of(real_id: int) -> int:
+        # attachEffectTableId_1/2/3 at offsets 16/20/24 (see _parse_equip_param_antique);
+        # tier = number of non-(-1) primary effect slots (1=Delicate/2=Polished/3=Grand).
+        row = antique_by_id.get(real_id)
+        if row is None:
+            return 0
+        e1, e2, e3 = struct.unpack_from("<3i", row, 16)
+        return sum(1 for x in (e1, e2, e3) if x != -1)
+
+    shop_prices = _flatstone_shop_prices(shop_rows)
+    by_table = _index_item_table(item_table_rows) if item_table_rows else {}
+
+    result: dict[str, dict] = {}
+    for key, (is_deep, version) in RELIC_LOT_POOLS.items():
+        table_id = RELIC_LOT_SHOP_EQUIPID[key]
+        leaves = _resolve_item_table(by_table, table_id) if by_table else []
+        if not leaves:
+            print(f"  WARNING: ItemTableParam table {table_id} ({key}) empty/missing; "
+                  "skipping (no odds emitted)")
+            continue
+
+        # Reduce to smallest integers (within-pool ratios preserved exactly).
+        pool_gcd = 0
+        for _rid, w in leaves:
+            pool_gcd = math.gcd(pool_gcd, w)
+        if pool_gcd > 1:
+            leaves = [(rid, w // pool_gcd) for rid, w in leaves]
+        leaves.sort(key=lambda e: (tier_of(e[0]), e[0]))  # group by tier for readability
+
+        # tier_weights metadata: aggregate weight per tier, normalized to percent
+        # (exact integers for the shipped data: scenic 45/35/20, deep 10/50/40).
+        total = sum(w for _, w in leaves)
+        tier_agg: dict[int, int] = {}
+        for rid, w in leaves:
+            tier_agg[tier_of(rid)] = tier_agg.get(tier_of(rid), 0) + w
+        tier_weights: dict[str, int | float] = {}
+        for t in sorted(tier_agg):
+            pct = tier_agg[t] * 100
+            tier_weights[str(t)] = pct // total if pct % total == 0 else round(pct / total, 4)
+
+        # Purchase price from the flatstone's ShopLineupParam row (equipType=5),
+        # falling back to the verified in-game value when unavailable/zero.
+        equip_id = RELIC_LOT_SHOP_EQUIPID.get(key)
+        price = shop_prices.get(equip_id) if equip_id is not None else None
+        if price and price[0] > 0:
+            buy_cost = price[0]
+            buy_currency = _SHOP_COSTTYPE_CURRENCY.get(price[1], f"costType{price[1]}")
+        else:
+            buy_cost, buy_currency = RELIC_LOT_FALLBACK_COST[key]
+
+        grand_only = set(tier_agg) == {3}
+        if grand_only:
+            note = (
+                f"EXACT. Large flatstone: ShopLineupParam equipType=5 equipId={table_id} "
+                f"-> ItemTableParam {table_id}; Grand-only, uniform 25% color."
+            )
+        else:
+            note = (
+                f"EXACT. ShopLineupParam equipType=5 equipId={table_id} -> ItemTableParam "
+                f"{table_id} chanceWeights; uniform 25% color; tier + per-template weights "
+                "read from the game (Delicate/Polished/Grand)."
+            )
+        result[key] = {
+            "is_deep": is_deep,
+            "version": version,
+            "approximate": False,
+            "buy_cost": buy_cost,
+            "buy_currency": buy_currency,
+            "note": note,
+            "tier_weights": tier_weights,
+            "entries": [[rid, w] for rid, w in leaves],
+        }
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(
+        json.dumps(result, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -1093,6 +1457,31 @@ def main() -> None:
         print(f"  effects.json: {effects_path.relative_to(resources_dir)}")
     else:
         print("  WARNING: AttachEffectParam not available, skipping effects.json")
+
+    # relic_lots.json: EXACT flatstone purchase odds (ShopLineupParam -> ItemTableParam
+    # -> EquipParamAntique). ShopLineupParam and ItemTableParam are parsed in-memory here
+    # ONLY (never written as CSVs — ItemTableParam is 34730 rows).
+    if "EquipParamAntique" in parsed_params:
+        shop_filename = ACQUISITION_PARAMS["ShopLineupParam"]
+        shop_data = param_lookup.get(shop_filename)
+        shop_rows = parse_param_rows(shop_data) if shop_data else None
+        if shop_data is None:
+            print("  WARNING: ShopLineupParam not found; using fallback buy_cost values")
+
+        item_table_filename = ACQUISITION_PARAMS["ItemTableParam"]
+        item_table_data = param_lookup.get(item_table_filename)
+        item_table_rows = parse_param_rows(item_table_data) if item_table_data else None
+        if item_table_data is None:
+            print("  WARNING: ItemTableParam not found; relic_lots odds cannot be emitted")
+
+        relic_lots_path = json_dir / "relic_lots.json"
+        generate_relic_lots_json(
+            parsed_params["EquipParamAntique"], relic_lots_path,
+            shop_rows=shop_rows, item_table_rows=item_table_rows,
+        )
+        print(f"  relic_lots.json: {relic_lots_path.relative_to(resources_dir)}")
+    else:
+        print("  WARNING: EquipParamAntique not available, skipping relic_lots.json")
 
     print("\nDone!")
 

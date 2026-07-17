@@ -13,12 +13,15 @@ from pathlib import Path
 import pytest
 
 from nrplanner import decrypt_sl2, parse_relics
+from nrplanner.constants import EMPTY_EFFECT
 from nrplanner.models import RelicInventory
 from nrplanner.save import _parse_items
 from nrplanner.vessel import LoadoutHandler
 from nrplanner.writer import (
     AddCapacityError,
+    add_capacity,
     add_relics,
+    build_relic_record,
     delete_relics,
     patch_slot_checksum,
     read_favorite_handles,
@@ -67,6 +70,42 @@ def test_patch_slot_checksum_roundtrip():
     end = len(blob) - 28
     expected = hashlib.md5(bytes(blob[4:end]), usedforsecurity=False).digest()
     assert bytes(blob[end:end + 16]) == expected
+
+
+class TestBuildRelicRecord:
+    """build_relic_record offset math — no save fixture needed."""
+
+    # item_id(0x04), effects(0x10/0x14/0x18), curses(0x38/0x3C/0x40).
+    _WRITTEN = set(range(0x04, 0x08)) | set(range(0x10, 0x1C)) | set(range(0x38, 0x44))
+
+    def test_writes_fields_and_preserves_all_other_bytes(self):
+        template = bytearray(i & 0xFF for i in range(80))  # distinct filler
+        struct.pack_into("<I", template, 0x00, 0xC0001234)  # relic-type handle
+        template = bytes(template)
+
+        real_id = 205
+        rec = build_relic_record(real_id, [310000, 320000, EMPTY_EFFECT],
+                                 [EMPTY_EFFECT, EMPTY_EFFECT, EMPTY_EFFECT], template)
+
+        assert len(rec) == 80
+        assert struct.unpack_from("<I", rec, 0x04)[0] == real_id + 0x80000000
+        assert list(struct.unpack_from("<III", rec, 0x10)) == [310000, 320000, EMPTY_EFFECT]
+        assert list(struct.unpack_from("<III", rec, 0x38)) == [EMPTY_EFFECT] * 3
+        # Handle left as-is (add_relics rewrites it); everything else preserved.
+        assert struct.unpack_from("<I", rec, 0x00)[0] == 0xC0001234
+        for i in range(80):
+            if i not in self._WRITTEN:
+                assert rec[i] == template[i], f"byte {i:#x} changed unexpectedly"
+
+    def test_pads_short_effect_and_curse_lists(self):
+        template = bytes(bytearray([0xC0, 0, 0, 0]) + bytearray(76))
+        rec = build_relic_record(100, [310000], [], template)
+        assert list(struct.unpack_from("<III", rec, 0x10)) == [310000, EMPTY_EFFECT, EMPTY_EFFECT]
+        assert list(struct.unpack_from("<III", rec, 0x38)) == [EMPTY_EFFECT] * 3
+
+    def test_rejects_wrong_template_size(self):
+        with pytest.raises(ValueError):
+            build_relic_record(100, [], [], b"\x00" * 79)
 
 
 # ---------------------------------------------------------------------------
@@ -302,3 +341,51 @@ class TestAddRelics:
             add_relics(userdata, [record[:79]])  # wrong length
         with pytest.raises(ValueError):
             add_relics(userdata, [b"\x00" * 80])  # not a relic handle
+
+    def test_add_capacity_matches_binding_constraint(self, userdata):
+        cap = add_capacity(userdata)
+        assert cap >= 0
+        relics, _ = parse_relics(userdata)
+        record = userdata[relics[0].offset:relics[0].offset + 80]
+        if cap:
+            _, res = add_relics(userdata, [record] * cap)
+            assert res.entry_count_after == res.entry_count_before + cap
+        with pytest.raises(AddCapacityError):
+            add_relics(userdata, [record] * (cap + 1))
+
+    def test_build_generated_relic_full_roundtrip(self, raw_save, userdata, ds):
+        """Roll a legal relic, mint it via build_relic_record, and round-trip it.
+
+        The minted relic must carry the ROLLED spec (item_id + effects + curses), not
+        the donor template's, while every donor byte outside those fields is preserved.
+        """
+        from nrplanner.generator import RelicGenerator
+
+        ghosts = _ghost_relics(userdata)
+        if not ghosts:
+            pytest.skip("fixture save has no ghost records to resurrect")
+
+        before, _ = parse_relics(userdata)
+        donor = next(r for r in before if r.size == 80)
+        template = userdata[donor.offset:donor.offset + 80]
+
+        # Prefer a deep relic that actually rolled a curse (exercises curse bytes).
+        gen = RelicGenerator(ds)
+        relic = gen.roll(is_deep=True, mode="random", seed=0)
+        for s in range(1, 60):
+            if any(c not in (EMPTY_EFFECT,) for c in relic.curses):
+                break
+            relic = gen.roll(is_deep=True, mode="random", seed=s)
+
+        record = build_relic_record(relic.real_id, relic.effects, relic.curses, template)
+        new_blob, result = add_relics(userdata, [record])
+        assert len(new_blob) == len(userdata)
+
+        repacked = repack_sl2(raw_save, {0: new_blob})
+        rt = _decrypt_blob(repacked)
+        after, _ = parse_relics(rt)
+        added = {r.ga_handle: r for r in after}[result.added_handles[0]]
+
+        assert added.item_id == relic.item_id
+        assert (added.effect_1, added.effect_2, added.effect_3) == relic.effects
+        assert (added.sec_effect1, added.sec_effect2, added.sec_effect3) == relic.curses
