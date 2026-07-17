@@ -625,6 +625,27 @@ function RitesTool({
               : `${selectedBuilds.size} selected — runs the optimizer per build (slower; progress shown)`}
           </span>
         </div>
+        {buildsForm.options.length > 1 && (
+          <div className="flex items-center gap-3 text-xs">
+            <button
+              type="button"
+              onClick={() =>
+                setSelectedBuilds(new Set(buildsForm.options.map((b) => b.id)))
+              }
+              className="text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+            >
+              Select all ({buildsForm.options.length})
+            </button>
+            <button
+              type="button"
+              onClick={() => setSelectedBuilds(new Set())}
+              disabled={selectedBuilds.size === 0}
+              className="text-muted-foreground underline-offset-2 hover:text-foreground hover:underline disabled:opacity-40 disabled:no-underline"
+            >
+              Select none
+            </button>
+          </div>
+        )}
         {buildsForm.options.length === 0 ? (
           <p className="text-xs text-muted-foreground">
             No builds yet —{" "}
