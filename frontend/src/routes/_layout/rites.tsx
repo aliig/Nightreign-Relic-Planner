@@ -661,7 +661,19 @@ function RitesTool({
           <span className="text-sm font-medium">Stop when</span>
           <Select
             value={stopMode}
-            onValueChange={(v) => setStopMode(v as StopMode)}
+            onValueChange={(v) => {
+              const mode = v as StopMode
+              if (mode !== "fixed") {
+                // Budget / all-Murk spend from one shared pool — collapse to a
+                // single flatstone type so the allocation is unambiguous.
+                setQty((q) => {
+                  const active =
+                    BUCKETS.find((b) => (q[b.key] ?? 0) > 0) ?? BUCKETS[0]
+                  return { [active.key]: 1 }
+                })
+              }
+              setStopMode(mode)
+            }}
           >
             <SelectTrigger className="w-56">
               <SelectValue />
@@ -684,6 +696,13 @@ function RitesTool({
             />
           )}
         </div>
+
+        {stopMode !== "fixed" && (
+          <p className="text-xs text-muted-foreground">
+            Pick one flatstone type — your{" "}
+            {stopMode === "budget" ? "budget" : "Murk"} is spent entirely on it.
+          </p>
+        )}
 
         <div className="grid gap-2 sm:grid-cols-2">
           {BUCKETS.map((b) => (
@@ -713,13 +732,12 @@ function RitesTool({
                 />
               ) : (
                 <input
-                  type="checkbox"
+                  type="radio"
+                  name="rites-bucket"
                   checked={(qty[b.key] ?? 0) > 0}
-                  onChange={(e) =>
-                    setQty((q) => ({ ...q, [b.key]: e.target.checked ? 1 : 0 }))
-                  }
+                  onChange={() => setQty({ [b.key]: 1 })}
                   className="h-4 w-4"
-                  aria-label={`Include ${b.label}`}
+                  aria-label={`Buy ${b.label}`}
                 />
               )}
             </div>
