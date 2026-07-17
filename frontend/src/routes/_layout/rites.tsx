@@ -331,7 +331,7 @@ function RuleBuilder({
                 active={r.counts.includes(n)}
                 onClick={() => patch(r.id, { counts: toggleIn(r.counts, n) })}
               >
-                {TIER_NAMES[n]}
+                {TIER_NAMES[n]} ({n})
               </Chip>
             ))}
           </div>
