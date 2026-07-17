@@ -278,6 +278,7 @@ class RitesKeeper(SQLModel):
     effects: list[int]
     curses: list[int]
     builds: list[str]               # names of builds whose top-N use this relic
+    reason: str = "build"           # "build" (used by a build's top-N) | "inclusion" (rule)
 
 
 class RitesPlanResponse(SQLModel):

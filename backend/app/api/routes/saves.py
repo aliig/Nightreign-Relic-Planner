@@ -105,6 +105,7 @@ from nrplanner.rites import (
     BuildContext,
     PurchaseBucket,
     bulk_acquire,
+    select_cull_handles,
     unused_owned_handles,
 )
 from nrplanner.scoring import BuildScorer
@@ -1596,11 +1597,26 @@ def _resolve_buckets(buckets_raw: str) -> list[PurchaseBucket]:
     return out
 
 
+def _parse_rules(raw: str, field_name: str) -> list[dict]:
+    """Parse a JSON array of cull rules (objects). 422 on malformed input."""
+    try:
+        val = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(
+            status_code=422, detail=f"{field_name} must be a JSON array.") from exc
+    if not isinstance(val, list) or not all(isinstance(r, dict) for r in val):
+        raise HTTPException(
+            status_code=422, detail=f"{field_name} must be a JSON array of rule objects.")
+    return val
+
+
 def _rites_plan(
     file_bytes: bytes, filename: str, slot_index: int,
     build_ctxs: list[BuildContext], buckets: list[PurchaseBucket],
     stop_mode: str, budget: int | None, ds: Any, executor: Any, top_n: int,
     include_cull: bool,
+    inclusion_rules: list[dict] | None = None,
+    exclusion_rules: list[dict] | None = None,
 ) -> dict:
     """Compute a bulk-purchase + cull plan. Reads current Murk, owned relics, and
     capacity from the uploaded save (1:1 fidelity — never client-supplied). Persists
@@ -1628,7 +1644,9 @@ def _rites_plan(
         r = bulk_acquire(
             builds=build_ctxs, owned=owned, current_murk=current_murk,
             buckets=buckets, generator=get_relic_generator(), ds=ds,
-            stop_mode=stop_mode, budget=budget, storage_cap_left=storage_left,
+            stop_mode=stop_mode, budget=budget,
+            inclusion_rules=inclusion_rules, exclusion_rules=exclusion_rules,
+            storage_cap_left=storage_left,
             scorer=scorer, optimizer=optimizer, executor=executor, top_n=top_n,
         )
         for k in r.keepers:
@@ -1637,6 +1655,7 @@ def _rites_plan(
                 real_id=rel.real_id, item_id=rel.item_id, color=rel.color,
                 tier=rel.effect_count, is_deep=rel.is_deep, name=rel.name,
                 effects=list(rel.effects), curses=list(rel.curses), builds=k.builds,
+                reason=k.reason,
             ))
         generated, kept, duds = r.generated, r.kept, r.duds
         murk_after, murk_cost, murk_refunded = (
@@ -1649,12 +1668,11 @@ def _rites_plan(
         loadout.parse(blob)
         protected = set(loadout.relic_ga_hero_map.keys()) | read_favorite_handles(
             blob, items_end)
-        cull = [
-            h for h in unused_owned_handles(
-                owned, build_ctxs, ds, scorer=scorer, optimizer=optimizer,
-                executor=executor, top_n=top_n)
-            if h not in protected
-        ]
+        cull = select_cull_handles(
+            owned, build_ctxs, ds,
+            inclusion_rules=inclusion_rules, exclusion_rules=exclusion_rules,
+            protected_handles=protected,
+            scorer=scorer, optimizer=optimizer, executor=executor, top_n=top_n)
 
     return {
         "keepers": keepers,
@@ -1683,6 +1701,8 @@ async def rites_plan(
     budget: int | None = Form(None),
     top_n: int = Form(10),
     include_cull: bool = Form(True),
+    inclusion_rules: str = Form("[]"),
+    exclusion_rules: str = Form("[]"),
 ) -> RitesPlanResponse:
     """Plan a bulk relic purchase + build-aware cull against the uploaded save.
 
@@ -1700,6 +1720,8 @@ async def rites_plan(
 
     build_ctxs = _resolve_rites_builds(build_ids, builds, current_user, session)
     parsed_buckets = _resolve_buckets(buckets)
+    incl = _parse_rules(inclusion_rules, "inclusion_rules")
+    excl = _parse_rules(exclusion_rules, "exclusion_rules")
 
     file_bytes = await file.read()
     if not file_bytes:
@@ -1708,7 +1730,7 @@ async def rites_plan(
 
     plan = await run_in_threadpool(
         _rites_plan, file_bytes, filename, slot_index, build_ctxs, parsed_buckets,
-        stop_mode, budget, ds, executor, top_n, include_cull,
+        stop_mode, budget, ds, executor, top_n, include_cull, incl, excl,
     )
     return RitesPlanResponse(**plan)
 

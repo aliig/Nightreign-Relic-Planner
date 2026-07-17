@@ -26,6 +26,59 @@ from nrplanner.writer import sell_value
 # an optimizer inventory needs a unique handle; generated relics have none.
 _SYNTH_HANDLE_BASE = 0xC0F00000
 
+# Empty effect/curse slot sentinels.
+_EMPTY_SLOTS = {EMPTY_EFFECT, 0, -1}
+
+
+def _matches_one(relic: OwnedRelic, rule: dict) -> bool:
+    """True if `relic` satisfies every present condition of `rule` (AND).
+
+    Conditions (all optional): effect_counts (relic.effect_count in set), colors
+    (relic.color in set), is_deep (bool ==), has_effect_ids (relic has ALL), has_curse_ids
+    (relic has ALL), has_any_curse (bool, whether relic has >=1 non-empty curse). An empty
+    rule (no recognized conditions) matches NOTHING.
+    """
+    checked = False
+    counts = rule.get("effect_counts")
+    if counts:
+        checked = True
+        if relic.effect_count not in counts:
+            return False
+    colors = rule.get("colors")
+    if colors:
+        checked = True
+        if relic.color not in colors:
+            return False
+    is_deep = rule.get("is_deep")
+    if is_deep is not None:
+        checked = True
+        if bool(relic.is_deep) != bool(is_deep):
+            return False
+    has_effects = rule.get("has_effect_ids")
+    if has_effects:
+        checked = True
+        eff = set(relic.effects)
+        if not all(e in eff for e in has_effects):
+            return False
+    has_curses = rule.get("has_curse_ids")
+    if has_curses:
+        checked = True
+        cur = set(relic.curses)
+        if not all(c in cur for c in has_curses):
+            return False
+    has_any_curse = rule.get("has_any_curse")
+    if has_any_curse is not None:
+        checked = True
+        present = any(c not in _EMPTY_SLOTS for c in relic.curses)
+        if present != bool(has_any_curse):
+            return False
+    return checked
+
+
+def relic_matches_rules(relic: OwnedRelic, rules: list[dict] | None) -> bool:
+    """True if `relic` matches ANY rule in the set (OR). Empty/None set matches nothing."""
+    return any(_matches_one(relic, r) for r in (rules or []))
+
 
 @dataclass
 class BuildContext:
@@ -46,9 +99,10 @@ class PurchaseBucket:
 
 @dataclass
 class Keeper:
-    """A generated relic worth keeping, and which builds' top-N use its content."""
+    """A generated relic worth keeping, and why."""
     relic: OwnedRelic
-    builds: list[str] = field(default_factory=list)
+    builds: list[str] = field(default_factory=list)   # build names whose top-N use its content
+    reason: str = "build"                              # "build" | "inclusion"
 
 
 @dataclass
@@ -144,6 +198,8 @@ def bulk_acquire(*, builds: list[BuildContext], owned: list[OwnedRelic],
                  current_murk: int, buckets: list[PurchaseBucket],
                  generator: RelicGenerator, ds,
                  stop_mode: str = "fixed", budget: int | None = None,
+                 inclusion_rules: list[dict] | None = None,
+                 exclusion_rules: list[dict] | None = None,
                  storage_cap_left: int = 10**9,
                  scorer: BuildScorer | None = None,
                  optimizer: VesselOptimizer | None = None, executor=None,
@@ -181,48 +237,69 @@ def bulk_acquire(*, builds: list[BuildContext], owned: list[OwnedRelic],
     def refund(o: OwnedRelic) -> int:
         return sell_value(o.effect_count, o.is_deep)
 
-    # 3. pre-filter: drop redundant + hopeless before the expensive optimize -----
+    # 3. classify by rules (waterfall), then pre-filter the build-aware path ------
+    #    inclusion -> force-keep ; exclusion -> sell ; else -> build-aware candidate.
     owned_fps = {fingerprint_owned(o) for o in owned}
+    force_keep: list[OwnedRelic] = []
     scored: list[tuple[int, OwnedRelic]] = []
+    pre_by_handle: dict[int, int] = {}
     for o in generated:
+        if relic_matches_rules(o, inclusion_rules):
+            pre_by_handle[o.ga_handle] = max(
+                (scorer.positive_pre_score(o, b.build) for b in builds), default=0)
+            force_keep.append(o)
+            continue
+        if relic_matches_rules(o, exclusion_rules):
+            continue  # explicit "always sell" -> dud
         if fingerprint_owned(o) in owned_fps:
             continue  # you already own this content -> dud
         best_pre = max((scorer.positive_pre_score(o, b.build) for b in builds), default=0)
         if best_pre <= 0:
             continue  # cannot help any build -> dud
+        pre_by_handle[o.ga_handle] = best_pre
         scored.append((best_pre, o))
     scored.sort(key=lambda x: x[0], reverse=True)
     if len(scored) > max_candidates:
         scored = scored[:max_candidates]  # rest -> duds
     candidates = [o for _, o in scored]
-    pre_by_handle = {o.ga_handle: p for p, o in scored}
 
-    # 4. optimize each build over owned + candidates -----------------------------
-    inv = RelicInventory.from_owned_relics(owned + candidates)
+    # 4. optimize each build over owned + forced keepers + candidates -------------
+    inv = RelicInventory.from_owned_relics(owned + force_keep + candidates)
     build_used: dict[str, set] = {
         b.name: _optimize_used_fps(b, inv, optimizer, executor, top_n,
                                    max_per_vessel, deadline_secs)
         for b in builds
     }
-
-    # 5. keepers = candidates used by some build's top-N (new content only) -------
     all_used: set = set()
     for s in build_used.values():
         all_used |= s
-    keeper_fps = all_used - owned_fps
 
-    keepers_by_fp: dict = {}
-    for o in candidates:
+    # 5. keepers = inclusion-forced (any content) + build-used candidates ---------
+    keepers: list[Keeper] = []
+    seen_fp: set = set()
+    for o in force_keep:            # explicit "always keep" wins the waterfall
         fp = fingerprint_owned(o)
-        if fp in keeper_fps and fp not in keepers_by_fp:
-            names = [name for name, used in build_used.items() if fp in used]
-            keepers_by_fp[fp] = Keeper(relic=o, builds=names)
-    keepers = list(keepers_by_fp.values())
-    keepers.sort(key=lambda k: pre_by_handle.get(k.relic.ga_handle, 0), reverse=True)
+        if fp in seen_fp:
+            continue                # dedup identical copies
+        seen_fp.add(fp)
+        keepers.append(Keeper(relic=o, builds=[], reason="inclusion"))
+    for o in candidates:            # build-aware: new content placed in a build's top-N
+        fp = fingerprint_owned(o)
+        if fp in seen_fp or fp in owned_fps or fp not in all_used:
+            continue
+        seen_fp.add(fp)
+        names = [name for name, used in build_used.items() if fp in used]
+        keepers.append(Keeper(relic=o, builds=names, reason="build"))
 
+    def _keep_priority(k: Keeper) -> tuple[int, int]:
+        # inclusion outranks build-aware; then by best pre-score (for trimming order).
+        return (1 if k.reason == "inclusion" else 0,
+                pre_by_handle.get(k.relic.ga_handle, 0))
+
+    keepers.sort(key=_keep_priority, reverse=True)
     limited: str | None = "gen_max" if gen_max_hit else None
 
-    # 6. storage cap -------------------------------------------------------------
+    # 6. storage cap (drop lowest-priority keepers first) ------------------------
     if storage_cap_left is not None and len(keepers) > storage_cap_left:
         keepers = keepers[:max(0, storage_cap_left)]
         limited = "storage"
@@ -235,9 +312,9 @@ def bulk_acquire(*, builds: list[BuildContext], owned: list[OwnedRelic],
 
     if current_murk - net < 0:
         limited = "murk"
-        # 7a. drop cheapest keepers (a dropped keeper becomes a refunded dud)
-        keepers.sort(key=lambda k: (pre_by_handle.get(k.relic.ga_handle, 0),
-                                    k.relic.effect_count))
+        # 7a. drop lowest-priority keepers first (build before inclusion); a dropped
+        #     keeper becomes a refunded dud, which improves affordability.
+        keepers.sort(key=_keep_priority)
         drop = 0
         while current_murk - net < 0 and drop < len(keepers):
             net -= refund(keepers[drop].relic)
@@ -256,7 +333,7 @@ def bulk_acquire(*, builds: list[BuildContext], owned: list[OwnedRelic],
                 net -= (buy_cost_of[o.ga_handle] - refund(o))
                 removed.add(o.ga_handle)
             generated = [o for o in generated if o.ga_handle not in removed]
-        keepers.sort(key=lambda k: pre_by_handle.get(k.relic.ga_handle, 0), reverse=True)
+        keepers.sort(key=_keep_priority, reverse=True)
 
     # final authoritative tally
     keeper_handles = {k.relic.ga_handle for k in keepers}
@@ -305,3 +382,33 @@ def unused_owned_handles(owned: list[OwnedRelic], builds: list[BuildContext], ds
             continue
         unused.append(o.ga_handle)
     return unused
+
+
+def select_cull_handles(owned: list[OwnedRelic], builds: list[BuildContext], ds, *,
+                        inclusion_rules: list[dict] | None = None,
+                        exclusion_rules: list[dict] | None = None,
+                        protected_handles: set[int] | None = None,
+                        scorer: BuildScorer | None = None,
+                        optimizer: VesselOptimizer | None = None, executor=None,
+                        top_n: int = 10, max_per_vessel: int = 3,
+                        deadline_secs: float = 6.0) -> list[int]:
+    """ga_handles of owned relics to SELL, per the cull waterfall.
+
+    A relic is a cull candidate when (used by NO build's top-N OR it matches an exclusion
+    rule) AND it does NOT match an inclusion rule AND it is not protected (equipped /
+    bookmarked). Inclusion always wins (protects) and protected relics are never sold.
+    """
+    protected = protected_handles or set()
+    build_unused = set(unused_owned_handles(
+        owned, builds, ds, scorer=scorer, optimizer=optimizer, executor=executor,
+        top_n=top_n, max_per_vessel=max_per_vessel, deadline_secs=deadline_secs))
+
+    out: list[int] = []
+    for o in owned:
+        if o.ga_handle in protected:
+            continue
+        if relic_matches_rules(o, inclusion_rules):
+            continue  # explicit keep protects from culling
+        if o.ga_handle in build_unused or relic_matches_rules(o, exclusion_rules):
+            out.append(o.ga_handle)
+    return out

@@ -16,6 +16,8 @@ from nrplanner.rites import (
     PurchaseBucket,
     bulk_acquire,
     generated_to_owned,
+    relic_matches_rules,
+    select_cull_handles,
     unused_owned_handles,
 )
 
@@ -169,3 +171,125 @@ def test_unused_owned_handles_flags_only_unused(ds, wylder_eff):
     unused = unused_owned_handles([good, bad], [_ctx([wylder_eff])], ds, **_OPT)
     assert 0xC1000002 in unused, "the unused relic is a cull candidate"
     assert 0xC1000001 not in unused, "a placed relic is not culled"
+
+
+# ---------------------------------------------------------------------------
+# Rule matching (pure) + waterfall + rule-based cull
+# ---------------------------------------------------------------------------
+
+def test_relic_matches_rules_each_field():
+    r = _owned([111, 222, EMPTY], color="Red")   # 2 effects, Red, not deep, no curse
+    assert relic_matches_rules(r, [{"effect_counts": [2]}])
+    assert not relic_matches_rules(r, [{"effect_counts": [1, 3]}])
+    assert relic_matches_rules(r, [{"colors": ["Red", "Blue"]}])
+    assert not relic_matches_rules(r, [{"colors": ["Blue"]}])
+    assert relic_matches_rules(r, [{"is_deep": False}])
+    assert not relic_matches_rules(r, [{"is_deep": True}])
+    assert relic_matches_rules(r, [{"has_effect_ids": [111, 222]}])   # ALL present
+    assert not relic_matches_rules(r, [{"has_effect_ids": [111, 999]}])  # 999 absent
+    assert relic_matches_rules(r, [{"has_any_curse": False}])
+    assert not relic_matches_rules(r, [{"has_any_curse": True}])
+
+
+def test_rule_and_within_or_across_empty_matches_nothing():
+    r = _owned([111, EMPTY, EMPTY], color="Red")   # 1 effect, Red
+    assert relic_matches_rules(r, [{"effect_counts": [1], "colors": ["Red"]}])   # AND
+    assert not relic_matches_rules(r, [{"effect_counts": [1], "colors": ["Blue"]}])
+    assert relic_matches_rules(r, [{"colors": ["Blue"]}, {"colors": ["Red"]}])   # OR set
+    assert not relic_matches_rules(r, [{}])        # empty rule matches nothing
+    assert not relic_matches_rules(r, [])          # empty set
+    assert not relic_matches_rules(r, None)
+
+
+def test_curse_rules():
+    cursed = OwnedRelic(
+        ga_handle=0xC1000009, item_id=2010000 + 0x80000000, real_id=2010000, color="Red",
+        effects=[111, EMPTY, EMPTY], curses=[555, EMPTY, EMPTY], is_deep=True,
+        name="x", tier="Delicate")
+    assert relic_matches_rules(cursed, [{"has_any_curse": True}])
+    assert relic_matches_rules(cursed, [{"has_curse_ids": [555]}])
+    assert not relic_matches_rules(cursed, [{"has_curse_ids": [999]}])
+    assert relic_matches_rules(cursed, [{"is_deep": True}])
+
+
+def test_inclusion_wins_over_exclusion(ds, wylder_eff):
+    relic = _gen([wylder_eff, EMPTY, EMPTY], color="Red")   # matches both rules below
+    res = bulk_acquire(
+        builds=[_ctx([wylder_eff])], owned=[], current_murk=100_000,
+        buckets=[PurchaseBucket(False, "1.03", 600, quantity=1)],
+        generator=_StubGen([relic]), ds=ds, storage_cap_left=10,
+        inclusion_rules=[{"colors": ["Red"]}],
+        exclusion_rules=[{"effect_counts": [1]}],
+        **_OPT,
+    )
+    assert res.kept == 1
+    assert res.keepers[0].reason == "inclusion"
+
+
+def test_exclusion_sells_a_build_relevant_relic(ds, wylder_eff):
+    relic = _gen([wylder_eff, EMPTY, EMPTY], color="Red")   # would be a build keeper
+    res = bulk_acquire(
+        builds=[_ctx([wylder_eff])], owned=[], current_murk=100_000,
+        buckets=[PurchaseBucket(False, "1.03", 600, quantity=1)],
+        generator=_StubGen([relic]), ds=ds, storage_cap_left=10,
+        exclusion_rules=[{"effect_counts": [1]}],   # "sell all 1-property"
+        **_OPT,
+    )
+    assert res.kept == 0
+    assert res.duds == 1
+
+
+def test_inclusion_keeps_a_build_useless_relic(ds, wylder_eff):
+    useless = _gen([EMPTY, EMPTY, EMPTY], color="Red")   # no build would place it
+    res = bulk_acquire(
+        builds=[_ctx([wylder_eff])], owned=[], current_murk=100_000,
+        buckets=[PurchaseBucket(False, "1.03", 600, quantity=1)],
+        generator=_StubGen([useless]), ds=ds, storage_cap_left=10,
+        inclusion_rules=[{"colors": ["Red"]}],
+        **_OPT,
+    )
+    assert res.kept == 1
+    assert res.keepers[0].reason == "inclusion"
+
+
+def test_murk_math_with_force_keep_and_force_sell(ds, wylder_eff):
+    keep = _gen([wylder_eff, EMPTY, EMPTY], color="Blue")   # inclusion (Blue) -> kept
+    sell = _gen([wylder_eff, EMPTY, EMPTY], color="Red")    # exclusion (Red) -> sold (refund 150)
+    res = bulk_acquire(
+        builds=[_ctx([wylder_eff])], owned=[], current_murk=100_000,
+        buckets=[PurchaseBucket(False, "1.03", 600, quantity=2)],
+        generator=_StubGen([keep, sell]), ds=ds, storage_cap_left=10,
+        inclusion_rules=[{"colors": ["Blue"]}],
+        exclusion_rules=[{"colors": ["Red"]}],
+        **_OPT,
+    )
+    assert res.kept == 1 and res.keepers[0].reason == "inclusion"
+    assert res.murk_gross_cost == 1200
+    assert res.murk_refunded == 150
+    assert res.murk_after == 100_000 - (1200 - 150)
+    assert res.murk_after >= 0
+
+
+def test_select_cull_handles_rules_and_protection(ds, wylder_eff):
+    used = _owned([wylder_eff, EMPTY, EMPTY], color="Red", ga_handle=0xC1000001)
+    unused = _owned([EMPTY, EMPTY, EMPTY], color="Red", ga_handle=0xC1000002)
+    owned = [used, unused]
+    builds = [_ctx([wylder_eff])]
+
+    # build-aware only: unused is a candidate, used is not
+    base = select_cull_handles(owned, builds, ds, **_OPT)
+    assert 0xC1000002 in base and 0xC1000001 not in base
+
+    # exclusion sells a build-used relic
+    excl = select_cull_handles(
+        owned, builds, ds, exclusion_rules=[{"has_effect_ids": [wylder_eff]}], **_OPT)
+    assert 0xC1000001 in excl
+
+    # inclusion protects an otherwise-cullable relic
+    incl = select_cull_handles(
+        owned, builds, ds, inclusion_rules=[{"colors": ["Red"]}], **_OPT)
+    assert 0xC1000002 not in incl
+
+    # explicitly protected handles are never culled
+    prot = select_cull_handles(owned, builds, ds, protected_handles={0xC1000002}, **_OPT)
+    assert 0xC1000002 not in prot
