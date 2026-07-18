@@ -1,4 +1,5 @@
 """Save file upload, profile discovery, and relic inventory endpoints."""
+import hashlib
 import json
 import queue
 import tempfile
@@ -1607,6 +1608,20 @@ def _parse_rules(raw: str, field_name: str) -> list[dict]:
     return val
 
 
+def _rites_roll_seed(slot_index: int, current_murk: int, owned: list) -> int:
+    """Deterministic RNG seed from the save's current purchasable state.
+
+    Anti-save-scum (1:1 fidelity, see CLAUDE.md): re-running the purchase on the SAME
+    save state reproduces the identical relics, so declining to export and retrying
+    gains nothing. A genuinely different roll requires actually CHANGING the save state
+    — exporting and re-importing, which spends the Murk and adds the relics — mirroring
+    the game, where a purchase can't be previewed-and-retried for free. Uses a stable
+    hash (not builtin hash()) so it's identical across processes/restarts.
+    """
+    fp = f"{slot_index}|{current_murk}|{relics_signature(owned)}"
+    return int.from_bytes(hashlib.sha256(fp.encode()).digest()[:8], "big")
+
+
 def _rites_plan(
     file_bytes: bytes, filename: str, slot_index: int,
     build_ctxs: list[BuildContext], buckets: list[PurchaseBucket],
@@ -1655,6 +1670,8 @@ def _rites_plan(
             scorer=scorer, optimizer=optimizer, executor=executor, top_n=top_n,
             progress=(lambda i, t, name: _emit(
                 "matching", i, t, f"Matching build {i}/{t}: {name}")),
+            # Deterministic per save-state: re-running without exporting can't re-roll.
+            seed=_rites_roll_seed(slot_index, current_murk, owned),
         )
         for k in r.keepers:
             rel = k.relic
