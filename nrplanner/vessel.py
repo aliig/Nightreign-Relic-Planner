@@ -6,6 +6,12 @@ from dataclasses import dataclass, field
 from nrplanner.constants import ITEM_TYPE_RELIC
 from nrplanner.data import SourceDataHandler
 
+# Section 3 (custom presets) is a FIXED-SIZE array of 100 slots, each an 80-byte
+# record. In-game validated: the array is pre-allocated and never grows/shrinks
+# (see nrplanner/vessel_writer.py for the full record layout + write inverse).
+_PRESET_SIZE = 80
+_MAX_PRESETS = 100
+
 
 @dataclass
 class HeroLoadout:
@@ -113,12 +119,21 @@ class VesselParser:
             h.vessels.sort(key=lambda v: v["vessel_id"])
 
         # --- Section 3: Custom presets ---
+        # A FIXED array of _MAX_PRESETS (100) 80-byte slots. Active records
+        # (header 0x01) are NOT guaranteed contiguous: an in-game delete tombstones
+        # a record in place (header -> 0x00) without compacting, so a hole can sit
+        # between active records. Scan ALL slots by header rather than stopping at
+        # the first non-active slot or the counter==0 terminator — either would drop
+        # every preset physically after an in-game-deleted one (verified against a
+        # real save whose newest presets sat after a mid-array tombstone).
         preset_index = 0
-        while cursor < len(data):
-            p_start = cursor
-            header = struct.unpack_from("<B", data, cursor)[0]
-            if header != 0x01:
+        for _ in range(_MAX_PRESETS):
+            if cursor + _PRESET_SIZE > len(data):
                 break
+            p_start = cursor
+            cursor += _PRESET_SIZE
+            if data[p_start] != 0x01:
+                continue  # tombstone or empty slot — skip, keep scanning
 
             p_offsets = {
                 "base": p_start,
@@ -129,32 +144,18 @@ class VesselParser:
                 "relics": p_start + 48,
                 "timestamp": p_start + 72,
             }
-
-            cursor += 1
-            h_id = int(struct.unpack_from("<H", data, cursor)[0])
-            cursor += 2
-            counter_val = struct.unpack_from("<B", data, cursor)[0]
-            cursor += 1
-
-            name = data[cursor:cursor + 36].decode("utf-16", errors="ignore").strip("\x00")
-            cursor += 36 + 4  # name + padding
-
-            v_id = struct.unpack_from("<I", data, cursor)[0]
-            cursor += 4
-            relics = list(struct.unpack_from("<6I", data, cursor))
-            cursor += 24
+            h_id = int(struct.unpack_from("<H", data, p_start + 1)[0])
+            counter_val = data[p_start + 3]
+            name = data[p_start + 4:p_start + 40].decode("utf-16", errors="ignore").strip("\x00")
+            v_id = struct.unpack_from("<I", data, p_start + 44)[0]
+            relics = list(struct.unpack_from("<6I", data, p_start + 48))
+            timestamp = struct.unpack_from("<Q", data, p_start + 72)[0]
             self._register_relic_handles(relics, h_id)
-
-            timestamp = struct.unpack_from("<Q", data, cursor)[0]
-            cursor += 8
 
             if h_id in heroes:
                 heroes[h_id].add_preset(
                     h_id, preset_index, name, v_id, relics, p_offsets, counter_val, timestamp)
-
             preset_index += 1
-            if counter_val == 0:
-                break
 
         self.heroes = heroes
 

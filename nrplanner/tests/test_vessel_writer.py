@@ -250,6 +250,73 @@ def test_delete_last_preset_keeps_terminator(blob):
     assert _counters_valid(after)  # new physically-last must carry counter 0
 
 
+# --- non-contiguous array: in-game delete leaves a mid-array tombstone ------
+
+def _tombstone_slot(blob, phys_slot: int) -> bytes:
+    """Replicate an in-game delete on the real fixture: zero the record at physical
+    slot ``phys_slot`` and set its vessel_id to the 0xFFFFFFFF delete marker,
+    WITHOUT compacting (the game leaves a header-0 hole between active records)."""
+    region = vw._locate_region(blob)
+    _, s3 = vw._walk_vessels(blob, region)
+    data = bytearray(blob)
+    base = s3 + phys_slot * vw.PRESET_SIZE
+    data[base:base + vw.PRESET_SIZE] = b"\x00" * vw.PRESET_SIZE
+    struct.pack_into("<I", data, base + vw._OFF_VESSEL, 0xFFFFFFFF)
+    return bytes(data)
+
+
+def test_parse_presets_skips_mid_array_tombstone(blob):
+    """A header-0 tombstone between active records must be skipped, not treated as
+    the array end — presets after it stay visible (the reported listing bug)."""
+    before = vw.parse_presets(blob)
+    n = len(before)
+    slot5_base, tail_base = before[5].base, before[-1].base
+    after = vw.parse_presets(_tombstone_slot(blob, 5))
+    assert len(after) == n - 1
+    assert not any(p.base == slot5_base for p in after)   # tombstoned record gone
+    assert any(p.base == tail_base for p in after)         # tail survives (was dropped)
+    assert [p.index for p in after] == list(range(n - 1))  # contiguous re-index
+
+
+def test_reader_lists_presets_after_tombstone(blob, ds):
+    """End-to-end through the webapp list path (vessel.py VesselParser): a preset
+    physically after an in-game-deleted record must still be listed."""
+    from nrplanner.vessel import VesselParser
+    before = vw.parse_presets(blob)
+    tail = before[-1]
+    vp = VesselParser(ds)
+    vp.parse(_tombstone_slot(blob, 5))
+    listed = [p for h in vp.heroes.values() for p in h.presets]
+    assert len(listed) == len(before) - 1
+    assert any(p["name"] == tail.name and p["vessel_id"] == tail.vessel_id
+               for p in listed)
+
+
+def test_delete_after_tombstone_stays_wellformed(blob):
+    """Deleting a preset that sits AFTER a tombstone (now reachable) keeps the array
+    length-preserving, counter-valid, and downstream-safe."""
+    holed = _tombstone_slot(blob, 5)
+    region = vw._locate_region(blob)
+    _, s3 = vw._walk_vessels(blob, region)
+    array_end = s3 + vw.MAX_PRESETS * vw.PRESET_SIZE
+    n = len(vw.parse_presets(holed))
+    out, res = vw.delete_preset(holed, n - 1)
+    assert len(out) == len(blob)
+    assert res.presets_after == n - 1
+    assert out[:s3] == blob[:s3]
+    assert out[array_end:] == blob[array_end:]
+    assert _counters_valid(vw.parse_presets(out))   # re-stamp closes the counter gap
+
+
+def test_reset_all_clears_array_with_tombstone(blob):
+    """Reset clears the whole 100-slot array — no orphan presets left after a
+    mid-array tombstone (the latent 'reset leaves orphans' bug)."""
+    holed = _tombstone_slot(blob, 5)
+    out, _ = vw.reset_all_presets(holed)
+    assert len(out) == len(blob)
+    assert vw.parse_presets(out) == []
+
+
 # --- full encrypt round-trip + checksum ------------------------------------
 
 @pytest.mark.parametrize("make", [

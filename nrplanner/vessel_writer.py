@@ -200,28 +200,39 @@ def _walk_vessels(blob, cursor: int) -> tuple[list[VesselSlot], int]:
 
 
 def _walk_presets(blob, cursor: int) -> tuple[list[PresetRecord], int]:
-    """Walk Section 3, returning the preset chain plus the offset one past the
-    last active record (the chain end / insertion point for new presets)."""
+    """Walk Section 3's fixed MAX_PRESETS-slot array, returning every active
+    record (header 0x01) in physical order plus the offset one past the whole
+    array (its end == the start of the downstream section).
+
+    Active records are NOT guaranteed contiguous: an in-game delete tombstones a
+    record in place (header -> 0x00, vessel_id -> 0xFFFFFFFF) WITHOUT compacting,
+    so a hole can sit between active records. We therefore scan all MAX_PRESETS
+    slots by header rather than stopping at the first non-active slot or the
+    counter==0 terminator — either would drop every preset physically after an
+    in-game-deleted one (verified against a real save whose newest presets sat
+    after a mid-array tombstone). ``index`` is the active-in-physical-order
+    position, matching the reader in ``vessel.py`` so the frontend edit index maps
+    to the same record in both the list and every write op.
+    """
     presets: list[PresetRecord] = []
     idx = 0
-    while cursor + PRESET_SIZE <= len(blob):
-        header = blob[cursor + _OFF_HEADER]
-        if header != _HEADER_ACTIVE:
+    start = cursor
+    for _ in range(MAX_PRESETS):
+        if cursor + PRESET_SIZE > len(blob):
             break
-        hero_type = struct.unpack_from("<H", blob, cursor + _OFF_HERO)[0]
-        counter = blob[cursor + _OFF_COUNTER]
-        name = (bytes(blob[cursor + _OFF_NAME:cursor + _OFF_NAME + _NAME_BYTES])
-                .decode("utf-16-le", errors="ignore").rstrip("\x00"))
-        vessel_id = struct.unpack_from("<I", blob, cursor + _OFF_VESSEL)[0]
-        relics = list(struct.unpack_from("<6I", blob, cursor + _OFF_RELICS))
-        timestamp = struct.unpack_from("<Q", blob, cursor + _OFF_TIMESTAMP)[0]
-        presets.append(PresetRecord(cursor, idx, hero_type, counter, name,
-                                    vessel_id, relics, timestamp))
+        if blob[cursor + _OFF_HEADER] == _HEADER_ACTIVE:
+            hero_type = struct.unpack_from("<H", blob, cursor + _OFF_HERO)[0]
+            counter = blob[cursor + _OFF_COUNTER]
+            name = (bytes(blob[cursor + _OFF_NAME:cursor + _OFF_NAME + _NAME_BYTES])
+                    .decode("utf-16-le", errors="ignore").rstrip("\x00"))
+            vessel_id = struct.unpack_from("<I", blob, cursor + _OFF_VESSEL)[0]
+            relics = list(struct.unpack_from("<6I", blob, cursor + _OFF_RELICS))
+            timestamp = struct.unpack_from("<Q", blob, cursor + _OFF_TIMESTAMP)[0]
+            presets.append(PresetRecord(cursor, idx, hero_type, counter, name,
+                                        vessel_id, relics, timestamp))
+            idx += 1
         cursor += PRESET_SIZE
-        idx += 1
-        if counter == 0:
-            break
-    return presets, cursor
+    return presets, start + MAX_PRESETS * PRESET_SIZE
 
 
 def parse_presets(blob) -> list[PresetRecord]:
@@ -465,14 +476,18 @@ def add_preset(blob, *, hero_type: int, name: str, vessel_id: int, ga_handles,
 
 
 def delete_preset(blob, index: int) -> tuple[bytes, DeletePresetResult]:
-    """Delete the preset at ``index`` (blob order) by compacting the chain in place.
+    """Delete the preset at ``index`` (active-in-physical-order) by compacting the
+    array in place.
 
-    Shifts the presets after ``index`` up by one 80-byte slot and zeros the freed
-    trailing slot, so the parser reads M = N-1 records and then hits the zeroed
-    slot. This touches ONLY the preset chain region ``[section3_start, chain_end)``
-    — nothing after the chain moves. (Shifting the downstream sections corrupts the
-    save: the game relies on their byte positions; an earlier version that padded
-    bytes before the trailer produced "Save data is corrupted" in-game.)
+    Shifts every slot after ``index`` up by one 80-byte record within the fixed
+    100-slot array and zeros the freed trailing slot, then re-stamps the survivors'
+    counters. This touches ONLY the preset array region ``[section3_start,
+    chain_end)`` — nothing after it moves. (Shifting the downstream sections
+    corrupts the save: the game relies on their byte positions; an earlier version
+    that padded bytes before the trailer produced "Save data is corrupted"
+    in-game.) A pre-existing game-made tombstone outside the shifted range is left
+    as-is; that's harmless because the game (and our reader) classify slots by the
+    header byte, not by position.
     """
     data = bytearray(blob)
     cursor = _locate_region(data)
