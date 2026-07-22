@@ -1790,12 +1790,14 @@ def _rites_plan(
 
     With no builds selected, keeping/culling are rules-only and NO optimizer runs
     (instant). With builds, one optimize pass runs per build for the purchase and one per
-    build for the cull. ``progress`` (if given) is called (phase, current, total, message)
-    so callers can stream feedback.
+    build for the cull. ``progress`` (if given) is called (phase, current, total, message,
+    name) — ``name`` is the current build's name on per-build phases, else None — so
+    callers can stream feedback.
     """
-    def _emit(phase: str, current: int, total: int, message: str) -> None:
+    def _emit(phase: str, current: int, total: int, message: str,
+              name: str | None = None) -> None:
         if progress is not None:
-            progress(phase, current, total, message)
+            progress(phase, current, total, message, name)
 
     blob = _decrypt_slot_blob(file_bytes, filename, slot_index)
     raw_relics, items_end = parse_relics(blob)
@@ -1830,7 +1832,7 @@ def _rites_plan(
             scorer=scorer, optimizer=optimizer, executor=executor, top_n=top_n,
             max_per_vessel=_RITES_MAX_PER_VESSEL,
             progress=(lambda i, t, name: _emit(
-                "matching", i, t, f"Matching build {i}/{t}: {name}")),
+                "matching", i, t, f"Matching build {i}/{t}: {name}", name)),
             # Deterministic per save-state: re-running without exporting can't re-roll.
             seed=_rites_roll_seed(slot_index, current_murk, owned),
             owned_used_fps=owned_used,
@@ -1862,7 +1864,7 @@ def _rites_plan(
             scorer=scorer, optimizer=optimizer, executor=executor, top_n=top_n,
             max_per_vessel=_RITES_MAX_PER_VESSEL,
             progress=(lambda i, t, name: _emit(
-                "culling", i, t, f"Cull check {i}/{t}: {name}")),
+                "culling", i, t, f"Cull check {i}/{t}: {name}", name)),
             owned_used_fps=owned_used)
 
     _emit("finalizing", 1, 1, "Finalizing plan…")
@@ -1951,7 +1953,8 @@ async def rites_plan_stream(
 
     Same inputs as /rites/plan. Emits ``data:`` lines::
 
-        {"type":"progress","phase":str,"current":int,"total":int,"message":str}
+        {"type":"progress","phase":str,"current":int,"total":int,"message":str,
+         "name":str|null}   # name = current build, on per-build phases only
         {"type":"result","data": <RitesPlanResponse>}
         {"type":"error","detail":"..."}
 
@@ -1980,9 +1983,9 @@ async def rites_plan_stream(
         q: queue.Queue = queue.Queue()
         holder: dict[str, Any] = {}
 
-        def _progress(phase, current, total, message):
+        def _progress(phase, current, total, message, name=None):
             q.put({"type": "progress", "phase": phase, "current": current,
-                   "total": total, "message": message})
+                   "total": total, "message": message, "name": name})
 
         def _work():
             try:

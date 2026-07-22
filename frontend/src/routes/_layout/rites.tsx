@@ -1,6 +1,6 @@
 import { useSuspenseQuery } from "@tanstack/react-query"
 import { createFileRoute, Link } from "@tanstack/react-router"
-import { Coins, Package, Plus, Sparkles, Trash2, X } from "lucide-react"
+import { Check, Coins, Package, Plus, Sparkles, Trash2, X } from "lucide-react"
 import { type ReactNode, Suspense, useMemo, useRef, useState } from "react"
 
 import { BuildsService, GameService, SavesService } from "@/client"
@@ -387,6 +387,121 @@ function sellValueLocal(effects: number[], isDeep: boolean): number {
   return base * (isDeep ? 2 : 1)
 }
 
+// --- Find Keepers progress stepper ------------------------------------------
+
+// Mirrors the SSE progress events from /saves/rites/plan/stream.
+type ProgressEvt = {
+  phase: string
+  current: number
+  total: number
+  message: string
+  name: string | null // current build's name, on per-build phases only
+}
+
+// Ordered to match the backend plan phases (saves.py _rites_plan):
+// generating → matching → culling → finalizing. The two per-build passes are
+// separate steps so the count "resetting" reads as a new stage, not a restart.
+const PROGRESS_STEPS = [
+  {
+    key: "generating",
+    label: "Roll purchases",
+    sub: "Reading the save & buying at the game's exact odds",
+    perBuild: false,
+  },
+  { key: "matching", label: "Match new relics against builds", perBuild: true },
+  { key: "culling", label: "Scan owned relics for culls", perBuild: true },
+  { key: "finalizing", label: "Tally Murk & finalize", perBuild: false },
+] as const
+
+function RitesProgress({
+  progress,
+  seen,
+}: {
+  progress: ProgressEvt | null
+  seen: Record<string, ProgressEvt>
+}) {
+  const rawIdx = PROGRESS_STEPS.findIndex((s) => s.key === progress?.phase)
+  const activeIdx = rawIdx === -1 ? 0 : rawIdx
+
+  return (
+    <ol className="rounded-md border bg-muted/30 p-3">
+      {PROGRESS_STEPS.map((s, i) => {
+        const state =
+          i < activeIdx ? "done" : i === activeIdx ? "active" : "pending"
+        // Live event for the active step; last-seen event for finished steps
+        // (so "Match" keeps its 55/55 once "Cull" starts).
+        const evt = s.key === progress?.phase ? progress : seen[s.key]
+        const pct =
+          evt && evt.total > 0 ? Math.round((evt.current / evt.total) * 100) : 0
+        const name = state === "active" ? (evt?.name ?? null) : null
+
+        return (
+          <li key={s.key} className="relative flex gap-2.5 pb-3 last:pb-0">
+            {i < PROGRESS_STEPS.length - 1 && (
+              <span
+                aria-hidden="true"
+                className="absolute bottom-0 left-[11px] top-7 w-px bg-border"
+              />
+            )}
+            {state === "done" ? (
+              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-green-600/15 text-green-600 dark:text-green-500">
+                <Check className="h-3.5 w-3.5" />
+              </span>
+            ) : state === "active" ? (
+              <span className="relative flex h-6 w-6 shrink-0 items-center justify-center">
+                <span className="absolute inset-0.5 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+              </span>
+            ) : (
+              <span className="flex h-6 w-6 shrink-0 items-center justify-center">
+                <span className="h-2 w-2 rounded-full bg-muted-foreground/30" />
+              </span>
+            )}
+            <div className="min-w-0 flex-1 pt-0.5">
+              <div className="flex items-baseline justify-between gap-2">
+                <span
+                  className={cn(
+                    "text-sm",
+                    state === "pending" && "text-muted-foreground/60",
+                    state === "active" && "font-medium",
+                    state === "done" && "text-muted-foreground",
+                  )}
+                >
+                  {s.label}
+                </span>
+                {s.perBuild && evt && evt.total > 0 && state !== "pending" && (
+                  <span className="text-xs tabular-nums text-muted-foreground">
+                    {evt.current}/{evt.total}
+                  </span>
+                )}
+              </div>
+              {state === "active" && s.perBuild && evt && evt.total > 0 && (
+                <>
+                  <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-muted">
+                    <div
+                      className="h-full rounded-full bg-primary transition-[width] duration-300 ease-out"
+                      style={{ width: `${pct}%` }}
+                    />
+                  </div>
+                  {name && (
+                    <div className="mt-1 truncate text-xs text-muted-foreground">
+                      {name}
+                    </div>
+                  )}
+                </>
+              )}
+              {state === "active" && !s.perBuild && "sub" in s && (
+                <div className="mt-0.5 text-xs text-muted-foreground">
+                  {s.sub}
+                </div>
+              )}
+            </div>
+          </li>
+        )
+      })}
+    </ol>
+  )
+}
+
 // --- The tool (shared by authenticated + anonymous) ------------------------
 
 function RitesTool({
@@ -419,7 +534,12 @@ function RitesTool({
   const [plan, setPlan] = useState<PlanResponse | null>(null)
   const [selected, setSelected] = useState<Set<number>>(new Set())
   const [selectedBuilds, setSelectedBuilds] = useState<Set<string>>(new Set())
-  const [progress, setProgress] = useState<string>("")
+  const [progress, setProgress] = useState<ProgressEvt | null>(null)
+  // How many builds the in-flight run was started with (selection can change
+  // while it runs); >0 switches the busy UI to the multi-step indicator.
+  const [runBuildCount, setRunBuildCount] = useState(0)
+  // Last event per phase, so completed steps keep their final N/N count.
+  const seenRef = useRef<Record<string, ProgressEvt>>({})
   const abortRef = useRef<AbortController | null>(null)
 
   const activeBuckets = BUCKETS.filter((b) => (qty[b.key] ?? 0) > 0)
@@ -471,7 +591,9 @@ function RitesTool({
     abortRef.current = ctrl
     setBusy(true)
     setPlan(null)
-    setProgress(selIds.length ? "Starting…" : "Rolling…")
+    setRunBuildCount(selIds.length)
+    seenRef.current = {}
+    setProgress(null)
     try {
       // Streaming (SSE): show progress while the plan runs, so many builds don't
       // look like a hang. Falls through to a single result event at the end.
@@ -497,8 +619,17 @@ function RitesTool({
           const dataLine = chunk.split("\n").find((l) => l.startsWith("data:"))
           if (!dataLine) continue
           const evt = JSON.parse(dataLine.slice(5).trim())
-          if (evt.type === "progress") setProgress(evt.message || "Working…")
-          else if (evt.type === "result") result = evt.data as PlanResponse
+          if (evt.type === "progress") {
+            const p: ProgressEvt = {
+              phase: evt.phase ?? "",
+              current: evt.current ?? 0,
+              total: evt.total ?? 0,
+              message: evt.message || "Working…",
+              name: evt.name ?? null,
+            }
+            seenRef.current[p.phase] = p
+            setProgress(p)
+          } else if (evt.type === "result") result = evt.data as PlanResponse
           else if (evt.type === "error") streamErr = evt.detail
         }
       }
@@ -514,7 +645,7 @@ function RitesTool({
     } finally {
       abortRef.current = null
       setBusy(false)
-      setProgress("")
+      setProgress(null)
     }
   }
 
@@ -769,12 +900,15 @@ function RitesTool({
             </Button>
           )}
         </div>
-        {busy && (
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <span className="h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent" />
-            {progress || "Working…"}
-          </div>
-        )}
+        {busy &&
+          (runBuildCount > 0 ? (
+            <RitesProgress progress={progress} seen={seenRef.current} />
+          ) : (
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <span className="h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent" />
+              {progress?.message || "Rolling…"}
+            </div>
+          ))}
       </div>
 
       {/* Cull rules */}
