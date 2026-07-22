@@ -8,8 +8,9 @@ from nrplanner.changes import (
     diff_results,
     fingerprint_owned,
     multiset_diff,
-    relic_fingerprint,
+    relevant_relics_signature,
     relevant_to_build,
+    relic_fingerprint,
     relics_signature,
     serialize_top_layouts,
 )
@@ -125,6 +126,96 @@ class TestRelevance:
         added = [relic_fingerprint(100, [999999999], [])]
         ra, _ = relevant_to_build(build, added, [], ds)
         assert ra == 0
+
+    def test_wanted_effect_in_curse_slot_is_relevant(self, ds, all_effects):
+        # Curses resolve through the same positive chain in the scorer, so a
+        # relic carrying the wanted effect as a CURSE must count as relevant.
+        eff = all_effects[0]["id"]
+        build = _build(groups=[WeightGroup(weight=10, effects=[eff])])
+        added = [fingerprint_owned(_relic(100, [], curses=[eff]))]
+        ra, _ = relevant_to_build(build, added, [], ds)
+        assert ra == 1
+
+    def test_positive_default_curse_weight_makes_cursed_relics_relevant(self, ds):
+        build = _build(default_curse_weight=5)
+        cursed = [relic_fingerprint(100, [999999999], [999999998])]
+        clean = [relic_fingerprint(100, [999999999], [])]
+        assert relevant_to_build(build, cursed, [], ds) == (1, 0)
+        assert relevant_to_build(build, clean, [], ds) == (0, 0)
+
+    def test_name_alias_is_relevant(self, ds, all_effects):
+        # Many game effects share a display name with unrelated IDs/text_ids;
+        # the scorer matches those by name, so relevance must too.
+        by_name: dict[str, list[int]] = {}
+        for e in all_effects:
+            name = e.get("name")
+            if name and name != "Empty" and not name.startswith("Effect "):
+                by_name.setdefault(name, []).append(e["id"])
+        pair = None
+        for _name, ids in by_name.items():
+            for listed in ids:
+                for carried in ids:
+                    if carried == listed:
+                        continue
+                    tid = ds.get_effect_text_id(carried)
+                    if carried != listed and tid != listed:
+                        pair = (listed, carried)
+                        break
+                if pair:
+                    break
+            if pair:
+                break
+        assert pair is not None, "game data has no name-aliased effect pair"
+        listed, carried = pair
+        build = _build(groups=[WeightGroup(weight=10, effects=[listed])])
+        added = [fingerprint_owned(_relic(100, [carried]))]
+        ra, _ = relevant_to_build(build, added, [], ds)
+        assert ra == 1
+
+
+class TestRelevantRelicsSignature:
+    @staticmethod
+    def _pairs(relics: list[OwnedRelic]) -> list[tuple]:
+        return [(fingerprint_owned(r), r.ga_handle) for r in relics]
+
+    def test_irrelevant_churn_keeps_signature(self, ds, all_effects):
+        eff = all_effects[0]["id"]
+        build = _build(required_effects=[eff])
+        keeper = _relic(100, [eff])
+        junk = _relic(200, [999999999])
+        base = relevant_relics_signature(build, self._pairs([keeper]), ds)
+        with_junk = relevant_relics_signature(build, self._pairs([keeper, junk]), ds)
+        assert base == with_junk
+
+    def test_relevant_add_changes_signature(self, ds, all_effects):
+        eff = all_effects[0]["id"]
+        build = _build(required_effects=[eff])
+        keeper = _relic(100, [eff])
+        second = _relic(300, [eff])
+        base = relevant_relics_signature(build, self._pairs([keeper]), ds)
+        grown = relevant_relics_signature(build, self._pairs([keeper, second]), ds)
+        assert base != grown
+
+    def test_pinned_relic_included_despite_zero_score(self, ds, all_effects):
+        eff = all_effects[0]["id"]
+        junk = _relic(200, [999999999])
+        pinned_build = _build(required_effects=[eff],
+                              pinned_relics=[junk.ga_handle])
+        plain_build = _build(required_effects=[eff])
+        with_junk = self._pairs([junk])
+        # Pinned: the junk relic is part of the optimization input.
+        assert (relevant_relics_signature(pinned_build, with_junk, ds)
+                != relevant_relics_signature(pinned_build, [], ds))
+        # Not pinned: the same junk relic is invisible.
+        assert (relevant_relics_signature(plain_build, with_junk, ds)
+                == relevant_relics_signature(plain_build, [], ds))
+
+    def test_order_independent(self, ds, all_effects):
+        eff = all_effects[0]["id"]
+        build = _build(required_effects=[eff])
+        a, b = _relic(100, [eff]), _relic(300, [eff])
+        assert (relevant_relics_signature(build, self._pairs([a, b]), ds)
+                == relevant_relics_signature(build, self._pairs([b, a]), ds))
 
 
 class TestDiffResults:

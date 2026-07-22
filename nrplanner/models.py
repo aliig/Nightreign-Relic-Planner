@@ -371,6 +371,62 @@ class VesselState:
         )
         self.limited_counts: dict[str, int] = {}
 
+    def place_profile(self, profile) -> PlacementDelta:
+        """place() over a compiled RelicProfile — identical state transitions
+        with zero data-source lookups (see BuildScorer.compile_profile).
+
+        Kept in lockstep with :meth:`place`; the compiled-vs-legacy
+        equivalence test pins the two together.
+        """
+        added_eff: set[int] = set()
+        added_excl: set[int] = set()
+        added_ns_excl: set[int] = set()
+        added_ns_compat: set[int] = set()
+        added_dcp: set[int] = set()
+
+        effect_ids = self.effect_ids
+        for (eff, text_add, excl, is_ns, self_compat, alias_base,
+             desired_compat) in profile.place_ops:
+            if eff not in effect_ids:
+                added_eff.add(eff)
+            if text_add != -1 and text_add not in effect_ids:
+                added_eff.add(text_add)
+            if excl != -1:
+                if excl not in self.exclusivity_ids:
+                    added_excl.add(excl)
+                if is_ns and excl not in self.no_stack_exclusivity_ids:
+                    added_ns_excl.add(excl)
+            if self_compat != -1 and self_compat not in self.no_stack_compat_ids:
+                added_ns_compat.add(self_compat)
+            if alias_base != -1 and alias_base not in effect_ids:
+                added_eff.add(alias_base)
+            if (desired_compat != -1
+                    and desired_compat not in self.desired_compat_placed):
+                added_dcp.add(desired_compat)
+
+        limited_increments = profile.limit_keys
+
+        # Apply mutations
+        effect_ids.update(added_eff)
+        self.exclusivity_ids.update(added_excl)
+        self.no_stack_exclusivity_ids.update(added_ns_excl)
+        self.no_stack_compat_ids.update(added_ns_compat)
+        self.desired_compat_placed.update(added_dcp)
+        for cid in profile.curse_ids:
+            self.curse_counts[cid] = self.curse_counts.get(cid, 0) + 1
+        for name in limited_increments:
+            self.limited_counts[name] = self.limited_counts.get(name, 0) + 1
+
+        return PlacementDelta(
+            effect_ids=frozenset(added_eff),
+            exclusivity_ids=frozenset(added_excl),
+            no_stack_exclusivity_ids=frozenset(added_ns_excl),
+            no_stack_compat_ids=frozenset(added_ns_compat),
+            desired_compat_placed=frozenset(added_dcp),
+            curse_ids=profile.curse_ids,
+            limited_name_increments=limited_increments,
+        )
+
     def place(self, relic: OwnedRelic) -> PlacementDelta:
         """Compute and apply state changes for placing a relic. Returns delta for undo.
 

@@ -93,3 +93,99 @@ class TestRitesPlanFull:
         assert isinstance(plan["cull_candidates"], list)
         assert all(isinstance(h, int) for h in plan["cull_candidates"])
         assert plan["storage_left"] >= 0
+
+
+class TestValidatedSeedFps:
+    """_validated_seed_fps: snapshot-seed freshness against the uploaded save."""
+
+    @staticmethod
+    def _setup(ds):
+        from nrplanner.changes import (  # noqa: PLC0415
+            build_signature,
+            fingerprint_owned,
+            relevant_relics_signature,
+        )
+        from nrplanner.models import (  # noqa: PLC0415
+            BuildDefinition,
+            OwnedRelic,
+            WeightGroup,
+        )
+        from nrplanner.optimizer import OPTIMIZER_VERSION  # noqa: PLC0415
+        from nrplanner.rites import BuildContext  # noqa: PLC0415
+
+        from app.api.routes.saves import _validated_seed_fps  # noqa: PLC0415
+        from app.core.game_data import game_data_version  # noqa: PLC0415
+
+        empty = 4294967295
+        build = BuildDefinition(
+            id="b", name="B", character="Wylder",
+            groups=[WeightGroup(weight=10, effects=[100])],
+        )
+        ctx = BuildContext(build=build, hero_type=1, name="B",
+                           build_id="11111111-1111-1111-1111-111111111111")
+        owned = [OwnedRelic(
+            ga_handle=0xC1000001, item_id=100 + 2147483648, real_id=100,
+            color="Red", effects=[100, empty, empty],
+            curses=[empty, empty, empty], is_deep=False, name="R",
+            tier="Delicate",
+        )]
+        fps = {fingerprint_owned(owned[0])}
+        seed = {
+            "build_hash": build_signature(build),
+            "game_data_version": game_data_version(),
+            "optimizer_version": OPTIMIZER_VERSION,
+            "relevant_relics_hash": relevant_relics_signature(
+                build, [(fingerprint_owned(o), o.ga_handle) for o in owned], ds),
+            "used_fps": fps,
+        }
+        return _validated_seed_fps, ctx, owned, seed, fps
+
+    def test_fresh_seed_accepted(self, override_game_data) -> None:
+        from app.core.game_data import get_game_data  # noqa: PLC0415
+        ds = get_game_data()
+        fn, ctx, owned, seed, fps = self._setup(ds)
+        out = fn([ctx], {ctx.build_id: seed}, owned, ds)
+        assert out == {ctx.build_id: fps}
+
+    def test_stale_build_hash_rejected(self, override_game_data) -> None:
+        from app.core.game_data import get_game_data  # noqa: PLC0415
+        ds = get_game_data()
+        fn, ctx, owned, seed, _fps = self._setup(ds)
+        seed = {**seed, "build_hash": "not-the-hash"}
+        assert fn([ctx], {ctx.build_id: seed}, owned, ds) == {}
+
+    def test_relevant_inventory_change_rejected(self, override_game_data) -> None:
+        from nrplanner.models import OwnedRelic  # noqa: PLC0415
+
+        from app.core.game_data import get_game_data  # noqa: PLC0415
+        ds = get_game_data()
+        fn, ctx, owned, seed, _fps = self._setup(ds)
+        empty = 4294967295
+        grown = owned + [OwnedRelic(
+            ga_handle=0xC1000002, item_id=100 + 2147483648, real_id=100,
+            color="Red", effects=[100, empty, empty],
+            curses=[empty, empty, empty], is_deep=False, name="R2",
+            tier="Delicate",
+        )]
+        assert fn([ctx], {ctx.build_id: seed}, grown, ds) == {}
+
+    def test_irrelevant_inventory_change_accepted(self, override_game_data) -> None:
+        from app.core.game_data import get_game_data  # noqa: PLC0415
+        ds = get_game_data()
+        from nrplanner.models import OwnedRelic  # noqa: PLC0415
+        fn, ctx, owned, seed, fps = self._setup(ds)
+        empty = 4294967295
+        grown = owned + [OwnedRelic(
+            ga_handle=0xC1000003, item_id=200 + 2147483648, real_id=200,
+            color="Red", effects=[999999999, empty, empty],
+            curses=[empty, empty, empty], is_deep=False, name="Junk",
+            tier="Delicate",
+        )]
+        assert fn([ctx], {ctx.build_id: seed}, grown, ds) == {ctx.build_id: fps}
+
+    def test_version_mismatch_rejected(self, override_game_data) -> None:
+        from app.core.game_data import get_game_data  # noqa: PLC0415
+        ds = get_game_data()
+        fn, ctx, owned, seed, _fps = self._setup(ds)
+        seed = {**seed, "optimizer_version": seed["optimizer_version"] - 1}
+        assert fn([ctx], {ctx.build_id: seed}, owned, ds) == {}

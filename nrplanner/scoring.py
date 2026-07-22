@@ -8,6 +8,92 @@ from nrplanner.models import (
     CURSE_EXCESS_PENALTY, REQUIRED_WEIGHT,
 )
 
+# Dynamic-effect kinds for compiled relic profiles (see compile_profile).
+K_STACK, K_UNIQUE, K_NO_STACK, K_EXCL_CAT = 0, 1, 2, 3
+
+_STYPE_CODE = {"stack": K_STACK, "unique": K_UNIQUE, "no_stack": K_NO_STACK}
+
+
+class RelicProfile:
+    """Per-(build, relic) compiled scoring data.
+
+    Splits a relic's score into a state-independent ``static_score`` plus a
+    short ``dyn`` tuple of effects whose contribution depends on vessel state,
+    and precomputes everything ``VesselState.place_profile`` needs — so the
+    solver's innermost loops run on plain ints/tuples with zero data-source or
+    Pydantic access.  Compiled once per (build, relic) and memoized on the
+    scorer; the compiled-vs-legacy equivalence test pins it to
+    ``score_relic_in_context`` / ``place``.
+    """
+    __slots__ = ("relic", "ga_handle", "static_score", "dyn", "curse_ids",
+                 "place_ops", "limit_keys", "pos_bound", "net")
+
+    def __init__(self, relic: OwnedRelic, static_score: int, dyn: tuple,
+                 curse_ids: tuple, place_ops: tuple, limit_keys: tuple,
+                 pos_bound: int, net: int):
+        self.relic = relic
+        self.ga_handle = relic.ga_handle
+        self.static_score = static_score
+        self.dyn = dyn
+        self.curse_ids = curse_ids
+        self.place_ops = place_ops
+        self.limit_keys = limit_keys
+        self.pos_bound = pos_bound
+        self.net = net
+
+
+def score_profile(profile: RelicProfile, state: VesselState,
+                  curse_max: int) -> int:
+    """score_relic_in_context over a compiled profile (hot path).
+
+    Branch order within each kind mirrors the legacy functions exactly.
+    """
+    score = profile.static_score
+    for (kind, weight, eff, text_id, excl, compat, penalty,
+         lname, lfam) in profile.dyn:
+        if lname is not None or lfam is not None:
+            counts = state.limited_counts
+            if (lname is not None
+                    and counts.get(lname, 0) >= state.effect_limit_by_name[lname]):
+                continue
+            if (lfam is not None
+                    and counts.get(lfam, 0) >= state.family_limit_map[lfam]):
+                continue
+        if kind == K_STACK:
+            score += weight
+        elif kind == K_UNIQUE:
+            effect_ids = state.effect_ids
+            if eff in effect_ids:
+                continue
+            if text_id != -1 and text_id in effect_ids:
+                continue
+            if excl != -1 and excl in state.no_stack_exclusivity_ids:
+                score += penalty
+                continue
+            if compat != -1 and compat in state.no_stack_compat_ids:
+                score += penalty
+                continue
+            score += weight
+        elif kind == K_NO_STACK:
+            if excl != -1 and excl in state.exclusivity_ids:
+                score += penalty
+                continue
+            effect_ids = state.effect_ids
+            if text_id != -1 and text_id in effect_ids:
+                continue
+            if eff in effect_ids:
+                continue
+            score += weight
+        else:  # K_EXCL_CAT — blocking penalty until the desired effect is placed
+            if compat not in state.desired_compat_placed:
+                score += penalty
+    if profile.curse_ids:
+        counts = state.curse_counts
+        for c in profile.curse_ids:
+            if counts.get(c, 0) >= curse_max:
+                score += CURSE_EXCESS_PENALTY
+    return score
+
 
 class BuildScorer:
     """Scores relics against a BuildDefinition with effect-stacking awareness."""
@@ -20,6 +106,7 @@ class BuildScorer:
         self._name_cache: dict[str, tuple[str, int]] = {}
         self._resolve_memo: dict[int, tuple[str | None, int]] = {}
         self._protected_memo: dict[int, bool] = {}
+        self._profile_memo: dict[int, RelicProfile] = {}
         self._excl_cats: frozenset[int] = frozenset()
         self._excl_names: set[str] = set()
         self._desired_cw: dict[int, int] | None = None
@@ -68,6 +155,7 @@ class BuildScorer:
         self._cached_sig = sig
         self._resolve_memo = {}
         self._protected_memo = {}
+        self._profile_memo = {}
         self._excl_cats = frozenset(build.excluded_stacking_categories)
         self._excl_names = {
             name for name in (
@@ -577,6 +665,153 @@ class BuildScorer:
             if state.curse_counts.get(curse, 0) >= build.curse_max:
                 score += CURSE_EXCESS_PENALTY
         return score
+
+    # ------------------------------------------------------------------
+    # Compiled relic profiles (solver hot path)
+    # ------------------------------------------------------------------
+
+    def compile_profile(self, relic: OwnedRelic, build: BuildDefinition,
+                        effect_limit_by_name: dict[str, int] | None = None,
+                        family_limit_map: dict[str, int] | None = None,
+                        ) -> RelicProfile:
+        """Compile a relic's scoring/placement data for one build (memoized).
+
+        The limit maps must be the same name-keyed maps the caller hands to
+        ``VesselState`` (see ``VesselOptimizer._prepare_limits``) — they are a
+        pure function of the build, which is what makes the per-build memo
+        sound.  Branch selection mirrors ``score_relic_in_context`` exactly.
+        """
+        self._ensure_build_cache(build)
+        cached = self._profile_memo.get(relic.ga_handle)
+        if cached is not None:
+            return cached
+
+        ds = self.data_source
+        dce = self.get_desired_compat_effects(build)
+        dcw = self.get_desired_conflict_weights(build)
+        elbn = effect_limit_by_name or {}
+        flm = family_limit_map or {}
+
+        static_score = 0
+        dyn: list[tuple] = []
+
+        for eff, is_curse in (
+            [(e, False) for e in relic.effects]
+            + [(c, True) for c in relic.curses]
+        ):
+            if eff in (EMPTY_EFFECT, 0):
+                continue
+
+            if self._is_excl_category_effect_static(eff, build, dce):
+                compat = ds.get_effect_conflict_id(eff)
+                # max() clamped at 0 — mirrors _excluded_category_score, which
+                # accumulates from 0 (a negative desired weight never deepens
+                # the blocking penalty).
+                blocking = -max(0, max(
+                    (self._resolve_category_and_weight(d, build)[1]
+                     for d in dce[compat]),
+                    default=0,
+                ))
+                dyn.append((K_EXCL_CAT, 0, eff, -1, -1, compat, blocking,
+                            None, None))
+                continue
+
+            cat, weight = self._resolve_category_and_weight(eff, build)
+            if cat is not None and cat != "excluded":
+                lname = lfam = None
+                if elbn or flm:
+                    name = ds.get_effect_name(eff)
+                    if name and name in elbn:
+                        lname = name
+                    family = ds.get_effect_family(eff)
+                    if family and family in flm:
+                        lfam = family
+                stype_code = _STYPE_CODE[ds.get_effect_stacking_type(eff)]
+                if stype_code == K_STACK and lname is None and lfam is None:
+                    static_score += weight
+                    continue
+                text_id = ds.get_effect_text_id(eff)
+                excl = ds.get_effect_exclusivity_id(eff)
+                compat = ds.get_effect_conflict_id(eff)
+                penalty = (-dcw[compat]
+                           if (compat != -1 and compat in dcw) else 0)
+                dyn.append((stype_code, weight, eff, text_id, excl, compat,
+                            penalty, lname, lfam))
+            elif cat is None and is_curse:
+                static_score += build.default_curse_weight
+
+        curse_ids = tuple(
+            c for c in relic.curses if c not in (EMPTY_EFFECT, 0))
+
+        # place() metadata — mirrors VesselState.place per effect.
+        place_ops: list[tuple] = []
+        for eff in relic.all_effects:
+            text_id = ds.get_effect_text_id(eff)
+            text_add = text_id if (text_id != -1 and text_id != eff) else -1
+            compat = ds.get_effect_conflict_id(eff)
+            stype = ds.get_effect_stacking_type(eff)
+            excl = ds.get_effect_exclusivity_id(eff)
+            is_ns = stype == "no_stack"
+            self_compat = compat if (is_ns and compat != -1 and compat == eff) else -1
+            alias_base = -1
+            if compat != -1 and compat != eff:
+                if (ds.get_effect_conflict_id(compat) == compat
+                        and ds.get_effect_stacking_type(compat) == "no_stack"):
+                    alias_base = compat
+            desired_compat = -1
+            if dce and compat != -1 and compat in dce:
+                dset = dce[compat]
+                if eff in dset or (text_id != -1 and text_id in dset):
+                    desired_compat = compat
+            place_ops.append(
+                (eff, text_add, excl, is_ns, self_compat, alias_base,
+                 desired_compat))
+
+        # Limit-counter keys, deduped once per relic (mirrors place()).
+        limit_keys: tuple[str, ...] = ()
+        if elbn or flm:
+            seen: set[str] = set()
+            keys: list[str] = []
+            for eff in relic.all_effects:
+                name = ds.get_effect_name(eff)
+                if name and name in elbn and name not in seen:
+                    seen.add(name)
+                    keys.append(name)
+                family = ds.get_effect_family(eff)
+                if family and family in flm and family not in seen:
+                    seen.add(family)
+                    keys.append(family)
+            limit_keys = tuple(keys)
+
+        profile = RelicProfile(
+            relic=relic,
+            static_score=static_score,
+            dyn=tuple(dyn),
+            curse_ids=curse_ids,
+            place_ops=tuple(place_ops),
+            limit_keys=limit_keys,
+            pos_bound=self.positive_pre_score(relic, build),
+            net=self.score_relic(relic, build),
+        )
+        self._profile_memo[relic.ga_handle] = profile
+        return profile
+
+    def _is_excl_category_effect_static(self, eff_id: int,
+                                        build: BuildDefinition,
+                                        dce: dict[int, set[int]]) -> bool:
+        """_is_excl_category_effect without a VesselState (dce passed directly)."""
+        if not dce:
+            return False
+        compat = self.data_source.get_effect_conflict_id(eff_id)
+        if compat == -1:
+            return False
+        if compat not in self._excl_cats:
+            return False
+        if compat not in dce:
+            return False
+        if self._is_effect_protected(eff_id, build):
+            return False
+        return True
 
     # ------------------------------------------------------------------
     # Breakdown (for UI / API)

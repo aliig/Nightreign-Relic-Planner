@@ -371,3 +371,93 @@ def test_cull_progress_callback_fires(ds, wylder_eff):
         owned, [_ctx([wylder_eff], "B1")], ds,
         progress=lambda i, t, name: calls.append((i, t, name)), **_OPT)
     assert calls and calls[0] == (1, 1, "B1")
+
+
+# ---------------------------------------------------------------------------
+# Owned-only solve cache: per-build purchase skip + purchase/cull sharing
+# ---------------------------------------------------------------------------
+
+class _CountingOptimizer:
+    """Records the inventory size of every optimize_all_vessels call."""
+
+    def __init__(self, monkeypatch):
+        from nrplanner.optimizer import VesselOptimizer
+        self.inventory_sizes: list[int] = []
+        original = VesselOptimizer.optimize_all_vessels
+
+        def _wrapped(opt_self, build, inventory, *args, **kwargs):
+            self.inventory_sizes.append(len(inventory))
+            return original(opt_self, build, inventory, *args, **kwargs)
+
+        monkeypatch.setattr(VesselOptimizer, "optimize_all_vessels", _wrapped)
+
+
+def test_purchase_pass_skips_builds_with_no_relevant_candidates(
+    ds, wylder_eff, monkeypatch
+):
+    """A build none of the generated relics can score for must not pay the
+    enlarged owned+candidates solve — its result is the owned-only one."""
+    counter = _CountingOptimizer(monkeypatch)
+    keeper = _gen([wylder_eff, EMPTY, EMPTY], color="Red")
+    # Different content from the roll — the owned-duplicate dud rule must not fire.
+    owned = [_owned([111, EMPTY, EMPTY], ga_handle=0xC1000001)]
+    relevant = _ctx([wylder_eff], "Relevant")
+    unrelated = _ctx([999999999], "Unrelated")  # nothing rolled matches it
+
+    res = bulk_acquire(
+        builds=[relevant, unrelated], owned=owned, current_murk=100_000,
+        buckets=[PurchaseBucket(False, "1.03", 600, quantity=1)],
+        generator=_StubGen([keeper]), ds=ds, stop_mode="fixed",
+        storage_cap_left=10, **_OPT,
+    )
+    assert res.kept == 1 and res.keepers[0].builds == ["Relevant"]
+    # Relevant solved over owned+1 candidate; Unrelated over owned only.
+    assert sorted(counter.inventory_sizes) == [len(owned), len(owned) + 1]
+
+
+def test_owned_solve_shared_between_purchase_and_cull(ds, wylder_eff, monkeypatch):
+    """The purchase pass's owned-only solve for a skipped build must be reused
+    by the cull pass through the shared cache (one solve per build per plan)."""
+    counter = _CountingOptimizer(monkeypatch)
+    keeper = _gen([wylder_eff, EMPTY, EMPTY], color="Red")
+    owned = [_owned([111, EMPTY, EMPTY], ga_handle=0xC1000001)]
+    relevant = _ctx([wylder_eff], "Relevant")
+    unrelated = _ctx([999999999], "Unrelated")
+    cache: dict[str, set] = {}
+
+    bulk_acquire(
+        builds=[relevant, unrelated], owned=owned, current_murk=100_000,
+        buckets=[PurchaseBucket(False, "1.03", 600, quantity=1)],
+        generator=_StubGen([keeper]), ds=ds, stop_mode="fixed",
+        storage_cap_left=10, owned_used_fps=cache, **_OPT,
+    )
+    purchase_calls = len(counter.inventory_sizes)
+    assert purchase_calls == 2  # enlarged (Relevant) + owned-only (Unrelated)
+
+    select_cull_handles(
+        owned, [relevant, unrelated], ds, owned_used_fps=cache, **_OPT)
+    cull_calls = len(counter.inventory_sizes) - purchase_calls
+    # Unrelated's owned-only result is cached; only Relevant solves again.
+    assert cull_calls == 1
+
+
+def test_seeded_cache_skips_all_solves(ds, monkeypatch):
+    """A pre-seeded cache (snapshot reuse) must fully replace optimizer runs
+    when no generated relic is relevant to any build."""
+    counter = _CountingOptimizer(monkeypatch)
+    junk = _gen([EMPTY, EMPTY, EMPTY], color="Red")
+    owned = [_owned([111, EMPTY, EMPTY], ga_handle=0xC1000001)]
+    ctx = _ctx([999999999], "Seeded")
+    ctx.build_id = "seed-build-id"
+    cache: dict[str, set] = {"seed-build-id": set()}
+
+    bulk_acquire(
+        builds=[ctx], owned=owned, current_murk=100_000,
+        buckets=[PurchaseBucket(False, "1.03", 600, quantity=1)],
+        generator=_StubGen([junk]), ds=ds, stop_mode="fixed",
+        storage_cap_left=10, owned_used_fps=cache, **_OPT,
+    )
+    cull = select_cull_handles(owned, [ctx], ds, owned_used_fps=cache, **_OPT)
+    assert counter.inventory_sizes == [], "seeded cache must avoid every solve"
+    # Empty used-set seed -> the owned relic is unused -> cull candidate.
+    assert cull == [0xC1000001]

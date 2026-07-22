@@ -481,6 +481,19 @@ class OptimizationSnapshot(SQLModel, table=True):
     build_hash: str = Field(max_length=64)
     game_data_version: str = Field(max_length=32)
     optimizer_version: int
+    # Hash of the build-RELEVANT relic subset (nrplanner.changes.
+    # relevant_relics_signature): lets the gate serve cached results across
+    # irrelevant inventory churn.  Nullable, deliberately not backfilled —
+    # legacy rows fall back to the coarse relics_hash compare (worst case one
+    # extra re-optimize refills it), unlike a freshness hash whose NULL would
+    # silently never hit.
+    relevant_relics_hash: str | None = Field(default=None, max_length=64)
+    # Run parameters full_results were computed with.  Rites snapshot reuse
+    # must match them exactly — a top-5 result set under-reports "used" relics
+    # for a top-10 consumer (over-culling).  Nullable: legacy rows are never
+    # reused, refilled on their next optimize.
+    top_n: int | None = Field(default=None)
+    max_per_vessel: int | None = Field(default=None)
 
     # --- result + cached change summary ---
     # Compact, handle-free layouts used as the DIFF BASELINE (diff_results

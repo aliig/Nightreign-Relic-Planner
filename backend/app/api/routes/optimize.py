@@ -43,6 +43,9 @@ from app.models import (
 from nrplanner.changes import (
     build_signature,
     diff_results,
+    fingerprint_owned,
+    relevant_relics_signature,
+    relic_fingerprint,
     relics_signature,
     serialize_top_layouts,
 )
@@ -268,6 +271,9 @@ def _apply_snapshot(
     build_def: BuildDefinition,
     owned_relics: list[OwnedRelic],
     results: list[VesselResult],
+    ds: Any,
+    top_n: int,
+    max_per_vessel: int,
 ) -> BuildChange:
     """Diff a fresh optimization against the stored snapshot, then upsert it.
 
@@ -283,6 +289,9 @@ def _apply_snapshot(
     relics_hash = relics_signature(owned_relics)
     build_hash = build_signature(build_def)
     gdv = game_data_version()
+    relevant_hash = relevant_relics_signature(
+        build_def, [(fingerprint_owned(r), r.ga_handle) for r in owned_relics], ds
+    )
 
     change = diff_results(snap.top_layouts if snap else None, results)
     change.build_id = str(ctx.build_id)
@@ -307,6 +316,9 @@ def _apply_snapshot(
             build_hash=build_hash,
             game_data_version=gdv,
             optimizer_version=OPTIMIZER_VERSION,
+            relevant_relics_hash=relevant_hash,
+            top_n=top_n,
+            max_per_vessel=max_per_vessel,
             top_layouts=top_layouts,
             full_results=full_results,
             best_score=best_score,
@@ -319,6 +331,9 @@ def _apply_snapshot(
         snap.build_hash = build_hash
         snap.game_data_version = gdv
         snap.optimizer_version = OPTIMIZER_VERSION
+        snap.relevant_relics_hash = relevant_hash
+        snap.top_n = top_n
+        snap.max_per_vessel = max_per_vessel
         snap.top_layouts = top_layouts
         snap.full_results = full_results
         snap.best_score = best_score
@@ -373,7 +388,8 @@ def run_optimize(
     )
     if ctx is not None:
         try:
-            _apply_snapshot(session, ctx, build_def, owned_relics, results)
+            _apply_snapshot(session, ctx, build_def, owned_relics, results, ds,
+                            req.top_n, req.max_per_vessel)
         except Exception:
             # Snapshotting is best-effort — never fail the optimize response.
             session.rollback()
@@ -422,7 +438,8 @@ def run_optimize_stream(
                         try:
                             with Session(engine) as snap_session:
                                 change = _apply_snapshot(
-                                    snap_session, ctx, build_def, owned_relics, results
+                                    snap_session, ctx, build_def, owned_relics,
+                                    results, ds, req.top_n, req.max_per_vessel,
                                 )
                         except Exception:
                             change = None  # best-effort; don't break the stream
@@ -538,14 +555,44 @@ def get_snapshot(
 
     # Treat missing hashes as stale — None == None must never count as fresh
     # (legacy rows predating hash caching, or builds/profiles written by a
-    # path that skipped hash computation).
+    # path that skipped hash computation).  Version checks implement the
+    # model's documented contract: a solver or game-data change invalidates
+    # stored results even when the inputs' hashes still match.
     if (
         snap.relics_hash is None
         or snap.build_hash is None
-        or snap.relics_hash != profile.relics_hash
         or snap.build_hash != db_build.build_hash
+        or snap.optimizer_version != OPTIMIZER_VERSION
+        or snap.game_data_version != game_data_version()
     ):
         return None
+
+    if snap.relics_hash != profile.relics_hash:
+        # Whole-inventory hash moved, but the optimum depends only on the
+        # build-RELEVANT subset (see relevant_relics_signature).  Serve the
+        # snapshot when that subset is unchanged; legacy rows without the
+        # stored hash stay stale (one re-optimize refills them).
+        if snap.relevant_relics_hash is None:
+            return None
+        db_relics = session.exec(
+            select(Relic).where(Relic.profile_id == profile.id)
+        ).all()
+        pairs = [
+            (
+                relic_fingerprint(
+                    r.real_id,
+                    (r.effect_1, r.effect_2, r.effect_3),
+                    (r.curse_1, r.curse_2, r.curse_3),
+                ),
+                r.ga_handle,
+            )
+            for r in db_relics
+        ]
+        live_relevant = relevant_relics_signature(
+            build_def_from_db(db_build), pairs, ds
+        )
+        if snap.relevant_relics_hash != live_relevant:
+            return None
 
     # Snapshot is fresh — serve the stored full results.  top_layouts is the
     # compact diff baseline and cannot reconstruct VesselResults; legacy rows

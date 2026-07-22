@@ -1,10 +1,13 @@
 """Tests for the optimization snapshot cache plumbing.
 
-The GET /optimize/snapshot freshness contract: a snapshot is served only
-when its relics_hash/build_hash match the hashes cached on the live Profile
-and Build rows.  These tests pin the plumbing that keeps the contract
-honest: build_hash on clone, hash parity between the seeding and snapshot
-paths, invalidation on build edit, and missing-hash staleness.
+The GET /optimize/snapshot freshness contract: a snapshot is served when its
+build_hash and optimizer/game-data versions match the live inputs AND the
+inventory is unchanged — either byte-identical (relics_hash) or unchanged in
+the build-RELEVANT subset (relevant_relics_hash), so irrelevant inventory
+churn keeps serving the cache.  These tests pin the plumbing that keeps the
+contract honest: build_hash on clone, hash parity between the seeding and
+snapshot paths, invalidation on build edit, missing-hash staleness, and the
+relevant-subset gate.
 """
 import uuid
 
@@ -249,14 +252,160 @@ class TestSnapshotCache:
             "snapshot must be stale after the build's scoring fields change"
         )
 
-    def test_snapshot_stale_when_profile_hash_missing(
+    @staticmethod
+    def _add_relic_and_rehash(
+        db: Session, profile: Profile, *, effect: int, real_id: int = 200
+    ) -> None:
+        """Append one relic row and refresh profile.relics_hash the way the
+        upload endpoints would (whole-inventory signature over all rows)."""
+        db.add(Relic(
+            owner_id=profile.owner_id,
+            profile_id=profile.id,
+            ga_handle=0xC0030000 + real_id,
+            item_id=real_id + 2147483648,
+            real_id=real_id,
+            color="Red",
+            effect_1=effect, effect_2=EMPTY, effect_3=EMPTY,
+            curse_1=EMPTY, curse_2=EMPTY, curse_3=EMPTY,
+            is_deep=False,
+            name="Churn Relic",
+            tier="Delicate",
+        ))
+        db.flush()
+        rows = db.exec(
+            select(Relic).where(Relic.profile_id == profile.id)
+        ).all()
+        owned = [
+            OwnedRelic(
+                ga_handle=r.ga_handle, item_id=r.item_id, real_id=r.real_id,
+                color=r.color,
+                effects=[r.effect_1, r.effect_2, r.effect_3],
+                curses=[r.curse_1, r.curse_2, r.curse_3],
+                is_deep=r.is_deep, name=r.name, tier=r.tier,
+            )
+            for r in rows
+        ]
+        profile.relics_hash = relics_signature(owned)
+        db.add(profile)
+        db.commit()
+
+    def test_snapshot_survives_irrelevant_inventory_churn(
         self,
         client: TestClient,
         normal_user_token_headers: dict[str, str],
         db: Session,
     ) -> None:
-        """A profile without relics_hash (legacy rows / hashless write
-        paths) must never satisfy the freshness check."""
+        """Gaining a relic the build cannot use must NOT stale the snapshot:
+        the whole-inventory hash moves but the relevant-subset hash does not,
+        so the gate keeps serving the cached results (the fix for every
+        save upload forcing a re-optimize of untouched builds)."""
+        user = _test_user(db)
+        profile = _seed_profile_with_relics(db, user.id, with_hash=True)
+        build = _create_build(client, normal_user_token_headers)
+
+        run = client.post(
+            "/api/v1/optimize/",
+            headers=normal_user_token_headers,
+            json={"build_id": build["id"], "profile_id": str(profile.id), "top_n": 5},
+        )
+        assert run.status_code == 200, run.text
+
+        # 999999999 resolves to nothing: no direct/text-id/name/family match.
+        self._add_relic_and_rehash(db, profile, effect=999999999)
+
+        snap = client.get(
+            "/api/v1/optimize/snapshot",
+            params={"build_id": build["id"], "profile_id": str(profile.id)},
+            headers=normal_user_token_headers,
+        )
+        assert snap.status_code == 200
+        assert snap.json() is not None, (
+            "irrelevant inventory churn must not stale the snapshot — the "
+            "relevant-subset gate is not being honored"
+        )
+
+    def test_snapshot_stale_after_relevant_inventory_change(
+        self,
+        client: TestClient,
+        normal_user_token_headers: dict[str, str],
+        db: Session,
+    ) -> None:
+        """Gaining a relic that carries a wanted effect MUST stale the
+        snapshot — the optimum may genuinely change."""
+        user = _test_user(db)
+        profile = _seed_profile_with_relics(db, user.id, with_hash=True)
+        build = _create_build(client, normal_user_token_headers)
+
+        run = client.post(
+            "/api/v1/optimize/",
+            headers=normal_user_token_headers,
+            json={"build_id": build["id"], "profile_id": str(profile.id), "top_n": 5},
+        )
+        assert run.status_code == 200, run.text
+
+        # Effect 100 is the build's weighted effect (see _create_build).
+        self._add_relic_and_rehash(db, profile, effect=100)
+
+        snap = client.get(
+            "/api/v1/optimize/snapshot",
+            params={"build_id": build["id"], "profile_id": str(profile.id)},
+            headers=normal_user_token_headers,
+        )
+        assert snap.status_code == 200
+        assert snap.json() is None, (
+            "a build-relevant inventory change must stale the snapshot"
+        )
+
+    def test_optimizer_version_bump_stales_snapshot(
+        self,
+        client: TestClient,
+        normal_user_token_headers: dict[str, str],
+        db: Session,
+    ) -> None:
+        """The model docstring promises version-gated freshness: a snapshot
+        computed by an older solver must not be served as current."""
+        user = _test_user(db)
+        profile = _seed_profile_with_relics(db, user.id, with_hash=True)
+        build = _create_build(client, normal_user_token_headers)
+
+        run = client.post(
+            "/api/v1/optimize/",
+            headers=normal_user_token_headers,
+            json={"build_id": build["id"], "profile_id": str(profile.id), "top_n": 5},
+        )
+        assert run.status_code == 200, run.text
+
+        snap_row = db.exec(
+            select(OptimizationSnapshot).where(
+                OptimizationSnapshot.build_id == uuid.UUID(build["id"]),
+            )
+        ).first()
+        assert snap_row is not None
+        snap_row.optimizer_version = snap_row.optimizer_version - 1
+        db.add(snap_row)
+        db.commit()
+
+        snap = client.get(
+            "/api/v1/optimize/snapshot",
+            params={"build_id": build["id"], "profile_id": str(profile.id)},
+            headers=normal_user_token_headers,
+        )
+        assert snap.status_code == 200
+        assert snap.json() is None, (
+            "an optimizer-version mismatch must stale the snapshot"
+        )
+
+    def test_profile_hash_missing_falls_back_to_relic_rows(
+        self,
+        client: TestClient,
+        normal_user_token_headers: dict[str, str],
+        db: Session,
+    ) -> None:
+        """A profile without relics_hash (legacy rows / hashless write paths)
+        no longer forces staleness: the relevant-subset gate compares
+        content signatures derived from the live Relic rows themselves — the
+        same rows the optimizer reads.  Unchanged rows → fresh; a relevant
+        row change → stale, with or without the profile hash."""
         user = _test_user(db)
         profile = _seed_profile_with_relics(db, user.id, with_hash=False)
         build = _create_build(client, normal_user_token_headers)
@@ -272,15 +421,43 @@ class TestSnapshotCache:
         )
         assert run.status_code == 200, run.text
 
+        params = {"build_id": build["id"], "profile_id": str(profile.id)}
         snap = client.get(
             "/api/v1/optimize/snapshot",
-            params={"build_id": build["id"], "profile_id": str(profile.id)},
+            params=params,
             headers=normal_user_token_headers,
         )
         assert snap.status_code == 200
-        assert snap.json() is None, (
-            "a snapshot must not be served when the profile carries no "
-            "relics_hash to compare against"
+        assert snap.json() is not None, (
+            "unchanged relic rows must serve the snapshot even when the "
+            "profile carries no cached relics_hash"
+        )
+
+        # A build-relevant row change must still stale it (hash or no hash).
+        db.add(Relic(
+            owner_id=profile.owner_id,
+            profile_id=profile.id,
+            ga_handle=0xC0031234,
+            item_id=200 + 2147483648,
+            real_id=200,
+            color="Red",
+            effect_1=100, effect_2=EMPTY, effect_3=EMPTY,
+            curse_1=EMPTY, curse_2=EMPTY, curse_3=EMPTY,
+            is_deep=False,
+            name="Churn Relic",
+            tier="Delicate",
+        ))
+        db.commit()
+
+        snap_after = client.get(
+            "/api/v1/optimize/snapshot",
+            params=params,
+            headers=normal_user_token_headers,
+        )
+        assert snap_after.status_code == 200
+        assert snap_after.json() is None, (
+            "a relevant relic-row change must stale the snapshot even "
+            "without a profile relics_hash"
         )
 
 

@@ -127,34 +127,65 @@ def multiset_diff(
     return list((new_c - old_c).elements()), list((old_c - new_c).elements())
 
 
-def build_positive_effects(
+def build_positive_sets(
     build: BuildDefinition, ds: "SourceDataHandler"
-) -> tuple[set[int], set[str]]:
-    """Effect IDs (incl. family-expanded) and family names the build *wants*."""
+) -> tuple[set[int], set[str], set[str]]:
+    """(effect IDs incl. family-expanded, family names, display names) the build *wants*.
+
+    Mirrors the scorer's positive resolution chain (direct id → text_id →
+    display name → family) as a SUPERSET: any relic that could earn a positive
+    pre-score matches at least one of these sets.  Display names cover alias
+    resolution (same name, unrelated IDs/text_ids) exactly like BuildScorer's
+    name cache — built only from directly listed positive effect IDs.
+    """
     eff_ids: set[int] = set(build.required_effects)
     fams: set[str] = set(build.required_families)
     for g in build.groups:
         if g.weight > 0:
             eff_ids.update(g.effects)
             fams.update(g.families)
+    names: set[str] = set()
+    for eid in eff_ids:
+        name = ds.get_effect_name(eid)
+        if name and name != "Empty" and not name.startswith("Effect "):
+            names.add(name)
     expanded = set(eff_ids)
     for fam in fams:
         expanded |= ds.get_family_effect_ids(fam)
-    return expanded, fams
+    return expanded, fams, names
 
 
-def _fp_effect_ids(fp: Fingerprint) -> tuple[int, ...]:
-    return tuple(e for e in fp[1:4] if e not in _EMPTY)
+def build_positive_effects(
+    build: BuildDefinition, ds: "SourceDataHandler"
+) -> tuple[set[int], set[str]]:
+    """Effect IDs (incl. family-expanded) and family names the build *wants*."""
+    pos_ids, pos_fams, _names = build_positive_sets(build, ds)
+    return pos_ids, pos_fams
+
+
+def _fp_all_ids(fp: Fingerprint) -> tuple[int, ...]:
+    """All non-empty effect AND curse IDs (fp[1:7]) — curses resolve through the
+    same positive chain in the scorer, so relevance must scan them too."""
+    return tuple(e for e in fp[1:7] if e not in _EMPTY)
+
+
+def _fp_has_curse(fp: Fingerprint) -> bool:
+    return any(c not in _EMPTY for c in fp[4:7])
 
 
 def _fp_is_relevant(
-    fp: Fingerprint, pos_ids: set[int], pos_fams: set[str], ds: "SourceDataHandler"
+    fp: Fingerprint, pos_ids: set[int], pos_fams: set[str], pos_names: set[str],
+    ds: "SourceDataHandler", curses_relevant: bool = False,
 ) -> bool:
-    for e in _fp_effect_ids(fp):
+    if curses_relevant and _fp_has_curse(fp):
+        return True
+    for e in _fp_all_ids(fp):
         if e in pos_ids:
             return True
         tid = ds.get_effect_text_id(e)
         if tid != -1 and tid in pos_ids:
+            return True
+        if pos_names and ds.get_effect_name(e) in pos_names:
             return True
         fam = ds.get_effect_family(e)
         if fam is not None and fam in pos_fams:
@@ -169,10 +200,54 @@ def relevant_to_build(
     ds: "SourceDataHandler",
 ) -> tuple[int, int]:
     """``(relevant_added, relevant_removed)`` — relics sharing a wanted effect/family."""
-    pos_ids, pos_fams = build_positive_effects(build, ds)
-    ra = sum(1 for fp in added if _fp_is_relevant(fp, pos_ids, pos_fams, ds))
-    rr = sum(1 for fp in removed if _fp_is_relevant(fp, pos_ids, pos_fams, ds))
+    pos_ids, pos_fams, pos_names = build_positive_sets(build, ds)
+    curses_rel = build.default_curse_weight > 0
+    ra = sum(1 for fp in added
+             if _fp_is_relevant(fp, pos_ids, pos_fams, pos_names, ds, curses_rel))
+    rr = sum(1 for fp in removed
+             if _fp_is_relevant(fp, pos_ids, pos_fams, pos_names, ds, curses_rel))
     return ra, rr
+
+
+def relevant_fingerprints(
+    build: BuildDefinition,
+    relics: Iterable[tuple[Fingerprint, int]],
+    ds: "SourceDataHandler",
+) -> list[Fingerprint]:
+    """Fingerprints of the relics that can affect this build's optimum.
+
+    ``relics`` is (fingerprint, ga_handle) pairs.  A relic is included when its
+    content is positively relevant (it could earn a positive pre-score, i.e.
+    enter the optimizer's candidate lists) OR its handle is pinned by the build
+    (pinned relics participate regardless of score).  Everything else is
+    provably invisible to the solver: candidates require positive_pre_score>0,
+    and every in-context structure (exclusion prefilter, ctx-helper map) is
+    derived from candidates only.
+    """
+    pos_ids, pos_fams, pos_names = build_positive_sets(build, ds)
+    curses_rel = build.default_curse_weight > 0
+    pinned = set(build.pinned_relics)
+    return [
+        fp for fp, handle in relics
+        if handle in pinned
+        or _fp_is_relevant(fp, pos_ids, pos_fams, pos_names, ds, curses_rel)
+    ]
+
+
+def relevant_relics_signature(
+    build: BuildDefinition,
+    relics: Iterable[tuple[Fingerprint, int]],
+    ds: "SourceDataHandler",
+) -> str:
+    """Order-independent hash of the build-relevant relic subset.
+
+    Adding or removing relics that cannot affect this build's optimum leaves
+    the signature unchanged, so the snapshot freshness gate keeps serving
+    cached results across irrelevant inventory churn (the common case after a
+    play session).  Same multiset-of-fingerprints shape as
+    :func:`relics_signature`.
+    """
+    return _sha(sorted(relevant_fingerprints(build, relics, ds)))
 
 
 # ---------------------------------------------------------------------------

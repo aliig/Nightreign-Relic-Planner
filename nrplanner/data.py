@@ -283,13 +283,17 @@ class SourceDataHandler:
         cached = self._name_cache_map.get(effect_id)
         if cached is not None:
             return cached
+        # Cache misses too (including the fallback) — the pandas scan below is
+        # far too slow to re-run per lookup in scoring hot paths.
+        result = f"Effect {effect_id}"
         if self.effect_name is not None:
             row = self.effect_name[self.effect_name["id"] == effect_id]
             if not row.empty:
                 text = str(row["text"].values[0]).strip()
                 if text != "%null%":
-                    return text
-        return f"Effect {effect_id}"
+                    result = text
+        self._name_cache_map[effect_id] = result
+        return result
 
     def get_effect_text_id(self, effect_id: int) -> int:
         """Return attachTextId (canonical text ID) for an effect, or -1."""

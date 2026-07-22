@@ -87,6 +87,10 @@ class BuildContext:
     build: BuildDefinition
     hero_type: int          # 1-based (Wylder=1 .. Undertaker=10)
     name: str
+    # DB build id (stringified UUID) when resolved from a saved build; "" for
+    # inline/anonymous builds.  Keys the per-plan owned-only solve cache, so it
+    # must be collision-free — names are not unique.
+    build_id: str = ""
 
 
 @dataclass
@@ -178,6 +182,16 @@ def _plan_counts(buckets: list[PurchaseBucket], stop_mode: str, budget: int | No
     return counts, gen_max_hit
 
 
+def _used_fps_from_results(results) -> set:
+    """Content fingerprints of every relic placed across ranked VesselResults."""
+    used = set()
+    for res in results:
+        for a in res.assignments:
+            if a.relic is not None:
+                used.add(fingerprint_owned(a.relic))
+    return used
+
+
 def _optimize_used_fps(build_ctx: BuildContext, inventory: RelicInventory,
                        optimizer: VesselOptimizer, executor, top_n: int,
                        max_per_vessel: int, deadline_secs: float) -> set:
@@ -187,12 +201,46 @@ def _optimize_used_fps(build_ctx: BuildContext, inventory: RelicInventory,
         top_n=top_n, max_per_vessel=max_per_vessel,
         executor=executor, deadline_secs=deadline_secs,
     )
-    used = set()
-    for res in results:
-        for a in res.assignments:
-            if a.relic is not None:
-                used.add(fingerprint_owned(a.relic))
-    return used
+    return _used_fps_from_results(results)
+
+
+def _ctx_key(build_ctx: BuildContext) -> str:
+    """Collision-free cache key for one build within a single plan."""
+    return build_ctx.build_id or f"anon:{id(build_ctx)}"
+
+
+def _owned_used_fps(build_ctx: BuildContext, owned: list[OwnedRelic],
+                    optimizer: VesselOptimizer, executor, top_n: int,
+                    max_per_vessel: int, deadline_secs: float,
+                    cache: dict[str, set] | None,
+                    futures: dict | None = None) -> set:
+    """Used-fps of a build's top-N over the OWNED-ONLY inventory, memoized.
+
+    ``cache`` is shared across the purchase and cull passes of one rites plan
+    and may be pre-seeded by the backend from a fresh optimization snapshot
+    (the stored top-N for exactly this build + inventory + run params), so the
+    owned-only optimization runs at most once per build per plan — and not at
+    all on a snapshot hit.
+
+    ``futures`` (from ``submit_all_vessels`` over the owned inventory) collects
+    an already-prefetched solve instead of submitting a fresh one; callers only
+    presubmit for cache misses.
+    """
+    key = _ctx_key(build_ctx)
+    if cache is not None and key in cache:
+        return cache[key]
+    if futures is not None:
+        results = optimizer.collect_all_vessels(
+            build_ctx.build, build_ctx.hero_type, futures, top_n=top_n,
+            n_relics=len(owned))
+        fps = _used_fps_from_results(results)
+    else:
+        fps = _optimize_used_fps(
+            build_ctx, RelicInventory.from_owned_relics(owned), optimizer,
+            executor, top_n, max_per_vessel, deadline_secs)
+    if cache is not None:
+        cache[key] = fps
+    return fps
 
 
 def bulk_acquire(*, builds: list[BuildContext], owned: list[OwnedRelic],
@@ -207,12 +255,18 @@ def bulk_acquire(*, builds: list[BuildContext], owned: list[OwnedRelic],
                  top_n: int = 10, max_per_vessel: int = 3, deadline_secs: float = 6.0,
                  gen_max: int = 8000, max_candidates: int = 500,
                  progress: Callable[[int, int, str], None] | None = None,
-                 rng: random.Random | None = None, seed: int | None = None) -> BulkResult:
+                 rng: random.Random | None = None, seed: int | None = None,
+                 owned_used_fps: dict[str, set] | None = None) -> BulkResult:
     """Bulk-generate purchases, keep only build-relevant relics, refund the rest.
 
     Returns a BulkResult with the keepers (tagged by build), counts, and the exact Murk
     delta (buys deducted, dud sells refunded). ``storage_cap_left`` bounds keepers added;
     ``murk_after`` is guaranteed >= 0 (trims keepers/duds to fit the Murk you have).
+
+    ``owned_used_fps`` is the per-plan owned-only solve cache (see
+    ``_owned_used_fps``): builds for which NO generated relic can score are
+    resolved from it instead of re-optimizing the enlarged inventory — exact,
+    because relics with positive_pre_score <= 0 never enter candidate lists.
     """
     scorer = scorer or BuildScorer(ds)
     optimizer = optimizer or VesselOptimizer(ds, scorer)
@@ -248,19 +302,32 @@ def bulk_acquire(*, builds: list[BuildContext], owned: list[OwnedRelic],
     if builds:
         # Build-aware path: rules override; otherwise keep only content a build's top-N
         # would place. Pre-filter with positive_pre_score to keep the optimizer input small.
+        # Build-outer scoring: one scorer cache rebind per build (not per relic),
+        # and the per-build positive sets drive the per-build solve skip below.
+        pre_of: dict[int, int] = {}
+        pos_handles_by_build: dict[str, set[int]] = {}
+        for b in builds:
+            pos_handles: set[int] = set()
+            for o in generated:
+                s = scorer.positive_pre_score(o, b.build)
+                if s > 0:
+                    pos_handles.add(o.ga_handle)
+                    if s > pre_of.get(o.ga_handle, 0):
+                        pre_of[o.ga_handle] = s
+            pos_handles_by_build[_ctx_key(b)] = pos_handles
+
         force_keep: list[OwnedRelic] = []
         scored: list[tuple[int, OwnedRelic]] = []
         for o in generated:
             if relic_matches_rules(o, inclusion_rules):
-                pre_by_handle[o.ga_handle] = max(
-                    (scorer.positive_pre_score(o, b.build) for b in builds), default=0)
+                pre_by_handle[o.ga_handle] = pre_of.get(o.ga_handle, 0)
                 force_keep.append(o)
                 continue
             if relic_matches_rules(o, exclusion_rules):
                 continue  # explicit "always sell" -> dud
             if fingerprint_owned(o) in owned_fps:
                 continue  # you already own this content -> dud
-            best_pre = max((scorer.positive_pre_score(o, b.build) for b in builds), default=0)
+            best_pre = pre_of.get(o.ga_handle, 0)
             if best_pre <= 0:
                 continue  # cannot help any build -> dud
             pre_by_handle[o.ga_handle] = best_pre
@@ -270,15 +337,62 @@ def bulk_acquire(*, builds: list[BuildContext], owned: list[OwnedRelic],
             scored = scored[:max_candidates]  # rest -> duds
         candidates = [o for _, o in scored]
 
-        # 4. optimize each build once over owned + forced keepers + candidates -----
+        # 4. optimize each build once over owned + forced keepers + candidates.
+        #    Builds where NO generated relic scores positive skip the enlarged
+        #    solve: those relics never enter candidate lists, so the build's
+        #    top-N over owned+extras is exactly the owned-only result (served
+        #    from the shared cache / snapshot seed when available).
+        #    Depth-1 prefetch: the next solving build's vessel tasks are
+        #    submitted before draining the current build's, so pool workers
+        #    idle during a build's completion tail start early on the next.
         inv = RelicInventory.from_owned_relics(owned + force_keep + candidates)
+        extra_handles = {o.ga_handle for o in force_keep + candidates}
+        solve_flags = [
+            bool(pos_handles_by_build[_ctx_key(b)] & extra_handles)
+            for b in builds
+        ]
+        pending: tuple[int, dict] | None = None  # (build index, futures)
+
+        def _prefetch_after(i0: int) -> None:
+            nonlocal pending
+            if executor is None or pending is not None:
+                return
+            for j in range(i0 + 1, len(builds)):
+                if solve_flags[j]:
+                    pending = (j, optimizer.submit_all_vessels(
+                        builds[j].build, inv, builds[j].hero_type,
+                        max_per_vessel=max_per_vessel, executor=executor,
+                        deadline_secs=deadline_secs))
+                    return
+
         build_used: dict[str, set] = {}
         total_builds = len(builds)
         for i, b in enumerate(builds):
             if progress is not None:
                 progress(i + 1, total_builds, b.name)
-            build_used[b.name] = _optimize_used_fps(
-                b, inv, optimizer, executor, top_n, max_per_vessel, deadline_secs)
+            if not solve_flags[i]:
+                build_used[b.name] = _owned_used_fps(
+                    b, owned, optimizer, executor, top_n, max_per_vessel,
+                    deadline_secs, owned_used_fps)
+                continue
+            futures = None
+            if pending is not None and pending[0] == i:
+                futures = pending[1]
+                pending = None
+            if futures is None and executor is not None:
+                futures = optimizer.submit_all_vessels(
+                    b.build, inv, b.hero_type, max_per_vessel=max_per_vessel,
+                    executor=executor, deadline_secs=deadline_secs)
+            _prefetch_after(i)
+            if futures is not None:
+                build_used[b.name] = _used_fps_from_results(
+                    optimizer.collect_all_vessels(
+                        b.build, b.hero_type, futures, top_n=top_n,
+                        n_relics=len(inv)))
+            else:
+                build_used[b.name] = _optimize_used_fps(
+                    b, inv, optimizer, executor, top_n, max_per_vessel,
+                    deadline_secs)
         all_used: set = set()
         for s in build_used.values():
             all_used |= s
@@ -378,24 +492,57 @@ def unused_owned_handles(owned: list[OwnedRelic], builds: list[BuildContext], ds
                          optimizer: VesselOptimizer | None = None, executor=None,
                          top_n: int = 10, max_per_vessel: int = 3,
                          deadline_secs: float = 6.0,
-                         progress: Callable[[int, int, str], None] | None = None
+                         progress: Callable[[int, int, str], None] | None = None,
+                         owned_used_fps: dict[str, set] | None = None
                          ) -> list[int]:
     """ga_handles of owned relics used by NO build's top-N (build-aware cull candidates).
 
     Content-equal duplicates: whichever copy the optimizer places is 'used'; the other is
     correctly reported as cullable.
+
+    ``owned_used_fps`` is the per-plan owned-only solve cache shared with the
+    purchase pass (and possibly snapshot-seeded) — each build's owned-only
+    optimization runs at most once per plan.
     """
     scorer = scorer or BuildScorer(ds)
     optimizer = optimizer or VesselOptimizer(ds, scorer)
-    inv = RelicInventory.from_owned_relics(owned)
+
+    # Depth-1 prefetch across cache-missing builds (see bulk_acquire).
+    owned_inv = RelicInventory.from_owned_relics(owned)
+    pending: tuple[int, dict] | None = None
+
+    def _is_miss(j: int) -> bool:
+        return owned_used_fps is None or _ctx_key(builds[j]) not in owned_used_fps
+
+    def _prefetch_after(i0: int) -> None:
+        nonlocal pending
+        if executor is None or pending is not None:
+            return
+        for j in range(i0 + 1, len(builds)):
+            if _is_miss(j):
+                pending = (j, optimizer.submit_all_vessels(
+                    builds[j].build, owned_inv, builds[j].hero_type,
+                    max_per_vessel=max_per_vessel, executor=executor,
+                    deadline_secs=deadline_secs))
+                return
 
     used_fps: set = set()
     total = len(builds)
     for i, b in enumerate(builds):
         if progress is not None:
             progress(i + 1, total, b.name)
-        used_fps |= _optimize_used_fps(b, inv, optimizer, executor, top_n,
-                                       max_per_vessel, deadline_secs)
+        futures = None
+        if pending is not None and pending[0] == i:
+            futures = pending[1]
+            pending = None
+        if futures is None and executor is not None and _is_miss(i):
+            futures = optimizer.submit_all_vessels(
+                b.build, owned_inv, b.hero_type, max_per_vessel=max_per_vessel,
+                executor=executor, deadline_secs=deadline_secs)
+        _prefetch_after(i)
+        used_fps |= _owned_used_fps(b, owned, optimizer, executor, top_n,
+                                    max_per_vessel, deadline_secs,
+                                    owned_used_fps, futures=futures)
 
     unused: list[int] = []
     seen_used_fp: set = set()
@@ -416,7 +563,8 @@ def select_cull_handles(owned: list[OwnedRelic], builds: list[BuildContext], ds,
                         optimizer: VesselOptimizer | None = None, executor=None,
                         top_n: int = 10, max_per_vessel: int = 3,
                         deadline_secs: float = 6.0,
-                        progress: Callable[[int, int, str], None] | None = None
+                        progress: Callable[[int, int, str], None] | None = None,
+                        owned_used_fps: dict[str, set] | None = None
                         ) -> list[int]:
     """ga_handles of owned relics to SELL, per the cull waterfall.
 
@@ -430,7 +578,7 @@ def select_cull_handles(owned: list[OwnedRelic], builds: list[BuildContext], ds,
         build_unused = set(unused_owned_handles(
             owned, builds, ds, scorer=scorer, optimizer=optimizer, executor=executor,
             top_n=top_n, max_per_vessel=max_per_vessel, deadline_secs=deadline_secs,
-            progress=progress))
+            progress=progress, owned_used_fps=owned_used_fps))
     else:
         build_unused: set = set()  # no builds -> exclusion-rules-only cull, no optimizer
 

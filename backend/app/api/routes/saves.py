@@ -88,7 +88,9 @@ from nrplanner.cumulative import summarize_cumulative_effects
 from nrplanner.changes import (
     build_signature,
     diff_results,
+    fingerprint_owned,
     multiset_diff,
+    relevant_relics_signature,
     relevant_to_build,
     relic_fingerprint,
     relics_signature,
@@ -683,6 +685,9 @@ def _apply_snapshot_for_stream(
     owned_relics: list[OwnedRelic],
     slot_index: int,
     results: list[VesselResult],
+    ds: Any,
+    top_n: int,
+    max_per_vessel: int,
 ) -> BuildChange:
     """Diff a fresh optimization against the stored snapshot, then upsert it."""
     from app.models import get_datetime_utc
@@ -697,6 +702,9 @@ def _apply_snapshot_for_stream(
     relics_hash = relics_signature(owned_relics)
     build_hash = build_signature(build_def)
     gdv = game_data_version()
+    relevant_hash = relevant_relics_signature(
+        build_def, [(fingerprint_owned(r), r.ga_handle) for r in owned_relics], ds
+    )
 
     change = diff_results(snap.top_layouts if snap else None, results)
     change.build_id = str(build.id)
@@ -738,6 +746,9 @@ def _apply_snapshot_for_stream(
             build_hash=build_hash,
             game_data_version=gdv,
             optimizer_version=OPTIMIZER_VERSION,
+            relevant_relics_hash=relevant_hash,
+            top_n=top_n,
+            max_per_vessel=max_per_vessel,
             top_layouts=top_layouts,
             full_results=full_results,
             best_score=best_score,
@@ -753,6 +764,9 @@ def _apply_snapshot_for_stream(
         snap.build_hash = build_hash
         snap.game_data_version = gdv
         snap.optimizer_version = OPTIMIZER_VERSION
+        snap.relevant_relics_hash = relevant_hash
+        snap.top_n = top_n
+        snap.max_per_vessel = max_per_vessel
         snap.top_layouts = top_layouts
         snap.full_results = full_results
         snap.best_score = best_score
@@ -953,29 +967,73 @@ async def upload_save_stream(
         all_changes: list[dict] = []
         total = len(affected_info)
 
-        for idx, (build_id, build_name, character, slot_index, broken_pins) in enumerate(affected_info, 1):
+        # Pre-compute per-build skip decisions (relics + build unchanged) in
+        # one session, so the prefetch below never submits pool tasks for a
+        # build that will be skipped.
+        skip_flags: list[bool] = []
+        try:
+            with Session(engine) as snap_session:
+                for b_id, _bn, _ch, b_slot, _bp in affected_info:
+                    b_relics = relics_by_slot.get(b_slot, [])
+                    snap = snap_session.exec(
+                        select(OptimizationSnapshot).where(
+                            OptimizationSnapshot.build_id == b_id,
+                            OptimizationSnapshot.slot_index == b_slot,
+                        )
+                    ).first()
+                    skip_flags.append(bool(
+                        snap
+                        and snap.relics_hash == relics_signature(b_relics)
+                        and snap.build_hash == build_signature(build_defs[b_id])
+                    ))
+        except Exception:
+            skip_flags = [False] * total
+
+        scorer = BuildScorer(ds)
+        optimizer = VesselOptimizer(ds, scorer)
+
+        def _submit_for(idx0: int) -> dict | None:
+            """Vessel futures for affected_info[idx0], or None (no pool /
+            skipped / unknown hero — the unknown-hero error surfaces when the
+            build is processed)."""
+            if executor is None or skip_flags[idx0]:
+                return None
+            b_id, _bn, b_char, b_slot, _bp = affected_info[idx0]
+            b_hero = _CHAR_NAME_TO_HERO_TYPE.get(b_char)
+            if b_hero is None:
+                return None
+            b_inventory = RelicInventory.from_owned_relics(
+                relics_by_slot.get(b_slot, []))
+            return optimizer.submit_all_vessels(
+                build_defs[b_id], b_inventory, b_hero,
+                max_per_vessel=3, executor=executor)
+
+        # Depth-1 prefetch: the next non-skipped build's vessel tasks are
+        # submitted before draining the current build's futures, so pool
+        # workers idle during a build's completion tail start early on the
+        # next.  Per-build SSE event order is unchanged — prefetched futures
+        # are simply collected instantly when their build's turn comes.
+        pending: tuple[int, dict] | None = None
+
+        def _prefetch_after(i0: int) -> None:
+            nonlocal pending
+            if executor is None or pending is not None:
+                return
+            for j in range(i0 + 1, total):
+                if not skip_flags[j]:
+                    futures = _submit_for(j)
+                    if futures is not None:
+                        pending = (j, futures)
+                    return
+
+        for idx0, (build_id, build_name, character, slot_index, broken_pins) in enumerate(affected_info):
+            idx = idx0 + 1
             yield f"data: {json.dumps({'type': 'optimize_start', 'build_id': str(build_id), 'build_name': build_name, 'index': idx, 'total': total})}\n\n"
 
             owned_relics = relics_by_slot.get(slot_index, [])
             build_def = build_defs[build_id]
 
-            # Check if relics haven't actually changed for this slot
-            new_relics_hash = relics_signature(owned_relics)
-            skip = False
-            try:
-                with Session(engine) as snap_session:
-                    snap = snap_session.exec(
-                        select(OptimizationSnapshot).where(
-                            OptimizationSnapshot.build_id == build_id,
-                            OptimizationSnapshot.slot_index == slot_index,
-                        )
-                    ).first()
-                    if snap and snap.relics_hash == new_relics_hash and snap.build_hash == build_signature(build_def):
-                        skip = True
-            except Exception:
-                pass
-
-            if skip:
+            if skip_flags[idx0]:
                 change_data = BuildChange(
                     build_id=str(build_id),
                     build_name=build_name,
@@ -994,15 +1052,21 @@ async def upload_save_stream(
                 if hero_type is None:
                     raise ValueError(f"Unknown character '{character}'")
 
+                futures = None
+                if pending is not None and pending[0] == idx0:
+                    futures = pending[1]
+                    pending = None
+                if futures is None:
+                    futures = _submit_for(idx0)  # None when executor is None
+                _prefetch_after(idx0)
+
                 inventory = RelicInventory.from_owned_relics(owned_relics)
-                scorer = BuildScorer(ds)
-                optimizer = VesselOptimizer(ds, scorer)
 
                 results: list[VesselResult] = []
                 for event in optimizer.optimize_vessels_streaming(
                     build_def, inventory, hero_type,
                     top_n=10, max_per_vessel=3,
-                    executor=executor,
+                    executor=executor, presubmitted=futures,
                 ):
                     if event["type"] == "progress":
                         yield f"data: {json.dumps({'type': 'optimize_progress', 'build_id': str(build_id), 'vessel': event['vessel'], 'total': event['total'], 'name': event['name']})}\n\n"
@@ -1016,7 +1080,8 @@ async def upload_save_stream(
                     if build_row:
                         change = _apply_snapshot_for_stream(
                             snap_session, owner_id, build_row, build_def,
-                            owned_relics, slot_index, results,
+                            owned_relics, slot_index, results, ds,
+                            top_n=10, max_per_vessel=3,
                         )
                         if broken_pins:
                             change.pinned_removed = broken_pins
@@ -1539,6 +1604,7 @@ def _resolve_rites_builds(
                 build=bdef,
                 hero_type=_resolve_hero_type(bdef.character),
                 name=db_build.name,
+                build_id=str(db_build.id),
             ))
     elif inline:
         try:
@@ -1622,6 +1688,92 @@ def _rites_roll_seed(slot_index: int, current_murk: int, owned: list) -> int:
     return int.from_bytes(hashlib.sha256(fp.encode()).digest()[:8], "big")
 
 
+# Must match bulk_acquire/select_cull_handles' max_per_vessel default — the
+# snapshot-seed gate compares stored run params against this value.
+_RITES_MAX_PER_VESSEL = 3
+
+
+def _rites_snapshot_seed_rows(
+    session: Session, build_ctxs: list[BuildContext], slot_index: int,
+    top_n: int, max_per_vessel: int = _RITES_MAX_PER_VESSEL,
+) -> dict[str, dict]:
+    """Per-build snapshot data for rites reuse, extracted while a session is open.
+
+    Only candidate seeds: rows whose stored run params match the rites request
+    and that carry full_results + a relevant-subset hash.  Freshness against
+    the UPLOADED save's inventory can only be judged inside ``_rites_plan``
+    (the file is parsed there), so validation happens in
+    ``_validated_seed_fps`` — this helper just packs plain, thread-safe dicts.
+    """
+    seeds: dict[str, dict] = {}
+    for ctx in build_ctxs:
+        if not ctx.build_id:
+            continue  # inline/anonymous build — no snapshot exists
+        snap = session.exec(
+            select(OptimizationSnapshot).where(
+                OptimizationSnapshot.build_id == uuid.UUID(ctx.build_id),
+                OptimizationSnapshot.slot_index == slot_index,
+            )
+        ).first()
+        if (
+            snap is None
+            or not snap.full_results
+            or snap.relevant_relics_hash is None
+            or snap.top_n != top_n
+            or snap.max_per_vessel != max_per_vessel
+        ):
+            continue
+        used: set[tuple] = set()
+        for layout in snap.full_results:
+            for a in layout.get("assignments", []):
+                r = a.get("relic")
+                if r:
+                    used.add(relic_fingerprint(
+                        r["real_id"], r["effects"], r["curses"]))
+        seeds[ctx.build_id] = {
+            "build_hash": snap.build_hash,
+            "game_data_version": snap.game_data_version,
+            "optimizer_version": snap.optimizer_version,
+            "relevant_relics_hash": snap.relevant_relics_hash,
+            "used_fps": used,
+        }
+    return seeds
+
+
+def _validated_seed_fps(
+    build_ctxs: list[BuildContext],
+    seeds: dict[str, dict] | None,
+    owned: list[OwnedRelic],
+    ds: Any,
+) -> dict[str, set]:
+    """Owned-only used-fps per build, from snapshots proven fresh for THIS save.
+
+    Fresh = same scoring definition (build_hash), same solver + game data
+    versions, and an unchanged build-relevant relic subset in the uploaded
+    inventory.  Then the stored top-N *is* the owned-only optimization result
+    — and reusing it keeps cull decisions consistent with what the optimizer
+    page displays.
+    """
+    if not seeds:
+        return {}
+    owned_pairs = [(fingerprint_owned(o), o.ga_handle) for o in owned]
+    gdv = game_data_version()
+    out: dict[str, set] = {}
+    for ctx in build_ctxs:
+        seed = seeds.get(ctx.build_id) if ctx.build_id else None
+        if seed is None:
+            continue
+        if (
+            seed["build_hash"] == build_signature(ctx.build)
+            and seed["game_data_version"] == gdv
+            and seed["optimizer_version"] == OPTIMIZER_VERSION
+            and seed["relevant_relics_hash"]
+            == relevant_relics_signature(ctx.build, owned_pairs, ds)
+        ):
+            out[ctx.build_id] = set(seed["used_fps"])
+    return out
+
+
 def _rites_plan(
     file_bytes: bytes, filename: str, slot_index: int,
     build_ctxs: list[BuildContext], buckets: list[PurchaseBucket],
@@ -1630,6 +1782,7 @@ def _rites_plan(
     inclusion_rules: list[dict] | None = None,
     exclusion_rules: list[dict] | None = None,
     progress: Any = None,
+    snapshot_seeds: dict[str, dict] | None = None,
 ) -> dict:
     """Compute a bulk-purchase + cull plan. Reads current Murk, owned relics, and
     capacity from the uploaded save (1:1 fidelity — never client-supplied). Persists
@@ -1654,6 +1807,13 @@ def _rites_plan(
     scorer = BuildScorer(ds)
     optimizer = VesselOptimizer(ds, scorer)
 
+    # Per-plan owned-only solve cache, shared by the purchase and cull passes
+    # and pre-seeded from optimization snapshots proven fresh for this save —
+    # each build's owned-only optimization runs at most once per plan, and not
+    # at all on a snapshot hit.
+    owned_used: dict[str, set] = _validated_seed_fps(
+        build_ctxs, snapshot_seeds, owned, ds)
+
     keepers: list[RitesKeeper] = []
     generated = kept = duds = 0
     murk_after, murk_cost, murk_refunded = current_murk, 0, 0
@@ -1668,10 +1828,12 @@ def _rites_plan(
             inclusion_rules=inclusion_rules, exclusion_rules=exclusion_rules,
             storage_cap_left=storage_left,
             scorer=scorer, optimizer=optimizer, executor=executor, top_n=top_n,
+            max_per_vessel=_RITES_MAX_PER_VESSEL,
             progress=(lambda i, t, name: _emit(
                 "matching", i, t, f"Matching build {i}/{t}: {name}")),
             # Deterministic per save-state: re-running without exporting can't re-roll.
             seed=_rites_roll_seed(slot_index, current_murk, owned),
+            owned_used_fps=owned_used,
         )
         for k in r.keepers:
             rel = k.relic
@@ -1698,8 +1860,10 @@ def _rites_plan(
             inclusion_rules=inclusion_rules, exclusion_rules=exclusion_rules,
             protected_handles=protected,
             scorer=scorer, optimizer=optimizer, executor=executor, top_n=top_n,
+            max_per_vessel=_RITES_MAX_PER_VESSEL,
             progress=(lambda i, t, name: _emit(
-                "culling", i, t, f"Cull check {i}/{t}: {name}")))
+                "culling", i, t, f"Cull check {i}/{t}: {name}")),
+            owned_used_fps=owned_used)
 
     _emit("finalizing", 1, 1, "Finalizing plan…")
     return {
@@ -1756,9 +1920,11 @@ async def rites_plan(
         raise HTTPException(status_code=422, detail="Empty save file.")
     filename = file.filename or "save.sl2"
 
+    seeds = _rites_snapshot_seed_rows(session, build_ctxs, slot_index, top_n)
     plan = await run_in_threadpool(
         _rites_plan, file_bytes, filename, slot_index, build_ctxs, parsed_buckets,
         stop_mode, budget, ds, executor, top_n, include_cull, incl, excl,
+        snapshot_seeds=seeds,
     )
     return RitesPlanResponse(**plan)
 
@@ -1807,6 +1973,9 @@ async def rites_plan_stream(
         raise HTTPException(status_code=422, detail="Empty save file.")
     filename = file.filename or "save.sl2"
 
+    # Session-bound work happens before the worker thread starts.
+    seeds = _rites_snapshot_seed_rows(session, build_ctxs, slot_index, top_n)
+
     def _events():
         q: queue.Queue = queue.Queue()
         holder: dict[str, Any] = {}
@@ -1820,7 +1989,7 @@ async def rites_plan_stream(
                 holder["plan"] = _rites_plan(
                     file_bytes, filename, slot_index, build_ctxs, parsed_buckets,
                     stop_mode, budget, ds, executor, top_n, include_cull, incl, excl,
-                    progress=_progress)
+                    progress=_progress, snapshot_seeds=seeds)
             except HTTPException as exc:
                 holder["error"] = exc.detail
             except Exception as exc:  # noqa: BLE001 - surfaced as an SSE error event

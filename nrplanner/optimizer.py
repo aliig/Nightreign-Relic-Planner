@@ -1,6 +1,7 @@
 """Vessel slot optimizer — backtrack (exhaustive) + greedy solvers."""
 from __future__ import annotations
 
+import logging
 import time
 from concurrent.futures import Future, ProcessPoolExecutor, as_completed
 
@@ -10,7 +11,9 @@ from nrplanner.models import (
     BuildDefinition, OwnedRelic, RelicInventory,
     SlotAssignment, VesselResult, VesselState,
 )
-from nrplanner.scoring import BuildScorer
+from nrplanner.scoring import BuildScorer, score_profile
+
+log = logging.getLogger(__name__)
 
 # Time budget for one vessel's exhaustive backtracking search.  The solver is
 # optimal when it finishes within this window; if it is hit, it returns the
@@ -50,9 +53,10 @@ def _optimize_vessel_task(
     vessel_data: dict,
     max_per_vessel: int,
     deadline_secs: float = DEFAULT_BACKTRACK_DEADLINE_SECS,
-) -> tuple[int, str, list[VesselResult]]:
+) -> tuple[int, str, list[VesselResult], float]:
     """Top-level picklable worker function for ProcessPoolExecutor."""
     assert _worker_ds is not None and _worker_scorer is not None
+    t0 = time.perf_counter()
     inventory = RelicInventory.from_owned_relics(relics)
     optimizer = VesselOptimizer(_worker_ds, _worker_scorer)
     results = optimizer.optimize(
@@ -60,7 +64,8 @@ def _optimize_vessel_task(
     vessel_id = vessel_data.get("_id", 0)
     for r in results:
         r.vessel_id = vessel_id
-    return (vessel_id, vessel_data["Name"], results)
+    solve_ms = (time.perf_counter() - t0) * 1000.0
+    return (vessel_id, vessel_data["Name"], results, solve_ms)
 
 
 class VesselOptimizer:
@@ -78,6 +83,18 @@ class VesselOptimizer:
             for slot in result.assignments
         ]
 
+    @staticmethod
+    def _log_run_summary(kind: str, build: BuildDefinition, hero_type: int,
+                         n_vessels: int, n_relics: int,
+                         all_results: list[VesselResult], t_run: float) -> None:
+        truncated = sum(1 for r in all_results if r.search_truncated)
+        log.info(
+            "optimize run kind=%s build=%r hero=%d vessels=%d relics=%d "
+            "truncated_results=%d wall_ms=%.0f",
+            kind, build.name, hero_type, n_vessels, n_relics, truncated,
+            (time.perf_counter() - t_run) * 1000.0,
+        )
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -90,6 +107,8 @@ class VesselOptimizer:
         slot_colors = vessel_data["Colors"]
         num_slots = 6 if build.include_deep else 3
         search_truncated = False
+        t_start = time.perf_counter()
+        nodes_expanded = 0
 
         # Precompute conflict penalty weights once per optimization call.
         desired_cw = self.scorer.get_desired_conflict_weights(build)
@@ -126,15 +145,18 @@ class VesselOptimizer:
             # belong to the optimum.  Candidates are ordered by net score
             # (finds good solutions early => aggressive pruning); the stored
             # value is the positive bound, which is what pruning must use.
+            # Survivors are compiled into RelicProfiles (memoized per build on
+            # the scorer, so slots/vessels sharing a relic compile it once) —
+            # the solvers below run entirely on profiles.
             scored = []
             for r in candidates:
-                pos = self.scorer.positive_pre_score(r, build)
-                if pos <= 0:
+                if self.scorer.positive_pre_score(r, build) <= 0:
                     continue
-                net = self.scorer.score_relic(r, build)
-                scored.append((net, pos, r))
+                prof = self.scorer.compile_profile(
+                    r, build, effect_limit_by_name, family_limit_map)
+                scored.append((prof.net, prof.pos_bound, prof))
             scored.sort(key=lambda x: x[0], reverse=True)
-            candidates_per_free_slot.append([(pos, r) for _net, pos, r in scored])
+            candidates_per_free_slot.append([(pos, p) for _net, pos, p in scored])
 
         num_free = len(free_slot_indices)
 
@@ -165,7 +187,7 @@ class VesselOptimizer:
             # order; with pinned slots the free-slot indices no longer align,
             # so the post-hoc filter alone handles those (rare) builds.
             validate_leaves = bool(desired_compat_effs) and not pinned_handles
-            bt_results, search_truncated = self._backtrack_solve(
+            bt_results, search_truncated, nodes_expanded = self._backtrack_solve(
                 candidates_per_free_slot, num_free, build, top_n, desired_cw,
                 desired_compat_effs, initial_threshold=greedy_best - 1,
                 effect_limit_by_name=effect_limit_by_name,
@@ -221,6 +243,14 @@ class VesselOptimizer:
                     self._placed_effects_per_slot(r), build, desired_compat_effs)
             ]
 
+        if log.isEnabledFor(logging.DEBUG):
+            log.debug(
+                "vessel=%r slots=%d candidates=%s nodes=%d truncated=%s elapsed_ms=%.1f",
+                vessel_data.get("Name"), num_slots,
+                [len(c) for c in candidates_per_free_slot],
+                nodes_expanded, search_truncated,
+                (time.perf_counter() - t_start) * 1000.0,
+            )
         return results
 
     def _prepare_limits(
@@ -310,6 +340,68 @@ class VesselOptimizer:
         results.sort(key=lambda r: -r.total_score)
         return results[:top_n]
 
+    def submit_all_vessels(
+        self,
+        build: BuildDefinition,
+        inventory: RelicInventory,
+        hero_type: int,
+        max_per_vessel: int = 3,
+        executor: ProcessPoolExecutor | None = None,
+        deadline_secs: float = DEFAULT_BACKTRACK_DEADLINE_SECS,
+    ) -> dict[Future, dict]:
+        """Submit one pool task per vessel; returns the future→vessel map.
+
+        Multi-build flows submit the NEXT build's vessels before draining the
+        current build's futures (depth-1 prefetch): the pool's FIFO queue then
+        fills idle workers during each build's completion tail.  Consume with
+        ``collect_all_vessels`` or ``optimize_vessels_streaming(presubmitted=…)``.
+        """
+        vessels = list(self.data_source.get_all_vessels_for_hero(hero_type))
+        relics = inventory.relics
+        futures: dict[Future, dict] = {}
+        for v in vessels:
+            vd = dict(v)
+            vd["_id"] = v["vessel_id"]
+            fut = executor.submit(
+                _optimize_vessel_task, build, relics, vd, max_per_vessel,
+                deadline_secs,
+            )
+            futures[fut] = v
+        return futures
+
+    @staticmethod
+    def _dedup_rank(all_results: list[VesselResult], top_n: int) -> list[VesselResult]:
+        """Drop functionally identical layouts (same effects per slot, different
+        physical copies of a relic), then rank by score."""
+        seen_layouts: set[tuple] = set()
+        unique: list[VesselResult] = []
+        for r in all_results:
+            fp = r.layout_fingerprint()
+            if fp not in seen_layouts:
+                seen_layouts.add(fp)
+                unique.append(r)
+        unique.sort(key=lambda r: -r.total_score)
+        return unique[:top_n]
+
+    def collect_all_vessels(
+        self,
+        build: BuildDefinition,
+        hero_type: int,
+        futures: dict[Future, dict],
+        top_n: int = 10,
+        n_relics: int = 0,
+    ) -> list[VesselResult]:
+        """Gather previously submitted vessel tasks into ranked results."""
+        all_results: list[VesselResult] = []
+        t_run = time.perf_counter()
+        for future in as_completed(futures):
+            _vid, name, results, solve_ms = future.result()
+            all_results.extend(results)
+            log.debug("vessel=%r solve_ms=%.1f (worker)", name, solve_ms)
+        self._log_run_summary("all_vessels", build, hero_type, len(futures),
+                              n_relics, all_results, t_run)
+        return self._dedup_rank(all_results, top_n)
+
     def optimize_vessels_streaming(
         self,
         build: BuildDefinition,
@@ -319,6 +411,7 @@ class VesselOptimizer:
         max_per_vessel: int = 3,
         executor: ProcessPoolExecutor | None = None,
         deadline_secs: float = DEFAULT_BACKTRACK_DEADLINE_SECS,
+        presubmitted: dict[Future, dict] | None = None,
     ):
         """Like optimize_all_vessels but yields events for SSE streaming.
 
@@ -328,14 +421,18 @@ class VesselOptimizer:
 
         When *executor* is provided, vessels are optimized in parallel across
         worker processes.  Progress events arrive as each vessel completes
-        (non-deterministic order).
+        (non-deterministic order).  ``presubmitted`` (from
+        ``submit_all_vessels``, requires *executor*) consumes already-submitted
+        futures instead of submitting fresh ones — multi-build flows use it
+        for depth-1 prefetch across builds.
         """
-        vessels = list(self.data_source.get_all_vessels_for_hero(hero_type))
-        total = len(vessels)
         all_results: list[VesselResult] = []
+        t_run = time.perf_counter()
 
         if executor is None:
             # Sequential path (unchanged)
+            vessels = list(self.data_source.get_all_vessels_for_hero(hero_type))
+            total = len(vessels)
             for i, v in enumerate(vessels):
                 vessel_data = dict(v)
                 vessel_data["_id"] = v["vessel_id"]
@@ -346,35 +443,22 @@ class VesselOptimizer:
                 all_results.extend(results)
                 yield {"type": "progress", "vessel": i + 1, "total": total, "name": v["Name"]}
         else:
-            # Parallel: submit all vessels, yield progress as each completes
-            relics = inventory.relics
-            futures: dict[Future, dict] = {}
-            for v in vessels:
-                vd = dict(v)
-                vd["_id"] = v["vessel_id"]
-                fut = executor.submit(
-                    _optimize_vessel_task, build, relics, vd, max_per_vessel,
-                    deadline_secs,
-                )
-                futures[fut] = v
+            futures = (presubmitted if presubmitted is not None
+                       else self.submit_all_vessels(
+                           build, inventory, hero_type, max_per_vessel,
+                           executor, deadline_secs))
+            total = len(futures)
             completed = 0
             for future in as_completed(futures):
-                _vid, name, results = future.result()
+                _vid, name, results, solve_ms = future.result()
                 all_results.extend(results)
                 completed += 1
+                log.debug("vessel=%r solve_ms=%.1f (worker)", name, solve_ms)
                 yield {"type": "progress", "vessel": completed, "total": total, "name": name}
 
-        # Deduplicate results that are functionally identical (same effects
-        # per slot) but use different physical copies of a relic.
-        seen_layouts: set[tuple] = set()
-        unique: list[VesselResult] = []
-        for r in all_results:
-            fp = r.layout_fingerprint()
-            if fp not in seen_layouts:
-                seen_layouts.add(fp)
-                unique.append(r)
-        unique.sort(key=lambda r: -r.total_score)
-        yield {"type": "result", "data": unique[:top_n]}
+        self._log_run_summary("streaming", build, hero_type, total,
+                              len(inventory), all_results, t_run)
+        yield {"type": "result", "data": self._dedup_rank(all_results, top_n)}
 
     def optimize_all_vessels(self, build: BuildDefinition, inventory: RelicInventory,
                              hero_type: int, top_n: int = 10,
@@ -390,46 +474,28 @@ class VesselOptimizer:
         When *executor* is provided, vessels are optimized in parallel across
         worker processes.
         """
+        if executor is not None:
+            futures = self.submit_all_vessels(
+                build, inventory, hero_type, max_per_vessel, executor,
+                deadline_secs)
+            return self.collect_all_vessels(
+                build, hero_type, futures, top_n, n_relics=len(inventory))
+
         vessels = list(self.data_source.get_all_vessels_for_hero(hero_type))
         all_results: list[VesselResult] = []
+        t_run = time.perf_counter()
+        for v in vessels:
+            vessel_data = dict(v)
+            vessel_data["_id"] = v["vessel_id"]
+            results = self.optimize(build, inventory, vessel_data, max_per_vessel,
+                                    deadline_secs=deadline_secs)
+            for r in results:
+                r.vessel_id = v["vessel_id"]
+            all_results.extend(results)
 
-        if executor is None:
-            # Sequential path (unchanged)
-            for v in vessels:
-                vessel_data = dict(v)
-                vessel_data["_id"] = v["vessel_id"]
-                results = self.optimize(build, inventory, vessel_data, max_per_vessel,
-                                        deadline_secs=deadline_secs)
-                for r in results:
-                    r.vessel_id = v["vessel_id"]
-                all_results.extend(results)
-        else:
-            # Parallel: submit all vessels, collect via as_completed
-            relics = inventory.relics
-            futures: dict[Future, dict] = {}
-            for v in vessels:
-                vd = dict(v)
-                vd["_id"] = v["vessel_id"]
-                fut = executor.submit(
-                    _optimize_vessel_task, build, relics, vd, max_per_vessel,
-                    deadline_secs,
-                )
-                futures[fut] = v
-            for future in as_completed(futures):
-                _vid, _name, results = future.result()
-                all_results.extend(results)
-
-        # Deduplicate results that are functionally identical (same effects
-        # per slot) but use different physical copies of a relic.
-        seen_layouts: set[tuple] = set()
-        unique: list[VesselResult] = []
-        for r in all_results:
-            fp = r.layout_fingerprint()
-            if fp not in seen_layouts:
-                seen_layouts.add(fp)
-                unique.append(r)
-        unique.sort(key=lambda r: -r.total_score)
-        return unique[:top_n]
+        self._log_run_summary("all_vessels", build, hero_type, len(vessels),
+                              len(inventory), all_results, t_run)
+        return self._dedup_rank(all_results, top_n)
 
     # ------------------------------------------------------------------
     # Result builder
@@ -577,6 +643,7 @@ class VesselOptimizer:
                            ) -> list:
         assigned: list = [None] * num_slots
         used: set[int] = set(excluded_handles or ())
+        curse_max = build.curse_max
         state = VesselState(
             self.data_source,
             desired_conflict_weights=desired_cw,
@@ -587,21 +654,21 @@ class VesselOptimizer:
 
         for slot_idx in range(num_slots):
             best: tuple | None = None
-            for _, relic in candidates_per_slot[slot_idx]:
-                if relic.ga_handle in used:
+            for _, prof in candidates_per_slot[slot_idx]:
+                if prof.ga_handle in used:
                     continue
-                score = self.scorer.score_relic_in_context(relic, build, state)
+                score = score_profile(prof, state, curse_max)
                 if best is None or score > best[0]:
-                    best = (score, relic)
+                    best = (score, prof)
 
             if best is None or best[0] <= 0:
                 assigned[slot_idx] = (None, 0)
                 continue
 
-            score, relic = best
-            assigned[slot_idx] = (relic, score)
-            used.add(relic.ga_handle)
-            state.place(relic)
+            score, prof = best
+            assigned[slot_idx] = (prof.relic, score)
+            used.add(prof.ga_handle)
+            state.place_profile(prof)
 
         return assigned
 
@@ -615,12 +682,13 @@ class VesselOptimizer:
                          deadline_secs: float = DEFAULT_BACKTRACK_DEADLINE_SECS,
                          ctx_helpers: dict[int, tuple[frozenset[int], frozenset[int]]] | None = None,
                          validate_leaves: bool = False,
-                         ) -> tuple[list[list], bool]:
+                         ) -> tuple[list[list], bool, int]:
         top: list[tuple[int, list]] = []
         seen: set[frozenset] = set()
         min_threshold = initial_threshold
         deadline = time.time() + deadline_secs
         truncated = False
+        nodes = 0
 
         # Admissible remaining-score bound: best POSITIVE pre-score per slot,
         # as suffix sums.  (Candidates are net-ordered, so the per-slot max
@@ -632,6 +700,19 @@ class VesselOptimizer:
         for s in range(num_slots - 1, -1, -1):
             suffix_pos[s] = suffix_pos[s + 1] + max_pos_per_slot[s]
 
+        # Per-slot suffix max of pos bounds over the net-ordered list: once
+        # even the best remaining candidate can't clear the threshold, the
+        # whole tail is prunable with a break instead of per-candidate
+        # continues.
+        suffix_max_per_slot: list[list[int]] = []
+        for c in candidates_per_slot:
+            smax = [0] * (len(c) + 1)
+            for j in range(len(c) - 1, -1, -1):
+                smax[j] = smax[j + 1] if smax[j + 1] > c[j][0] else c[j][0]
+            suffix_max_per_slot.append(smax)
+
+        curse_max = build.curse_max
+
         state = VesselState(
             self.data_source,
             desired_conflict_weights=desired_cw,
@@ -642,7 +723,8 @@ class VesselOptimizer:
 
         def backtrack(slot_idx: int, current: list, used: set[int],
                       score: int) -> None:
-            nonlocal min_threshold, truncated
+            nonlocal min_threshold, truncated, nodes
+            nodes += 1
             if time.time() > deadline:
                 truncated = True
                 return
@@ -675,20 +757,25 @@ class VesselOptimizer:
             # high-scoring solutions are found early, establishing
             # aggressive min_threshold for pruning.
             remaining_max = suffix_pos[slot_idx + 1]
-            for pos_bound, relic in candidates_per_slot[slot_idx]:
-                if relic.ga_handle in used:
+            cands = candidates_per_slot[slot_idx]
+            smax = suffix_max_per_slot[slot_idx]
+            for ci in range(len(cands)):
+                if score + smax[ci] + remaining_max <= min_threshold:
+                    break  # no remaining candidate's pos bound can clear it
+                pos_bound, prof = cands[ci]
+                if prof.ga_handle in used:
                     continue
                 if score + pos_bound + remaining_max <= min_threshold:
                     continue  # admissible upper-bound prune
 
-                ctx_score = self.scorer.score_relic_in_context(relic, build, state)
+                ctx_score = score_profile(prof, state, curse_max)
                 if ctx_score <= 0:
                     # An empty slot is at least as good UNLESS this relic can
                     # still raise later relics' scores: by placing a desired
                     # excluded-category effect (flips later competitors from
                     # -penalty to 0), or by pre-paying a shared negative
                     # effect whose later copy dedups to 0.
-                    helper = ctx_helpers.get(relic.ga_handle) if ctx_helpers else None
+                    helper = ctx_helpers.get(prof.ga_handle) if ctx_helpers else None
                     if helper is None:
                         continue
                     unlocks, dedups = helper
@@ -698,13 +785,13 @@ class VesselOptimizer:
                 if score + ctx_score + remaining_max <= min_threshold:
                     continue  # actual-score prune
 
-                current[slot_idx] = (relic, ctx_score)
-                used.add(relic.ga_handle)
-                delta = state.place(relic)
+                current[slot_idx] = (prof.relic, ctx_score)
+                used.add(prof.ga_handle)
+                delta = state.place_profile(prof)
 
                 backtrack(slot_idx + 1, current, used, score + ctx_score)
 
-                used.discard(relic.ga_handle)
+                used.discard(prof.ga_handle)
                 state.remove(delta)
 
             # Try empty slot last (score 0 — worst case)
@@ -713,7 +800,7 @@ class VesselOptimizer:
 
         backtrack(0, [(None, 0)] * num_slots, set(), 0)
         valid = [(s, a) for s, a in top if any(r is not None for r, _ in a)]
-        return [assignment for _, assignment in valid], truncated
+        return [assignment for _, assignment in valid], truncated, nodes
 
     def _ctx_helper_map(
         self,
@@ -744,7 +831,8 @@ class VesselOptimizer:
 
         seen: set[int] = set()
         for cands in candidates_per_slot:
-            for _pos, r in cands:
+            for _pos, prof in cands:
+                r = prof.relic
                 if r.ga_handle in seen:
                     continue
                 seen.add(r.ga_handle)
