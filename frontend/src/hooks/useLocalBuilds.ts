@@ -45,6 +45,31 @@ export interface LocalBuild {
   updated_at: string
 }
 
+/** Full BuildDefinition wire payload for inline (anonymous) optimize/rites
+ *  requests. Every scoring-relevant field must be forwarded — a field omitted
+ *  here silently disables that build setting server-side, since the backend
+ *  fills missing BuildDefinition fields with defaults. */
+export function toInlineBuild(b: LocalBuild) {
+  return {
+    id: b.id,
+    name: b.name,
+    character: b.character,
+    groups: b.groups,
+    required_effects: b.required_effects ?? [],
+    required_families: b.required_families ?? [],
+    excluded_effects: b.excluded_effects ?? [],
+    excluded_families: b.excluded_families ?? [],
+    include_deep: b.include_deep,
+    curse_max: b.curse_max,
+    default_curse_weight: b.default_curse_weight ?? 0,
+    pinned_relics: b.pinned_relics ?? [],
+    excluded_stacking_categories: b.excluded_stacking_categories ?? [],
+    effect_limits: b.effect_limits ?? {},
+    family_limits: b.family_limits ?? {},
+    family_weight_floors: b.family_weight_floors ?? {},
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Legacy migration (v1–v4: tiers/family_tiers/tier_weights → new schema)
 // ---------------------------------------------------------------------------

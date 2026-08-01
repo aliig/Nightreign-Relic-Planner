@@ -37,7 +37,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton"
 import { isLoggedIn } from "@/hooks/useAuth"
 import useCustomToast from "@/hooks/useCustomToast"
-import { useLocalBuilds } from "@/hooks/useLocalBuilds"
+import { toInlineBuild, useLocalBuilds } from "@/hooks/useLocalBuilds"
 import { getAnonUploadMeta, useSaveStatus } from "@/hooks/useSaveStatus"
 import { stagedFields, stagedKey, usePendingSlot } from "@/lib/pendingChanges"
 
@@ -442,22 +442,7 @@ function AnonOptimizeForm({ buildId }: { buildId: string }) {
   }, [profile, sig])
 
   const inlineBuild = useMemo(
-    () =>
-      build
-        ? {
-            id: build.id,
-            name: build.name,
-            character: build.character,
-            groups: build.groups,
-            required_effects: build.required_effects ?? [],
-            required_families: build.required_families ?? [],
-            excluded_effects: build.excluded_effects,
-            excluded_families: build.excluded_families,
-            include_deep: build.include_deep,
-            curse_max: build.curse_max,
-            pinned_relics: build.pinned_relics ?? [],
-          }
-        : null,
+    () => (build ? toInlineBuild(build) : null),
     [build],
   )
 

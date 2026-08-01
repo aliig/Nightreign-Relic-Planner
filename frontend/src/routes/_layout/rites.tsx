@@ -32,7 +32,7 @@ import {
 } from "@/components/ui/table"
 import { isLoggedIn } from "@/hooks/useAuth"
 import useCustomToast from "@/hooks/useCustomToast"
-import { useLocalBuilds } from "@/hooks/useLocalBuilds"
+import { toInlineBuild, useLocalBuilds } from "@/hooks/useLocalBuilds"
 import { addMints, usePendingSlot } from "@/lib/pendingChanges"
 import { getOriginalBackupFile } from "@/lib/saveBackup"
 import { getSaveFile } from "@/lib/saveFile"
@@ -1264,27 +1264,6 @@ interface SessionProfile {
   slot_index: number
   name: string
   murks?: number
-}
-
-function toInlineBuild(b: ReturnType<typeof useLocalBuilds>["builds"][number]) {
-  return {
-    id: b.id,
-    name: b.name,
-    character: b.character,
-    groups: b.groups,
-    required_effects: b.required_effects ?? [],
-    required_families: b.required_families ?? [],
-    excluded_effects: b.excluded_effects ?? [],
-    excluded_families: b.excluded_families ?? [],
-    include_deep: b.include_deep,
-    curse_max: b.curse_max,
-    default_curse_weight: b.default_curse_weight ?? 0,
-    pinned_relics: b.pinned_relics ?? [],
-    excluded_stacking_categories: b.excluded_stacking_categories ?? [],
-    effect_limits: b.effect_limits ?? {},
-    family_limits: b.family_limits ?? {},
-    family_weight_floors: b.family_weight_floors ?? {},
-  }
 }
 
 function AnonRitesBody() {

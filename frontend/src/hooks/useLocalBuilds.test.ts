@@ -21,11 +21,88 @@ vi.mock("@/client", () => ({
   },
 }))
 
-import { migrateLocalBuildsToDb, useLocalBuilds } from "./useLocalBuilds"
+import {
+  type LocalBuild,
+  migrateLocalBuildsToDb,
+  toInlineBuild,
+  useLocalBuilds,
+} from "./useLocalBuilds"
 
 beforeEach(() => {
   localStorage.clear()
   vi.clearAllMocks()
+})
+
+describe("toInlineBuild", () => {
+  it("forwards every scoring-relevant field to the inline payload", () => {
+    // Regression: the anon optimize form once hand-rolled this payload and
+    // silently dropped limits/floors/stacking-categories (and required_*),
+    // which the backend then filled with defaults.
+    const build: LocalBuild = {
+      id: "b1",
+      name: "Full Build",
+      character: "Wylder",
+      groups: [{ weight: 50, effects: [1], families: ["Fam"] }],
+      required_effects: [7],
+      required_families: ["Req Fam"],
+      excluded_effects: [8],
+      excluded_families: ["Ex Fam"],
+      include_deep: true,
+      curse_max: 2,
+      default_curse_weight: -5,
+      pinned_relics: [123],
+      excluded_stacking_categories: [300],
+      effect_limits: { 1: 2 },
+      family_limits: { Fam: 1 },
+      family_weight_floors: { Fam: 10 },
+      created_at: "2026-01-01",
+      updated_at: "2026-01-02",
+    }
+
+    expect(toInlineBuild(build)).toEqual({
+      id: "b1",
+      name: "Full Build",
+      character: "Wylder",
+      groups: [{ weight: 50, effects: [1], families: ["Fam"] }],
+      required_effects: [7],
+      required_families: ["Req Fam"],
+      excluded_effects: [8],
+      excluded_families: ["Ex Fam"],
+      include_deep: true,
+      curse_max: 2,
+      default_curse_weight: -5,
+      pinned_relics: [123],
+      excluded_stacking_categories: [300],
+      effect_limits: { 1: 2 },
+      family_limits: { Fam: 1 },
+      family_weight_floors: { Fam: 10 },
+    })
+  })
+
+  it("defaults optional fields instead of omitting them", () => {
+    const minimal = {
+      id: "b2",
+      name: "Minimal",
+      character: "Wylder",
+      groups: [],
+      required_effects: [],
+      required_families: [],
+      excluded_effects: [],
+      excluded_families: [],
+      include_deep: false,
+      curse_max: 1,
+      created_at: "2026-01-01",
+      updated_at: "2026-01-01",
+    } as LocalBuild
+
+    const inline = toInlineBuild(minimal)
+    expect(inline.default_curse_weight).toBe(0)
+    expect(inline.pinned_relics).toEqual([])
+    expect(inline.excluded_stacking_categories).toEqual([])
+    expect(inline.effect_limits).toEqual({})
+    expect(inline.family_limits).toEqual({})
+    expect(inline.family_weight_floors).toEqual({})
+  })
 })
 
 describe("useLocalBuilds", () => {
