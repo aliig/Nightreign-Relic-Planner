@@ -1,6 +1,7 @@
 import { useQueries, useQuery } from "@tanstack/react-query"
 
 import { BuildsService, OptimizeService } from "@/client"
+import { stagedFields, stagedKey, usePendingSlot } from "@/lib/pendingChanges"
 
 /** A build whose optimal layout uses a given relic (for the inventory UI). */
 export type RelicBuildRef = { id: string; name: string }
@@ -14,11 +15,22 @@ export type RelicBuildRef = { id: string; name: string }
  * Keyed by real_id (stable across saves); a build appears once even if the relic
  * fills several of its vessels. Returns an empty map for anonymous users (no
  * persisted builds/snapshots), so usage-derived UI degrades to "Unused".
+ *
+ * When ``slotIndex`` is given, the slot's staged in-app diff (sells/mints) is
+ * part of each snapshot query, so usage reflects the EFFECTIVE inventory —
+ * staged mints included (they count by content, like everything else).
  */
-export function useRelicUsage(profileId: string | null): {
+export function useRelicUsage(
+  profileId: string | null,
+  slotIndex?: number | null,
+): {
   usage: Map<number, RelicBuildRef[]>
   isLoading: boolean
 } {
+  const pending = usePendingSlot(slotIndex ?? null)
+  const sig = stagedKey(pending)
+  const staged = stagedFields(pending)
+
   const { data: builds } = useQuery({
     queryKey: ["builds"],
     queryFn: () => BuildsService.listBuilds(),
@@ -30,9 +42,15 @@ export function useRelicUsage(profileId: string | null): {
 
   const snapshots = useQueries({
     queries: buildList.map((b) => ({
-      queryKey: ["snapshot", b.id, profileId],
+      queryKey: ["snapshot", b.id, profileId, sig],
       queryFn: () =>
-        OptimizeService.getSnapshot({ buildId: b.id, profileId: profileId! }),
+        OptimizeService.querySnapshot({
+          requestBody: {
+            build_id: b.id,
+            profile_id: profileId!,
+            ...staged,
+          },
+        }),
       staleTime: Number.POSITIVE_INFINITY,
       enabled: !!profileId,
     })),

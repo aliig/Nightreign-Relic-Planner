@@ -265,6 +265,23 @@ class AddRelicSpec(SQLModel):
     curses: list[int]
 
 
+class StagedMint(SQLModel):
+    """A staged (not-yet-exported) Relic Rites purchase, passed per-request.
+
+    ``handle`` is a client-assigned SYNTHETIC ga_handle and must be negative:
+    real handles always carry the relic type nibble in their top bits
+    (``handle & 0xF0000000 == ITEM_TYPE_RELIC``, see nrplanner/writer.py), so
+    as u32 they are always large positive values — the ranges cannot collide.
+    The client uses the same synthetic handle consistently across optimizer
+    requests, results, staged loadouts, and export-time substitution with the
+    real handle assigned by ghost resurrection.
+    """
+    handle: int
+    real_id: int
+    effects: list[int]
+    curses: list[int]
+
+
 # --- Relic Rites (bulk purchase + build-aware cull) ------------------------
 
 class RitesKeeper(SQLModel):
@@ -496,6 +513,12 @@ class OptimizationSnapshot(SQLModel, table=True):
     # extra re-optimize refills it), unlike a freshness hash whose NULL would
     # silently never hit.
     relevant_relics_hash: str | None = Field(default=None, max_length=64)
+    # Hash of the staged in-app diff (sells + mint fingerprints) this run was
+    # computed with; NULL = pure save inventory.  Cause-attribution marker ONLY
+    # (distinguishes app-side staged edits from save-to-save relic changes in
+    # BuildChange.cause) — never a freshness input, so NULL on legacy rows is
+    # semantically correct and needs no backfill.
+    staged_signature: str | None = Field(default=None, max_length=64)
     # Run parameters full_results were computed with.  Rites snapshot reuse
     # must match them exactly — a top-5 result set under-reports "used" relics
     # for a top-10 consumer (over-culling).  Nullable: legacy rows are never
@@ -674,6 +697,24 @@ class UploadResponse(SQLModel):
     # Save-diff summary (authenticated uploads only).
     relic_delta: Optional[RelicDelta] = None
     affected_builds: list[BuildChange] = Field(default_factory=list)
+
+
+class InspectSlot(SQLModel):
+    """One character slot's relic contents, content-triples only."""
+    slot_index: int
+    name: str
+    relics: list[AddRelicSpec]
+
+
+class InspectResponse(SQLModel):
+    """Parse-only view of a save file (POST /saves/inspect persists NOTHING).
+
+    Powers the upload divergence gate: the client counts content fingerprints
+    per slot to decide whether its staged edits are already reflected in the
+    save being uploaded (committed) or absent from it (divergent).
+    """
+    platform: str
+    slots: list[InspectSlot]
 
 
 # ---------------------------------------------------------------------------

@@ -45,6 +45,31 @@ type BackendOp =
       name: string
     }
 
+/**
+ * Replace synthetic mint handles (negative) with the real handles the mint
+ * step assigned. A residual negative handle would write an impossible loadout
+ * into the save, so it is a hard error — pendingChanges' cascade removal
+ * guarantees a mint-referencing op never outlives its mint, making this
+ * unreachable in practice.
+ */
+function substituteMintHandles(
+  op: BackendOp,
+  map: Map<number, number>,
+): BackendOp {
+  if (!("ga_handles" in op)) return op
+  const ga_handles = op.ga_handles.map((h) => {
+    if (h >= 0) return h
+    const real = map.get(h)
+    if (real === undefined) {
+      throw new PendingExportError(
+        "A staged loadout references a purchased relic that was not minted in this export.",
+      )
+    }
+    return real
+  })
+  return { ...op, ga_handles }
+}
+
 function toBackendOp(op: PendingLoadoutOp): BackendOp {
   switch (op.kind) {
     case "add":
@@ -103,8 +128,9 @@ function filenameFrom(res: Response, fallback: string): string {
  * the mint delta may exceed the save's current Murk when refunds funded purchasing,
  * so the sell credit must land first (adjust_murks clamps at 0 — a debit-first
  * order would silently manufacture Murk), and each tombstoned sell frees a ghost
- * slot this call's mints can consume. Minted relics get server-assigned handles,
- * so a same-export loadout op cannot reference them (loadouts still run last).
+ * slot this call's mints can consume. The response's X-Added-Handles header
+ * lists the real ga_handles assigned (ordered 1:1 with the specs) — the loadout
+ * step substitutes them for the mints' synthetic negative handles.
  */
 async function postAddRelicsExport(
   file: Blob,
@@ -240,7 +266,10 @@ export async function exportPendingChanges(
       sum.bookmarks += Number(r.headers.get("x-favorites-changed") ?? 0)
     }
 
-    // Mints second: the net Murk delta (purchase cost − dud refunds) rides along.
+    // Mints second: the net Murk delta (purchase cost − dud refunds) rides
+    // along. The server reports the real handles it assigned (ordered per
+    // spec) so staged loadouts can reference the freshly minted relics.
+    let mintHandleMap = new Map<number, number>()
     if (slot.mints.length) {
       const r = await postAddRelicsExport(
         current,
@@ -252,9 +281,15 @@ export async function exportPendingChanges(
       current = r.blob
       filename = r.filename
       sum.minted += Number(r.headers.get("x-relics-added") ?? 0)
+      const assigned = JSON.parse(
+        r.headers.get("x-added-handles") ?? "[]",
+      ) as number[]
+      mintHandleMap = new Map(slot.mints.map((m, i) => [m.handle, assigned[i]]))
     }
 
-    const ops = slot.loadoutOps.map(toBackendOp)
+    const ops = slot.loadoutOps.map((op) =>
+      substituteMintHandles(toBackendOp(op), mintHandleMap),
+    )
     if (ops.length) {
       const r = await postLoadoutExport(current, filename, slotIndex, ops)
       current = r.blob

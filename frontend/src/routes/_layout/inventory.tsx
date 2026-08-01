@@ -21,7 +21,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import useAuth from "@/hooks/useAuth"
 import useCustomToast from "@/hooks/useCustomToast"
 import { useRelicUsage } from "@/hooks/useRelicUsage"
-import { useReconcileSlotBases } from "@/lib/pendingChanges"
+import { usePendingSlot, useReconcileSlotBases } from "@/lib/pendingChanges"
 
 export const Route = createFileRoute("/_layout/inventory")({
   component: InventoryPage,
@@ -50,11 +50,14 @@ function AuthInventoryBody({
     queryFn: () => SavesService.getProfileRelics({ profileId }),
     staleTime: 5 * 60 * 1000,
   })
-  const { usage } = useRelicUsage(profileId)
+  const { usage } = useRelicUsage(profileId, slotIndex)
+  const pending = usePendingSlot(slotIndex)
 
+  // Live inventory = save relics + staged Relic Rites purchases (mints render
+  // inline as "Incoming" rows under their synthetic negative handles).
   const relics: ManagedRelic[] = useMemo(
-    () =>
-      (data.data ?? []).map((r) => ({
+    () => [
+      ...(data.data ?? []).map((r) => ({
         key: r.id,
         gaHandle: r.ga_handle,
         realId: r.real_id,
@@ -68,7 +71,23 @@ function AuthInventoryBody({
         equipped: r.equipped ?? false,
         acquisitionId: r.acquisition_id ?? null,
       })),
-    [data.data],
+      ...pending.mints.map((m) => ({
+        key: `mint-${m.id}`,
+        gaHandle: m.handle,
+        realId: m.real_id,
+        name: m.name,
+        color: m.color,
+        tier: m.tier,
+        isDeep: m.isDeep,
+        effects: m.effects,
+        curses: m.curses,
+        isFavorite: false,
+        equipped: false,
+        acquisitionId: null,
+        incoming: true,
+      })),
+    ],
+    [data.data, pending.mints],
   )
 
   return (
@@ -204,24 +223,42 @@ function AnonInventory() {
 
   const profile =
     allProfiles.find((c) => c.slot_index === selectedSlot) ?? allProfiles[0]
+  const pending = usePendingSlot(profile?.slot_index ?? null)
 
   const relics: ManagedRelic[] = useMemo(() => {
     const list: Array<Record<string, any>> = profile?.relics ?? []
-    return list.map((r, i) => ({
-      key: `${r.ga_handle ?? i}`,
-      gaHandle: Number(r.ga_handle),
-      realId: Number(r.real_id),
-      name: r.name,
-      color: r.color,
-      tier: r.tier,
-      isDeep: !!r.is_deep,
-      effects: [r.effect_1, r.effect_2, r.effect_3],
-      curses: [r.curse_1, r.curse_2, r.curse_3],
-      isFavorite: !!r.is_favorite,
-      equipped: !!r.equipped,
-      acquisitionId: r.acquisition_id ?? null,
-    }))
-  }, [profile])
+    return [
+      ...list.map((r, i) => ({
+        key: `${r.ga_handle ?? i}`,
+        gaHandle: Number(r.ga_handle),
+        realId: Number(r.real_id),
+        name: r.name,
+        color: r.color,
+        tier: r.tier,
+        isDeep: !!r.is_deep,
+        effects: [r.effect_1, r.effect_2, r.effect_3],
+        curses: [r.curse_1, r.curse_2, r.curse_3],
+        isFavorite: !!r.is_favorite,
+        equipped: !!r.equipped,
+        acquisitionId: r.acquisition_id ?? null,
+      })),
+      ...pending.mints.map((m) => ({
+        key: `mint-${m.id}`,
+        gaHandle: m.handle,
+        realId: m.real_id,
+        name: m.name,
+        color: m.color,
+        tier: m.tier,
+        isDeep: m.isDeep,
+        effects: m.effects,
+        curses: m.curses,
+        isFavorite: false,
+        equipped: false,
+        acquisitionId: null,
+        incoming: true,
+      })),
+    ]
+  }, [profile, pending.mints])
 
   if (allProfiles.length === 0) {
     return (

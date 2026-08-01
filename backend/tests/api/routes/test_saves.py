@@ -146,6 +146,64 @@ class TestUploadEndpoint:
         assert "decrypt" in response.json()["detail"].lower()
 
 
+def _inspect_sl2(
+    client: TestClient,
+    headers: dict | None = None,
+    relics: list[RawRelic] | None = None,
+) -> object:
+    """POST a dummy .sl2 to /saves/inspect with all nrplanner parsing mocked."""
+    raw = relics if relics is not None else [MOCK_RELIC]
+    files = {"file": ("NR0000.sl2", io.BytesIO(b"\x00" * 32), "application/octet-stream")}
+    kwargs: dict = {"files": files}
+    if headers:
+        kwargs["headers"] = headers
+    with (
+        patch("app.api.routes.saves.decrypt_sl2"),
+        patch("app.api.routes.saves.discover_characters", side_effect=_discover_side_effect),
+        patch("app.api.routes.saves.parse_relics", return_value=(raw, 0)),
+    ):
+        return client.post("/api/v1/saves/inspect", **kwargs)
+
+
+@pytest.mark.usefixtures("override_game_data")
+class TestInspectEndpoint:
+    """POST /saves/inspect — parse-only view for the upload divergence gate."""
+
+    def test_wrong_extension_returns_400(self, client: TestClient) -> None:
+        files = {"file": ("save.txt", io.BytesIO(b"data"), "text/plain")}
+        assert client.post("/api/v1/saves/inspect", files=files).status_code == 400
+
+    def test_returns_slot_contents(self, client: TestClient) -> None:
+        resp = _inspect_sl2(client)
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["platform"] == "PC"
+        assert len(body["slots"]) == 1
+        slot = body["slots"][0]
+        assert slot["slot_index"] == 0
+        assert slot["name"] == "Wylder"
+        assert len(slot["relics"]) == 1
+        relic = slot["relics"][0]
+        assert relic["real_id"] == 100
+        assert len(relic["effects"]) == 3 and len(relic["curses"]) == 3
+
+    def test_persists_nothing_for_authenticated_user(
+        self,
+        client: TestClient,
+        superuser_token_headers: dict[str, str],
+        db: Session,
+    ) -> None:
+        """Unlike /upload, an authenticated inspect must not replace (or
+        create) the user's persisted SaveUpload — the gate runs BEFORE the
+        user commits to uploading."""
+        before = len(db.exec(select(SaveUpload)).all())
+        resp = _inspect_sl2(client, headers=superuser_token_headers)
+        assert resp.status_code == 200, resp.text
+        db.expire_all()
+        after = len(db.exec(select(SaveUpload)).all())
+        assert after == before, "/saves/inspect must never write"
+
+
 @pytest.mark.usefixtures("override_game_data")
 class TestListProfiles:
     def test_requires_auth(self, client: TestClient) -> None:

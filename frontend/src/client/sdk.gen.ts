@@ -3,7 +3,7 @@
 import type { CancelablePromise } from './core/CancelablePromise';
 import { OpenAPI } from './core/OpenAPI';
 import { request as __request } from './core/request';
-import type { BuildsListBuildsData, BuildsListBuildsResponse, BuildsCreateBuildData, BuildsCreateBuildResponse, BuildsListFeaturedBuildsData, BuildsListFeaturedBuildsResponse, BuildsGetBuildData, BuildsGetBuildResponse, BuildsUpdateBuildData, BuildsUpdateBuildResponse, BuildsDeleteBuildData, BuildsDeleteBuildResponse, BuildsToggleFeaturedData, BuildsToggleFeaturedResponse, BuildsCloneBuildData, BuildsCloneBuildResponse, DebugExportDebugStateData, DebugExportDebugStateResponse, GameGetEffectsResponse, GameGetFamiliesResponse, GameGetCharactersResponse, GameGetVesselsData, GameGetVesselsResponse, GameGetStackingCategoriesResponse, GameGetColorsResponse, GameCumulativeEffectsData, GameCumulativeEffectsResponse, LoginLoginAccessTokenData, LoginLoginAccessTokenResponse, LoginTestTokenResponse, LoginRecoverPasswordData, LoginRecoverPasswordResponse, LoginResetPasswordData, LoginResetPasswordResponse, LoginRecoverPasswordHtmlContentData, LoginRecoverPasswordHtmlContentResponse, OauthLoginGoogleResponse, OauthGoogleCallbackData, OauthGoogleCallbackResponse, OptimizeRunOptimizeData, OptimizeRunOptimizeResponse, OptimizeRunOptimizeStreamData, OptimizeRunOptimizeStreamResponse, OptimizeOptimizeSlotAlternativeData, OptimizeOptimizeSlotAlternativeResponse, OptimizeGetSnapshotData, OptimizeGetSnapshotResponse, OptimizeListBuildSummariesResponse, OptimizeMarkChangeReviewedData, OptimizeMarkChangeReviewedResponse, PrivateCreateUserData, PrivateCreateUserResponse, SavesUploadSaveData, SavesUploadSaveResponse, SavesUploadSaveStreamData, SavesUploadSaveStreamResponse, SavesGetSaveStatusResponse, SavesListProfilesResponse, SavesGetProfileRelicsData, SavesGetProfileRelicsResponse, SavesGetProfileLoadoutsData, SavesGetProfileLoadoutsResponse, SavesExportSaveData, SavesExportSaveResponse, SavesExportLoadoutsData, SavesExportLoadoutsResponse, UsersReadUsersData, UsersReadUsersResponse, UsersCreateUserData, UsersCreateUserResponse, UsersReadUserMeResponse, UsersDeleteUserMeResponse, UsersUpdateUserMeData, UsersUpdateUserMeResponse, UsersUpdatePasswordMeData, UsersUpdatePasswordMeResponse, UsersRegisterUserData, UsersRegisterUserResponse, UsersReadUserByIdData, UsersReadUserByIdResponse, UsersUpdateUserData, UsersUpdateUserResponse, UsersDeleteUserData, UsersDeleteUserResponse, UtilsTestEmailData, UtilsTestEmailResponse, UtilsHealthCheckResponse } from './types.gen';
+import type { BuildsListBuildsData, BuildsListBuildsResponse, BuildsCreateBuildData, BuildsCreateBuildResponse, BuildsListFeaturedBuildsData, BuildsListFeaturedBuildsResponse, BuildsGetBuildData, BuildsGetBuildResponse, BuildsUpdateBuildData, BuildsUpdateBuildResponse, BuildsDeleteBuildData, BuildsDeleteBuildResponse, BuildsToggleFeaturedData, BuildsToggleFeaturedResponse, BuildsCloneBuildData, BuildsCloneBuildResponse, DebugExportDebugStateData, DebugExportDebugStateResponse, GameGetEffectsResponse, GameGetFamiliesResponse, GameGetCharactersResponse, GameGetVesselsData, GameGetVesselsResponse, GameGetStackingCategoriesResponse, GameGetColorsResponse, GameCumulativeEffectsData, GameCumulativeEffectsResponse, GameRollRelicData, GameRollRelicResponse, LoginLoginAccessTokenData, LoginLoginAccessTokenResponse, LoginTestTokenResponse, LoginRecoverPasswordData, LoginRecoverPasswordResponse, LoginResetPasswordData, LoginResetPasswordResponse, LoginRecoverPasswordHtmlContentData, LoginRecoverPasswordHtmlContentResponse, OauthLoginGoogleResponse, OauthGoogleCallbackData, OauthGoogleCallbackResponse, OptimizeRunOptimizeData, OptimizeRunOptimizeResponse, OptimizeRunOptimizeStreamData, OptimizeRunOptimizeStreamResponse, OptimizeOptimizeSlotAlternativeData, OptimizeOptimizeSlotAlternativeResponse, OptimizeQuerySnapshotData, OptimizeQuerySnapshotResponse, OptimizeListBuildSummariesResponse, OptimizeMarkChangeReviewedData, OptimizeMarkChangeReviewedResponse, PrivateCreateUserData, PrivateCreateUserResponse, SavesUploadSaveData, SavesUploadSaveResponse, SavesInspectSaveData, SavesInspectSaveResponse, SavesUploadSaveStreamData, SavesUploadSaveStreamResponse, SavesGetSaveStatusResponse, SavesListProfilesResponse, SavesGetProfileRelicsData, SavesGetProfileRelicsResponse, SavesGetProfileLoadoutsData, SavesGetProfileLoadoutsResponse, SavesExportSaveData, SavesExportSaveResponse, SavesExportAddRelicsData, SavesExportAddRelicsResponse, SavesRitesPlanData, SavesRitesPlanResponse, SavesRitesPlanStreamData, SavesRitesPlanStreamResponse, SavesExportLoadoutsData, SavesExportLoadoutsResponse, UsersReadUsersData, UsersReadUsersResponse, UsersCreateUserData, UsersCreateUserResponse, UsersReadUserMeResponse, UsersDeleteUserMeResponse, UsersUpdateUserMeData, UsersUpdateUserMeResponse, UsersUpdatePasswordMeData, UsersUpdatePasswordMeResponse, UsersRegisterUserData, UsersRegisterUserResponse, UsersReadUserByIdData, UsersReadUserByIdResponse, UsersUpdateUserData, UsersUpdateUserResponse, UsersDeleteUserData, UsersDeleteUserResponse, UtilsTestEmailData, UtilsTestEmailResponse, UtilsHealthCheckResponse } from './types.gen';
 
 export class BuildsService {
     /**
@@ -313,6 +313,31 @@ export class GameService {
             }
         });
     }
+    
+    /**
+     * Roll Relic
+     * Roll one relic the way an in-game purchase does (weighted-random effects).
+     *
+     * Stateless game-data computation (no auth). ``mode="random"`` is a surprise
+     * purchase (color/tier from the acquisition odds); ``mode="targeted"`` uses the
+     * given color+tier. The effect roll is always exact; ``odds_source`` reports the
+     * fidelity of the color/tier meta-roll.
+     * @param data The data for the request.
+     * @param data.requestBody
+     * @returns GeneratedRelicPublic Successful Response
+     * @throws ApiError
+     */
+    public static rollRelic(data: GameRollRelicData): CancelablePromise<GameRollRelicResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/api/v1/game/roll-relic',
+            body: data.requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
 }
 
 export class LoginService {
@@ -534,27 +559,24 @@ export class OptimizeService {
     }
     
     /**
-     * Get Snapshot
+     * Query Snapshot
      * Return cached optimization results if the snapshot is fresh.
      *
      * A snapshot is fresh when its relics_hash and build_hash match the current
-     * live inputs (cached on the Profile and Build rows at write time).
-     * Returns null if stale or missing — the frontend should then trigger a
-     * fresh optimization.
+     * live inputs (cached on the Profile and Build rows at write time), with the
+     * staged diff applied to the inventory side first.  Returns null if stale or
+     * missing — the frontend should then trigger a fresh optimization.
      * @param data The data for the request.
-     * @param data.buildId
-     * @param data.profileId
+     * @param data.requestBody
      * @returns unknown Successful Response
      * @throws ApiError
      */
-    public static getSnapshot(data: OptimizeGetSnapshotData): CancelablePromise<OptimizeGetSnapshotResponse> {
+    public static querySnapshot(data: OptimizeQuerySnapshotData): CancelablePromise<OptimizeQuerySnapshotResponse> {
         return __request(OpenAPI, {
-            method: 'GET',
-            url: '/api/v1/optimize/snapshot',
-            query: {
-                build_id: data.buildId,
-                profile_id: data.profileId
-            },
+            method: 'POST',
+            url: '/api/v1/optimize/snapshot/query',
+            body: data.requestBody,
+            mediaType: 'application/json',
             errors: {
                 422: 'Validation Error'
             }
@@ -641,6 +663,32 @@ export class SavesService {
         return __request(OpenAPI, {
             method: 'POST',
             url: '/api/v1/saves/upload',
+            formData: data.formData,
+            mediaType: 'multipart/form-data',
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+    
+    /**
+     * Inspect Save
+     * Parse a save file and return per-slot relic contents. Writes NOTHING.
+     *
+     * Stateless and auth-free (like the export endpoints).  The upload
+     * divergence gate calls this BEFORE committing to an upload: the client
+     * compares content-fingerprint counts against its staged edits to decide
+     * whether they were already applied in-game (committed → clear silently)
+     * or are absent from this save (divergent → warn before discarding).
+     * @param data The data for the request.
+     * @param data.formData
+     * @returns InspectResponse Successful Response
+     * @throws ApiError
+     */
+    public static inspectSave(data: SavesInspectSaveData): CancelablePromise<SavesInspectSaveResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/api/v1/saves/inspect',
             formData: data.formData,
             mediaType: 'multipart/form-data',
             errors: {
@@ -764,6 +812,88 @@ export class SavesService {
         return __request(OpenAPI, {
             method: 'POST',
             url: '/api/v1/saves/export',
+            formData: data.formData,
+            mediaType: 'multipart/form-data',
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+    
+    /**
+     * Export Add Relics
+     * Mint generated relics into one character slot and return a modified .sl2.
+     *
+     * ``specs``: JSON array of {real_id, effects, curses} from prior rolls.
+     * ``murk_delta``: signed net Murk to apply (e.g. a bulk-purchase cost minus dud
+     * refunds). Stateless (the save is uploaded in the request); anonymous + auth alike.
+     * @param data The data for the request.
+     * @param data.formData
+     * @returns unknown Successful Response
+     * @throws ApiError
+     */
+    public static exportAddRelics(data: SavesExportAddRelicsData): CancelablePromise<SavesExportAddRelicsResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/api/v1/saves/export-add-relics',
+            formData: data.formData,
+            mediaType: 'multipart/form-data',
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+    
+    /**
+     * Rites Plan
+     * Plan a bulk relic purchase against the uploaded save.
+     *
+     * Reads Murk / owned relics / capacity from the save (never client-supplied — 1:1
+     * fidelity), rolls purchases with exact effect odds, keeps only relics used in a saved
+     * build's top-N loadouts, and returns the keepers (to mint) and the exact Murk math.
+     * Pre-owned relics are never analyzed or sold. Writes NOTHING — the frontend stages
+     * this and applies it via /saves/export-add-relics (mints + murk_delta). Synchronous
+     * MVP; the SSE variant below streams progress for large batches.
+     * @param data The data for the request.
+     * @param data.formData
+     * @returns RitesPlanResponse Successful Response
+     * @throws ApiError
+     */
+    public static ritesPlan(data: SavesRitesPlanData): CancelablePromise<SavesRitesPlanResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/api/v1/saves/rites/plan',
+            formData: data.formData,
+            mediaType: 'multipart/form-data',
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+    
+    /**
+     * Rites Plan Stream
+     * Streaming (SSE) form of /rites/plan — emits progress while it runs.
+     *
+     * Same inputs as /rites/plan. Emits ``data:`` lines::
+     *
+     * {"type":"progress","phase":str,"current":int,"total":int,"message":str,
+     * "name":str|null}   # name = current build, on per-build phases only
+     * {"type":"result","data": <RitesPlanResponse>}
+     * {"type":"error","detail":"..."}
+     *
+     * Auth/validation errors surface as normal HTTP errors before streaming begins. The
+     * heavy plan runs in a worker thread; its per-build progress callback is bridged to the
+     * SSE stream through a thread-safe queue.
+     * @param data The data for the request.
+     * @param data.formData
+     * @returns unknown Successful Response
+     * @throws ApiError
+     */
+    public static ritesPlanStream(data: SavesRitesPlanStreamData): CancelablePromise<SavesRitesPlanStreamResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/api/v1/saves/rites/plan/stream',
             formData: data.formData,
             mediaType: 'multipart/form-data',
             errors: {

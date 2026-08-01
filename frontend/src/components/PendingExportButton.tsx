@@ -5,6 +5,14 @@ import { useState } from "react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import {
   Sheet,
   SheetContent,
   SheetDescription,
@@ -16,6 +24,7 @@ import useCustomToast from "@/hooks/useCustomToast"
 import { exportPendingChanges, PendingExportError } from "@/lib/exportPending"
 import {
   clearAll,
+  mintReferences,
   type PendingLoadoutOp,
   readAll,
   removeLoadoutOp,
@@ -64,6 +73,33 @@ export function PendingExportButton() {
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const [, setFileTick] = useState(0)
+  // Confirmation for mint undos that cascade into staged loadouts (removeMint
+  // drops any loadout op that places the mint — the user OKs the combo first).
+  const [mintConfirm, setMintConfirm] = useState<{
+    slot: number
+    mintIds: string[]
+    refNames: string[]
+  } | null>(null)
+
+  function undoMints(slot: number, mintIds: string[]) {
+    const s = readAll()[slot]
+    if (!s) return
+    const refNames = new Set<string>()
+    for (const id of mintIds) {
+      const mint = s.mints.find((m) => m.id === id)
+      if (!mint) continue
+      for (const op of mintReferences(s, mint.handle)) {
+        if (op.kind === "add") refNames.add(`Add loadout "${op.name}"`)
+        else if (op.kind === "overwrite")
+          refNames.add(`Replace "${op.targetName || "loadout"}"`)
+      }
+    }
+    if (refNames.size === 0) {
+      for (const id of mintIds) removeMint(slot, id)
+      return
+    }
+    setMintConfirm({ slot, mintIds, refNames: [...refNames] })
+  }
 
   // Flatten the whole diff into a per-slot change log with undo for each entry.
   const slots = Object.keys(state)
@@ -113,7 +149,7 @@ export function PendingExportButton() {
         warn: m.builds?.length
           ? `Keeps for: ${m.builds.join(", ")}`
           : undefined,
-        undo: () => removeMint(slot, m.id),
+        undo: () => undoMints(slot, [m.id]),
       })
     }
     if (s.murkDelta) {
@@ -123,9 +159,11 @@ export function PendingExportButton() {
           s.murkDelta < 0
             ? `Spend ${formatMurks(-s.murkDelta)} Murk on purchases`
             : `Net +${formatMurks(s.murkDelta)} Murk from purchases`,
-        undo: () => {
-          for (const m of s.mints) removeMint(slot, m.id)
-        },
+        undo: () =>
+          undoMints(
+            slot,
+            s.mints.map((m) => m.id),
+          ),
       })
     }
     count += entries.length
@@ -328,6 +366,45 @@ export function PendingExportButton() {
           </SheetFooter>
         </SheetContent>
       </Sheet>
+
+      <Dialog
+        open={mintConfirm !== null}
+        onOpenChange={(v) => !v && setMintConfirm(null)}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Also remove staged loadouts?</DialogTitle>
+            <DialogDescription>
+              {mintConfirm && mintConfirm.mintIds.length > 1
+                ? "These purchases are"
+                : "This purchase is"}{" "}
+              placed in staged loadouts. Undoing the purchase also removes:
+            </DialogDescription>
+          </DialogHeader>
+          <ul className="list-disc space-y-1 pl-5 text-sm">
+            {(mintConfirm?.refNames ?? []).map((n) => (
+              <li key={n}>{n}</li>
+            ))}
+          </ul>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setMintConfirm(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                if (mintConfirm) {
+                  for (const id of mintConfirm.mintIds)
+                    removeMint(mintConfirm.slot, id)
+                }
+                setMintConfirm(null)
+              }}
+            >
+              Remove purchase and loadouts
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   )
 }

@@ -140,9 +140,14 @@ export function RelicManager({
 
   // Unique relics are one-of-a-kind and can't be re-acquired, so they're locked
   // from trashing just like equipped relics — guard against accidental deletion.
+  // Incoming (staged-mint) rows aren't in the save yet: they can only be undone
+  // from the Changes panel, never trashed/bookmarked here.
   const isSellable = useCallback(
     (r: ManagedRelic): boolean =>
-      !r.equipped && !effectiveFavorite(r) && !isUniqueRelic(r.realId),
+      !r.incoming &&
+      !r.equipped &&
+      !effectiveFavorite(r) &&
+      !isUniqueRelic(r.realId),
     [effectiveFavorite],
   )
 
@@ -155,6 +160,9 @@ export function RelicManager({
     isDeep: r.isDeep,
     murk: sellValue(effectCountOf(r.effects), r.isDeep),
     builds: usageOf(r),
+    // Content fingerprint — the only cross-save identity (handles renumber);
+    // the upload divergence gate uses it to detect applied sells.
+    fp: [r.realId, ...r.effects, ...r.curses],
   })
 
   const visible = useMemo(() => {
@@ -220,7 +228,10 @@ export function RelicManager({
     effectiveFavorite,
   ])
 
-  // Murk reflects the modified save: every trashed relic's value is already added.
+  // Murk reflects the modified save: every trashed relic's value is already
+  // added, and the staged Relic Rites batch's net delta (murkDelta, usually a
+  // cost) is applied too — the two are disjoint by construction (rites sells
+  // only what it buys; trashes here are pre-owned relics).
   const trashedRelics = useMemo(
     () => relics.filter((r) => trashed.has(r.gaHandle)),
     [relics, trashed],
@@ -229,10 +240,13 @@ export function RelicManager({
     (sum, r) => sum + sellValue(effectCountOf(r.effects), r.isDeep),
     0,
   )
-  const projectedMurks = Math.min(murks + murkGain, 0xffffffff)
+  const projectedMurks = Math.max(
+    0,
+    Math.min(murks + murkGain + pending.murkDelta, 0xffffffff),
+  )
   const trashedCount = trashedRelics.length
-  // Owned-vs-cap readout reflects pending trashes — each trashed relic frees one
-  // slot toward the in-game storage cap.
+  // Owned-vs-cap readout reflects pending trashes and staged mints — `relics`
+  // already contains the incoming rows, each occupying one storage slot.
   const projectedRelicCount = relics.length - trashedCount
 
   function trash(r: ManagedRelic) {
@@ -252,6 +266,7 @@ export function RelicManager({
   }
 
   function toggleFavorite(r: ManagedRelic) {
+    if (r.incoming) return
     const desired = !effectiveFavorite(r)
     // null clears the change when it matches the saved state.
     setFavorite(
@@ -384,6 +399,12 @@ export function RelicManager({
                   (+{formatMurks(murkGain)} from {trashedCount} trashed)
                 </span>
               )}
+              {pending.murkDelta !== 0 && (
+                <span className="text-sky-600 dark:text-sky-500">
+                  ({pending.murkDelta > 0 ? "+" : "−"}
+                  {formatMurks(Math.abs(pending.murkDelta))} from purchases)
+                </span>
+              )}
             </div>
             <div
               className="flex items-center gap-2"
@@ -435,13 +456,15 @@ export function RelicManager({
               const count = builds.length
               const status = relicStatus(relic.equipped, count > 0)
               const isUnique = isUniqueRelic(relic.realId)
-              const lockReason = relic.equipped
-                ? "Equipped — can't trash"
-                : isUnique
-                  ? "Unique relic — can't be re-acquired, so it's locked"
-                  : fav
-                    ? "Bookmarked — un-bookmark to trash"
-                    : undefined
+              const lockReason = relic.incoming
+                ? "Staged purchase — undo it from the Changes panel"
+                : relic.equipped
+                  ? "Equipped — can't trash"
+                  : isUnique
+                    ? "Unique relic — can't be re-acquired, so it's locked"
+                    : fav
+                      ? "Bookmarked — un-bookmark to trash"
+                      : undefined
               // Effects and curses share one column now: curses stack beneath the
               // effects (rendered red), so the action icons stay in view.
               const effectsCell = EffectList({
@@ -482,13 +505,26 @@ export function RelicManager({
                     )}
                   </TableCell>
                   <TableCell className="min-w-[180px]">
-                    <span className={isTrashed ? "line-through" : ""}>
+                    <span
+                      className={cn(
+                        isTrashed && "line-through",
+                        "inline-flex items-center gap-1.5",
+                      )}
+                    >
                       <RelicNameCell
                         name={relic.name}
                         color={relic.color}
                         tier={relic.tier}
                         isDeep={relic.isDeep}
                       />
+                      {relic.incoming && (
+                        <Badge
+                          className="h-4 px-1.5 py-0 text-[10px] bg-sky-600 text-white hover:bg-sky-600"
+                          title="Staged Relic Rites purchase — not in your save until you export"
+                        >
+                          Incoming
+                        </Badge>
+                      )}
                     </span>
                   </TableCell>
                   <TableCell>
@@ -559,9 +595,16 @@ export function RelicManager({
                     <button
                       type="button"
                       onClick={() => toggleFavorite(relic)}
-                      title={fav ? "Remove bookmark" : "Bookmark"}
+                      disabled={relic.incoming}
+                      title={
+                        relic.incoming
+                          ? "Staged purchase — bookmark it after exporting"
+                          : fav
+                            ? "Remove bookmark"
+                            : "Bookmark"
+                      }
                       aria-label={fav ? "Remove bookmark" : "Bookmark"}
-                      className="inline-flex p-1 rounded hover:bg-accent"
+                      className="inline-flex p-1 rounded hover:bg-accent disabled:opacity-30 disabled:cursor-not-allowed"
                     >
                       <Star
                         className={`h-4 w-4 ${

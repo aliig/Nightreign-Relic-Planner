@@ -3,15 +3,22 @@
  *
  * The app treats these edits as already applied to a live, in-memory copy of the
  * save: trashed relics drop out of the inventory, deleted loadouts disappear, new
- * ones show up inline. This store IS that diff (and the change log) — nothing is
- * written to disk until the user exports. Every edit (sell/bookmark a relic,
+ * ones show up inline, and Relic Rites purchases ("mints") appear as Incoming
+ * relics. This store IS that diff (and the change log) — nothing is written to
+ * disk until the user exports. Every edit (sell/bookmark a relic, buy relics,
  * add/delete/rename/overwrite a loadout, reset vessels/loadouts) lives here.
+ *
+ * The optimizer consumes the diff too: stagedFields() puts it on optimize /
+ * snapshot requests (server-side effective inventory) and stagedKey() folds it
+ * into query/cache keys so results stale + re-run when the diff changes.
  *
  * Keyed by save-slot index (the selected profile). Backed by localStorage so the
  * diff survives SPA navigation, tab close, and browser restart — only a new save
- * upload (or explicit discard) resets it. It is never sent to a server, so it does
- * NOT follow the account to another device. The save File itself is held separately
- * in saveFile.ts (in-memory) with a durable copy in saveBackup.ts (IndexedDB).
+ * upload (or explicit discard) resets it, and the upload divergence gate warns
+ * first when the new save doesn't already contain these edits. It is never sent
+ * to a server as state, so it does NOT follow the account to another device.
+ * The save File itself is held separately in saveFile.ts (in-memory) with a
+ * durable copy in saveBackup.ts (IndexedDB).
  */
 import { useEffect, useRef, useSyncExternalStore } from "react"
 
@@ -49,6 +56,13 @@ export type RelicMeta = {
   murk?: number
   /** How many builds use this relic — surfaced as a sell-impact warning. */
   builds?: number
+  /**
+   * Content fingerprint [real_id, e1, e2, e3, c1, c2, c3] captured at sell
+   * time. The game renumbers ga_handles on every save, so this is the only
+   * identity that survives a re-upload — the upload divergence gate uses it
+   * to detect whether a staged sell was actually applied in-game.
+   */
+  fp?: number[]
 }
 
 /**
@@ -59,6 +73,14 @@ export type RelicMeta = {
  */
 export type MintSpec = {
   id: string
+  /**
+   * Client-assigned SYNTHETIC ga_handle, always negative (real handles are
+   * large positive u32s carrying the relic type nibble, so the ranges cannot
+   * collide). Stable for the life of the mint: optimizer requests/results,
+   * staged loadout ops, and the export-time substitution with the real handle
+   * (X-Added-Handles) all reference the mint by this value.
+   */
+  handle: number
   real_id: number
   item_id: number
   effects: number[] // 3, EMPTY (0xFFFFFFFF) for empty slots
@@ -117,10 +139,40 @@ function load(): State {
     for (const [k, v] of Object.entries(parsed)) {
       out[Number(k)] = { ...emptySlot(), ...v }
     }
-    return out
+    return backfillMintHandles(out)
   } catch {
     return {}
   }
+}
+
+/** Assign synthetic handles to mints staged before the `handle` field existed. */
+function backfillMintHandles(out: State): State {
+  let min = 0
+  for (const s of Object.values(out)) {
+    for (const m of s.mints) {
+      if (typeof m.handle === "number" && m.handle < min) min = m.handle
+    }
+  }
+  for (const s of Object.values(out)) {
+    for (const m of s.mints) {
+      if (typeof m.handle !== "number" || m.handle >= 0) {
+        min -= 1
+        m.handle = min
+      }
+    }
+  }
+  return out
+}
+
+/** Next unused synthetic mint handle (negative, unique across ALL slots). */
+function nextMintHandle(): number {
+  let min = 0
+  for (const s of Object.values(state)) {
+    for (const m of s.mints) {
+      if (m.handle < min) min = m.handle
+    }
+  }
+  return min - 1
 }
 
 let state: State = load()
@@ -272,13 +324,17 @@ export function removeLoadoutOp(slot: number, id: string) {
  */
 export function addMints(
   slot: number,
-  specs: Array<Omit<MintSpec, "id">>,
+  specs: Array<Omit<MintSpec, "id" | "handle">>,
   murkDelta: number,
 ): void {
   if (!specs.length && murkDelta === 0) return
+  const base = nextMintHandle()
   updateSlot(slot, (s) => ({
     ...s,
-    mints: [...s.mints, ...specs.map((spec) => ({ ...spec, id: nextId() }))],
+    mints: [
+      ...s.mints,
+      ...specs.map((spec, i) => ({ ...spec, id: nextId(), handle: base - i })),
+    ],
     murkDelta: s.murkDelta + murkDelta,
   }))
 }
@@ -295,9 +351,16 @@ export function removeMint(slot: number, id: string): void {
     const removed = s.mints.find((m) => m.id === id)
     if (!removed) return s
     const mints = s.mints.filter((m) => m.id !== id)
+    // Cascade: staged loadout ops referencing the mint's synthetic handle can
+    // never export (the relic will not exist), so they go with it. Callers
+    // confirm with the user first when mintReferences() is non-empty.
+    const loadoutOps = s.loadoutOps.filter(
+      (o) => !("ga_handles" in o && o.ga_handles.includes(removed.handle)),
+    )
     return {
       ...s,
       mints,
+      loadoutOps,
       murkDelta:
         mints.length === 0
           ? 0
@@ -305,6 +368,16 @@ export function removeMint(slot: number, id: string): void {
             sellValue(effectCountOf(removed.effects), removed.isDeep),
     }
   })
+}
+
+/** Staged loadout ops that place a given mint (by its synthetic handle). */
+export function mintReferences(
+  s: SlotPending,
+  handle: number,
+): PendingLoadoutOp[] {
+  return s.loadoutOps.filter(
+    (o) => "ga_handles" in o && o.ga_handles.includes(handle),
+  )
 }
 
 export function clearSlot(slot: number) {
@@ -387,4 +460,69 @@ export function readSlot(slot: number): SlotPending {
 
 export function readAll(): State {
   return state
+}
+
+// --- staged-diff views (optimizer requests + cache keys) --------------------
+
+/** The slot's staged diff in the backend's wire shape (OptimizeRequest /
+ * SnapshotQuery `staged_sells` + `staged_mints`). Empty arrays when clean. */
+export function stagedFields(s: SlotPending): {
+  staged_sells: number[]
+  staged_mints: Array<{
+    handle: number
+    real_id: number
+    effects: number[]
+    curses: number[]
+  }>
+} {
+  return {
+    staged_sells: [...s.sells],
+    staged_mints: s.mints.map((m) => ({
+      handle: m.handle,
+      real_id: m.real_id,
+      effects: m.effects,
+      curses: m.curses,
+    })),
+  }
+}
+
+/**
+ * Cheap stable identity of a slot's staged diff, for query/cache keys — `""`
+ * when clean. Mint handles are stable and 1:1 with their content, so they
+ * identify the mint set without hashing effects.
+ */
+export function stagedKey(s: SlotPending): string {
+  if (s.sells.length === 0 && s.mints.length === 0) return ""
+  const sells = [...s.sells].sort((a, b) => a - b).join(",")
+  const mints = s.mints
+    .map((m) => m.handle)
+    .sort((a, b) => a - b)
+    .join(",")
+  return `s:${sells}|m:${mints}`
+}
+
+/** Per-slot rollup of the staged diff (upload divergence gate dialog). */
+export type SlotSummary = {
+  slot: number
+  sells: number
+  /** Total Murk the staged sells would refund (from cached labels). */
+  sellRefund: number
+  mints: number
+  murkDelta: number
+  favorites: number
+  loadoutOps: number
+}
+
+export function summarizePending(all: State): SlotSummary[] {
+  return Object.entries(all)
+    .map(([slot, s]) => ({
+      slot: Number(slot),
+      sells: s.sells.length,
+      sellRefund: s.sells.reduce((sum, h) => sum + (s.meta[h]?.murk ?? 0), 0),
+      mints: s.mints.length,
+      murkDelta: s.murkDelta,
+      favorites: Object.keys(s.favorites).length,
+      loadoutOps: s.loadoutOps.length,
+    }))
+    .sort((a, b) => a.slot - b.slot)
 }

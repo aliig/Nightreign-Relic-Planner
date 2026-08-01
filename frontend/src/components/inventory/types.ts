@@ -21,6 +21,10 @@ export type ManagedRelic = {
   /** In-game acquisition counter (higher = acquired later). Null for relics
    *  persisted before the field existed — populated on next save upload. */
   acquisitionId: number | null
+  /** Staged Relic Rites purchase — in the live inventory but not in the save
+   *  until exported. gaHandle is its negative synthetic handle; the row can't
+   *  be trashed/bookmarked (undo lives in the Changes panel). */
+  incoming?: boolean
 }
 
 /**

@@ -99,6 +99,7 @@ describe("exportPendingChanges", () => {
         mints: [
           {
             id: "m1",
+            handle: -1,
             real_id: 205,
             item_id: 205 + 2147483648,
             effects: [310000, 4294967295, 4294967295],
@@ -130,6 +131,90 @@ describe("exportPendingChanges", () => {
     expect(addForm.get("murk_delta")).toBe("-450")
     expect(summary.sold).toBe(1)
     expect(summary.minted).toBe(2)
+  })
+
+  it("substitutes assigned real handles for synthetic mint handles in loadouts", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        res({
+          "x-relics-added": "2",
+          "x-added-handles": "[3221225473,3221225474]",
+        }),
+      )
+      .mockResolvedValueOnce(res({ "x-loadouts-added": "1" }))
+    vi.stubGlobal("fetch", fetchMock)
+
+    const mint = (id: string, handle: number, realId: number) => ({
+      id,
+      handle,
+      real_id: realId,
+      item_id: realId + 2147483648,
+      effects: [310000, 4294967295, 4294967295],
+      curses: [4294967295, 4294967295, 4294967295],
+      name: "Minted",
+      color: "Red",
+      tier: "Delicate",
+      isDeep: false,
+      oddsSource: "exact",
+    })
+    const pending: Record<number, SlotPending> = {
+      0: {
+        sells: [],
+        favorites: {},
+        loadoutOps: [
+          {
+            id: "a",
+            kind: "add",
+            character: "Wylder",
+            vessel_id: 1002,
+            // Mix of a real handle and both synthetic mint handles.
+            ga_handles: [0xc0000001, -1, -2],
+            name: "With mints",
+          },
+        ],
+        mints: [mint("m1", -1, 205), mint("m2", -2, 206)],
+        murkDelta: -1200,
+        meta: {},
+      },
+    }
+
+    await exportPendingChanges(
+      new File([new Uint8Array([0])], "s.sl2"),
+      pending,
+    )
+
+    const loadoutForm = fetchMock.mock.calls[1][1].body as FormData
+    const ops = JSON.parse(String(loadoutForm.get("operations")))
+    // X-Added-Handles is ordered per spec: -1 -> first assigned, -2 -> second.
+    expect(ops[0].ga_handles).toEqual([0xc0000001, 3221225473, 3221225474])
+  })
+
+  it("fails loudly when a loadout references a mint that was not exported", async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal("fetch", fetchMock)
+    const pending: Record<number, SlotPending> = {
+      0: {
+        sells: [],
+        favorites: {},
+        loadoutOps: [
+          {
+            id: "a",
+            kind: "add",
+            character: "Wylder",
+            vessel_id: 1002,
+            ga_handles: [-99],
+            name: "Orphaned mint ref",
+          },
+        ],
+        mints: [],
+        murkDelta: 0,
+        meta: {},
+      },
+    }
+    await expect(
+      exportPendingChanges(new File([new Uint8Array([0])], "s.sl2"), pending),
+    ).rejects.toThrow(/purchased relic/)
   })
 
   it("skips the relic call when only loadout ops are pending", async () => {

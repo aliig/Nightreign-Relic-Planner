@@ -345,3 +345,39 @@ class TestValidatedSeedFps:
         fn, ctx, owned, seed, _fps = self._setup(ds)
         seed = {**seed, "optimizer_version": seed["optimizer_version"] - 1}
         assert fn([ctx], {ctx.build_id: seed}, owned, ds) == {}
+
+    def test_staged_snapshot_seed_rejected_against_raw_save(
+        self, override_game_data
+    ) -> None:
+        """A snapshot computed from a STAGED effective inventory (its relevant
+        hash covers mint fingerprints the raw save does not contain) must fail
+        seed validation against the uploaded save — rites reuse only ever
+        trusts owned-only results, so a staged optimizer run can never leak
+        hypothetical relics into the keeper walk."""
+        from nrplanner.changes import (  # noqa: PLC0415
+            fingerprint_owned,
+            relevant_relics_signature,
+        )
+        from nrplanner.models import OwnedRelic  # noqa: PLC0415
+
+        from app.core.game_data import get_game_data  # noqa: PLC0415
+        ds = get_game_data()
+        fn, ctx, owned, seed, _fps = self._setup(ds)
+        empty = 4294967295
+        # Build-relevant staged mint (effect 100) under a synthetic handle.
+        mint = OwnedRelic(
+            ga_handle=-1, item_id=100 + 2147483648, real_id=100,
+            color="Red", effects=[100, empty, empty],
+            curses=[empty, empty, empty], is_deep=False, name="Mint",
+            tier="Delicate",
+        )
+        effective = owned + [mint]
+        staged_seed = {
+            **seed,
+            "relevant_relics_hash": relevant_relics_signature(
+                ctx.build,
+                [(fingerprint_owned(o), o.ga_handle) for o in effective],
+                ds,
+            ),
+        }
+        assert fn([ctx], {ctx.build_id: staged_seed}, owned, ds) == {}

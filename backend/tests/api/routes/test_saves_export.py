@@ -184,6 +184,152 @@ def test_export_bookmarks_relic(client: TestClient) -> None:
 
 @skip_no_fixture
 @pytest.mark.usefixtures("override_game_data")
+def test_export_add_relics_returns_assigned_handles(client: TestClient) -> None:
+    """Sells → mints chain: the add step must return the real ga_handles it
+    assigned (X-Added-Handles, ordered 1:1 with specs) so the client can
+    substitute them for the synthetic handles its staged loadouts reference."""
+    from app.core.game_data import get_relic_generator
+
+    profiles = _parse_profiles(client)
+    prof = next(p for p in profiles if p["relics"])
+    sellable = _pick(
+        prof["relics"], lambda r: not r["equipped"] and not r["is_favorite"]
+    )
+    assert sellable is not None, "fixture has no sellable relic"
+
+    # Sell first — each sell frees exactly one ghost slot for the mint step.
+    with FIXTURE_PATH.open("rb") as f:
+        sold = client.post(
+            "/api/v1/saves/export",
+            files={"file": ("NR0000.sl2", f, "application/octet-stream")},
+            data={
+                "slot_index": str(prof["slot_index"]),
+                "ga_handles": json.dumps([sellable["ga_handle"]]),
+            },
+        )
+    assert sold.status_code == 200, sold.text
+
+    rolled = get_relic_generator().roll(is_deep=False, version="1.03", seed=77)
+    spec = {
+        "real_id": rolled.real_id,
+        "effects": list(rolled.effects),
+        "curses": list(rolled.curses),
+    }
+    resp = client.post(
+        "/api/v1/saves/export-add-relics",
+        files={
+            "file": ("NR0000_edited.sl2", sold.content, "application/octet-stream")
+        },
+        data={"slot_index": str(prof["slot_index"]), "specs": json.dumps([spec])},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["x-relics-added"] == "1"
+    handles = json.loads(resp.headers["x-added-handles"])
+    assert isinstance(handles, list) and len(handles) == 1
+    assert "X-Added-Handles" in resp.headers["access-control-expose-headers"]
+
+    # The assigned handle resolves to the minted content on re-upload.
+    edited = client.post(
+        "/api/v1/saves/upload",
+        files={
+            "file": ("NR0000_edited2.sl2", resp.content, "application/octet-stream")
+        },
+    )
+    assert edited.status_code == 200, edited.text
+    eprof = next(
+        p for p in edited.json()["profiles"]
+        if p["slot_index"] == prof["slot_index"]
+    )
+    minted = next(r for r in eprof["relics"] if r["ga_handle"] == handles[0])
+    assert minted["real_id"] == spec["real_id"]
+    assert minted["effect_1"] == spec["effects"][0]
+
+
+@skip_no_fixture
+@pytest.mark.usefixtures("override_game_data")
+def test_export_chain_loadout_references_minted_relic(client: TestClient) -> None:
+    """The full staged-journey export chain (sell → mint → loadout): a loadout
+    op whose ga_handles carry the real handle from X-Added-Handles validates
+    against the minted save, and the re-uploaded save's preset references the
+    resurrected relic."""
+    from app.core.game_data import get_relic_generator
+
+    profiles = _parse_profiles(client)
+    prof = next(p for p in profiles if p["relics"])
+    preset = next(iter(prof.get("presets") or []), None)
+    if preset is None:
+        pytest.skip("fixture has no in-game preset to source character/vessel")
+    sellable = _pick(
+        prof["relics"], lambda r: not r["equipped"] and not r["is_favorite"]
+    )
+    assert sellable is not None, "fixture has no sellable relic"
+
+    with FIXTURE_PATH.open("rb") as f:
+        sold = client.post(
+            "/api/v1/saves/export",
+            files={"file": ("NR0000.sl2", f, "application/octet-stream")},
+            data={
+                "slot_index": str(prof["slot_index"]),
+                "ga_handles": json.dumps([sellable["ga_handle"]]),
+            },
+        )
+    assert sold.status_code == 200, sold.text
+
+    rolled = get_relic_generator().roll(is_deep=False, version="1.03", seed=78)
+    minted_resp = client.post(
+        "/api/v1/saves/export-add-relics",
+        files={"file": ("NR0000_e.sl2", sold.content, "application/octet-stream")},
+        data={
+            "slot_index": str(prof["slot_index"]),
+            "specs": json.dumps([{
+                "real_id": rolled.real_id,
+                "effects": list(rolled.effects),
+                "curses": list(rolled.curses),
+            }]),
+        },
+    )
+    assert minted_resp.status_code == 200, minted_resp.text
+    minted_handle = json.loads(minted_resp.headers["x-added-handles"])[0]
+
+    ops = [{
+        "op": "add",
+        "character": preset["character"],
+        "vessel_id": preset["vessel_id"],
+        "ga_handles": [minted_handle, 0, 0, 0, 0, 0],
+        "name": "MintChain",
+    }]
+    loadout_resp = client.post(
+        "/api/v1/saves/export-loadouts",
+        files={
+            "file": ("NR0000_e2.sl2", minted_resp.content, "application/octet-stream")
+        },
+        data={
+            "slot_index": str(prof["slot_index"]),
+            "operations": json.dumps(ops),
+        },
+    )
+    assert loadout_resp.status_code == 200, loadout_resp.text
+    assert loadout_resp.headers["x-loadouts-added"] == "1"
+
+    edited = client.post(
+        "/api/v1/saves/upload",
+        files={
+            "file": ("NR0000_e3.sl2", loadout_resp.content, "application/octet-stream")
+        },
+    )
+    assert edited.status_code == 200, edited.text
+    eprof = next(
+        p for p in edited.json()["profiles"]
+        if p["slot_index"] == prof["slot_index"]
+    )
+    new_preset = next(p for p in eprof["presets"] if p["name"] == "MintChain")
+    assert minted_handle in (new_preset["ga_handles"] or []), (
+        "the exported preset must reference the freshly minted relic's handle"
+    )
+
+
+@skip_no_fixture
+@pytest.mark.usefixtures("override_game_data")
 def test_export_exposes_murks(client: TestClient) -> None:
     profiles = _parse_profiles(client)
     prof = next(p for p in profiles if p["relics"])

@@ -309,7 +309,7 @@ class BuildChange(BaseModel):
     left: list[RelicRef] = Field(default_factory=list)
     pinned_removed: list[RelicRef] = Field(default_factory=list)
     relevant_added: int = 0
-    cause: Optional[Literal["relics", "build_edit", "game_data", "mixed"]] = None
+    cause: Optional[Literal["relics", "build_edit", "game_data", "mixed", "staged"]] = None
     reliable: bool = True
 
 

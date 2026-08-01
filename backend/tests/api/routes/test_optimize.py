@@ -199,6 +199,232 @@ class TestDbMode:
         assert response.status_code == 401
 
 
+def _targeted_mints(colors: tuple[str, ...] = ("Red", "Blue", "Green")) -> list[dict]:
+    """Legal StagedMint payloads in known colors, rolled from real game data.
+
+    Targeted mode fixes color+tier so placement mirrors the 3-color inline
+    tests; the deterministic seed keeps the payload stable across runs.  The
+    generator only emits relics that pass RelicChecker, so these always
+    survive staged-mint validation.
+    """
+    from app.core.game_data import get_relic_generator
+
+    gen = get_relic_generator()
+    mints = []
+    for i, color in enumerate(colors):
+        rolled = gen.roll(
+            is_deep=False, version="1.03", mode="targeted",
+            color=color, tier=1, seed=1000 + i,
+        )
+        mints.append({
+            "handle": -(i + 1),
+            "real_id": rolled.real_id,
+            "effects": list(rolled.effects),
+            "curses": list(rolled.curses),
+        })
+    return mints
+
+
+@pytest.mark.usefixtures("override_game_data")
+class TestStagedDbMode:
+    """staged_sells / staged_mints shape the EFFECTIVE inventory of a DB run."""
+
+    def _seed(self, client, headers, db, **build_overrides):
+        from tests.utils.seeding import (
+            create_build,
+            get_test_user,
+            seed_profile_with_relics,
+        )
+
+        user = get_test_user(db)
+        profile = seed_profile_with_relics(db, user.id, with_hash=True)
+        build = create_build(client, headers, **build_overrides)
+        return build, profile
+
+    @staticmethod
+    def _placed_handles(results: list[dict]) -> set[int]:
+        return {
+            a["relic"]["ga_handle"]
+            for r in results
+            for a in r["assignments"]
+            if a["relic"]
+        }
+
+    def test_staged_sell_removes_relic_from_results(
+        self, client: TestClient, normal_user_token_headers, db
+    ) -> None:
+        build, profile = self._seed(client, normal_user_token_headers, db)
+        sold = 0xC0020000  # first seeded relic; carries the build's effect 100
+
+        baseline = client.post(
+            "/api/v1/optimize/",
+            headers=normal_user_token_headers,
+            json={"build_id": build["id"], "profile_id": str(profile.id), "top_n": 5},
+        )
+        assert baseline.status_code == 200, baseline.text
+        assert sold in self._placed_handles(baseline.json()), (
+            "seeded relic should be placed in the pure baseline"
+        )
+
+        staged = client.post(
+            "/api/v1/optimize/",
+            headers=normal_user_token_headers,
+            json={
+                "build_id": build["id"],
+                "profile_id": str(profile.id),
+                "top_n": 5,
+                "staged_sells": [sold],
+            },
+        )
+        assert staged.status_code == 200, staged.text
+        assert sold not in self._placed_handles(staged.json()), (
+            "a staged-sold relic must never appear in optimization results"
+        )
+
+    def test_staged_mints_join_results_under_synthetic_handles(
+        self, client: TestClient, normal_user_token_headers, db
+    ) -> None:
+        mints = _targeted_mints()
+        wanted = [
+            e for m in mints for e in m["effects"] if e not in (EMPTY, 0)
+        ]
+        build, profile = self._seed(
+            client, normal_user_token_headers, db,
+            groups=[{"weight": 10, "effects": wanted, "families": []}],
+        )
+
+        resp = client.post(
+            "/api/v1/optimize/",
+            headers=normal_user_token_headers,
+            json={
+                "build_id": build["id"],
+                "profile_id": str(profile.id),
+                "top_n": 10,
+                "staged_mints": mints,
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        placed = self._placed_handles(resp.json())
+        assert any(h < 0 for h in placed), (
+            "staged mints carrying wanted effects should be placed, keyed by "
+            "their negative synthetic handles"
+        )
+        # Server-derived display fields (never trusted from the client).
+        minted = next(
+            a["relic"]
+            for r in resp.json()
+            for a in r["assignments"]
+            if a["relic"] and a["relic"]["ga_handle"] < 0
+        )
+        assert minted["name"], "mint display fields must be derived server-side"
+        assert minted["color"] in ("Red", "Blue", "Yellow", "Green", "White")
+
+    def test_illegal_mint_rejected(
+        self, client: TestClient, normal_user_token_headers, db
+    ) -> None:
+        build, profile = self._seed(client, normal_user_token_headers, db)
+        resp = client.post(
+            "/api/v1/optimize/",
+            headers=normal_user_token_headers,
+            json={
+                "build_id": build["id"],
+                "profile_id": str(profile.id),
+                "staged_mints": [{
+                    "handle": -1, "real_id": 999_999,
+                    "effects": [100, EMPTY, EMPTY],
+                    "curses": [EMPTY, EMPTY, EMPTY],
+                }],
+            },
+        )
+        assert resp.status_code == 422
+        assert "not a mintable relic" in resp.json()["detail"]
+
+    def test_nonnegative_mint_handle_rejected(
+        self, client: TestClient, normal_user_token_headers, db
+    ) -> None:
+        build, profile = self._seed(client, normal_user_token_headers, db)
+        mint = {**_targeted_mints(("Red",))[0], "handle": 5}
+        resp = client.post(
+            "/api/v1/optimize/",
+            headers=normal_user_token_headers,
+            json={
+                "build_id": build["id"],
+                "profile_id": str(profile.id),
+                "staged_mints": [mint],
+            },
+        )
+        assert resp.status_code == 422
+        assert "negative synthetic" in resp.json()["detail"]
+
+    def test_duplicate_mint_handles_rejected(
+        self, client: TestClient, normal_user_token_headers, db
+    ) -> None:
+        build, profile = self._seed(client, normal_user_token_headers, db)
+        mint = _targeted_mints(("Red",))[0]
+        resp = client.post(
+            "/api/v1/optimize/",
+            headers=normal_user_token_headers,
+            json={
+                "build_id": build["id"],
+                "profile_id": str(profile.id),
+                "staged_mints": [mint, dict(mint)],
+            },
+        )
+        assert resp.status_code == 422
+        assert "duplicate" in resp.json()["detail"].lower()
+
+    def test_staged_with_inline_mode_rejected(self, client: TestClient) -> None:
+        resp = client.post(
+            "/api/v1/optimize/",
+            json={
+                "build": _MINIMAL_BUILD,
+                "relics": [_MINIMAL_RELIC],
+                "staged_sells": [_MINIMAL_RELIC["ga_handle"]],
+            },
+        )
+        assert resp.status_code == 422
+        assert "DB mode" in resp.json()["detail"]
+
+    def test_slot_alternative_honors_staged_sells(
+        self, client: TestClient, normal_user_token_headers, db
+    ) -> None:
+        """The strike path resolves the same effective inventory: with every
+        owned relic staged-sold there is no replacement candidate left."""
+        build, profile = self._seed(client, normal_user_token_headers, db)
+
+        baseline = client.post(
+            "/api/v1/optimize/",
+            headers=normal_user_token_headers,
+            json={"build_id": build["id"], "profile_id": str(profile.id), "top_n": 5},
+        )
+        assert baseline.status_code == 200, baseline.text
+        top = baseline.json()[0]
+        struck_idx = next(
+            i for i, a in enumerate(top["assignments"]) if a["relic"]
+        )
+
+        resp = client.post(
+            "/api/v1/optimize/slot-alternative",
+            headers=normal_user_token_headers,
+            json={
+                "build_id": build["id"],
+                "profile_id": str(profile.id),
+                "vessel_id": top["vessel_id"],
+                "struck_slot_index": struck_idx,
+                "locked_slots": [],
+                "excluded_ga_handles": [],
+                "staged_sells": [0xC0020000, 0xC0020001, 0xC0020002],
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        result = resp.json()
+        if result is not None:
+            assert result["assignments"][struck_idx]["relic"] is None, (
+                "with the whole inventory staged-sold, the struck slot must "
+                "have no replacement"
+            )
+
+
 _SLOT_BUILD = {
     "id": "slot-alt-test",
     "name": "Slot Alt Build",

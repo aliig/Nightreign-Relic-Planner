@@ -37,6 +37,22 @@ import { isLoggedIn } from "@/hooks/useAuth"
 import useCustomToast from "@/hooks/useCustomToast"
 import { useLocalBuilds } from "@/hooks/useLocalBuilds"
 import { getAnonUploadMeta, useSaveStatus } from "@/hooks/useSaveStatus"
+import { stagedFields, stagedKey, usePendingSlot } from "@/lib/pendingChanges"
+
+/** Amber note shown while displayed results predate the current staged diff.
+ *  The auto re-run usually replaces them within moments; the banner also covers
+ *  the failure case (the Optimize button is the manual retry). */
+function StaleStagedBanner({ running }: { running: boolean }) {
+  return (
+    <div className="flex items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-400">
+      <span>
+        {running
+          ? "Re-running with your staged relic changes…"
+          : "These results don't include your staged relic changes — press Optimize to update."}
+      </span>
+    </div>
+  )
+}
 
 export const Route = createFileRoute("/_layout/builds/$buildId/optimize")({
   component: BuildOptimizePage,
@@ -82,7 +98,14 @@ function AuthOptimizeForm({ buildId }: { buildId: string }) {
   })
 
   const pinnedHandles = new Set<number>(selectedBuild?.pinned_relics ?? [])
-  const key = cacheKey(
+  const slotIndex = profiles.find((p) => p.id === profileId)?.slot_index ?? null
+  const pending = usePendingSlot(slotIndex)
+  const sig = stagedKey(pending)
+  // sig fully determines the staged wire fields, so it's the only real dep.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: sig covers pending's staged content
+  const staged = useMemo(() => stagedFields(pending), [sig])
+
+  const baseKey = cacheKey(
     "auth",
     buildId,
     selectedBuild?.updated_at,
@@ -91,52 +114,64 @@ function AuthOptimizeForm({ buildId }: { buildId: string }) {
   )
 
   const [results, setResults] = useState<VesselResult[]>(
-    () => resultCache.get(key) ?? [],
+    () => resultCache.get(baseKey)?.results ?? [],
+  )
+  // Staged signature the DISPLAYED results were computed with; a mismatch with
+  // the live sig means "stale" — keep showing them while the re-run streams.
+  const [resultsSig, setResultsSig] = useState<string | null>(
+    () => resultCache.get(baseKey)?.sig ?? null,
   )
   const [isPending, setIsPending] = useState(false)
   const [progress, setProgress] = useState<OptimizeProgress | null>(null)
-  const [hasRun, setHasRun] = useState(() => resultCache.has(key))
+  const [hasRun, setHasRun] = useState(() => resultCache.has(baseKey))
   const [change, setChange] = useState<BuildChange | null>(null)
-  const autoOptimizeRef = useRef(false)
+  const autoRunKeyRef = useRef<string | null>(null)
 
-  // Load cached snapshot from server if fresh
+  const fresh = hasRun && resultsSig === sig
+
+  // Load cached snapshot from server if fresh for the current staged state
   const { data: snapshot, isLoading: snapshotLoading } = useQuery({
-    queryKey: ["snapshot", buildId, profileId],
-    queryFn: () => OptimizeService.getSnapshot({ buildId, profileId }),
-    enabled: !!profileId && !resultCache.has(key),
+    queryKey: ["snapshot", buildId, profileId, sig],
+    queryFn: () =>
+      OptimizeService.querySnapshot({
+        requestBody: { build_id: buildId, profile_id: profileId, ...staged },
+      }),
+    enabled: !!profileId && !fresh,
     staleTime: Infinity,
   })
 
   // Populate results from snapshot when it arrives
   useEffect(() => {
-    if (snapshot && !resultCache.has(key) && !hasRun) {
+    if (snapshot && !fresh) {
       setResults(snapshot.results)
+      setResultsSig(sig)
       setChange(snapshot.last_change ?? null)
-      resultCache.set(key, snapshot.results)
+      resultCache.set(baseKey, { sig, results: snapshot.results })
       setHasRun(true)
     }
-  }, [snapshot, key, hasRun])
+  }, [snapshot, baseKey, sig, fresh])
 
   useEffect(() => {
-    const cached = resultCache.get(key)
-    setResults(cached ?? [])
-    setHasRun(cached !== undefined)
+    const entry = resultCache.get(baseKey)
+    setResults(entry?.results ?? [])
+    setResultsSig(entry?.sig ?? null)
+    setHasRun(entry !== undefined)
     setChange(null)
-  }, [key])
+  }, [baseKey])
 
   const handleOptimize = async () => {
     setIsPending(true)
     setProgress(null)
-    setResults([])
     setChange(null)
     try {
       const data = await runOptimizeStream(
-        { build_id: buildId, profile_id: profileId },
+        { build_id: buildId, profile_id: profileId, ...staged },
         setProgress,
         setChange,
       )
       setResults(data)
-      resultCache.set(key, data)
+      setResultsSig(sig)
+      resultCache.set(baseKey, { sig, results: data })
       queryClient.invalidateQueries({
         queryKey: ["snapshot", buildId, profileId],
       })
@@ -149,24 +184,26 @@ function AuthOptimizeForm({ buildId }: { buildId: string }) {
     }
   }
 
-  // Auto-optimize when there's only one profile, no cached results, and no server snapshot
+  // Auto-optimize the VIEWED build: single-profile users on first view (as
+  // before), plus whenever the staged diff makes the shown results stale —
+  // the staged state is assumed live, so this build re-runs on its own.
+  // Bulk "re-run every build" stays manual (too costly to fire per edit).
   useEffect(() => {
-    if (
-      profiles.length === 1 &&
-      profileId &&
-      !resultCache.has(key) &&
-      !autoOptimizeRef.current &&
-      !snapshotLoading &&
-      !snapshot
-    ) {
-      autoOptimizeRef.current = true
-      handleOptimize()
-    }
+    if (!profileId || isPending || fresh) return
+    if (snapshotLoading || snapshot) return
+    if (sig === "" && profiles.length !== 1) return
+    const autoKey = cacheKey(baseKey, sig)
+    if (autoRunKeyRef.current === autoKey) return
+    autoRunKeyRef.current = autoKey
+    handleOptimize()
   }, [
     snapshotLoading,
     snapshot,
     handleOptimize,
-    key,
+    baseKey,
+    sig,
+    fresh,
+    isPending,
     profileId,
     profiles.length,
   ]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -240,6 +277,9 @@ function AuthOptimizeForm({ buildId }: { buildId: string }) {
 
       {results.length > 0 && (
         <div className="space-y-3">
+          {resultsSig !== null && resultsSig !== sig && (
+            <StaleStagedBanner running={isPending} />
+          )}
           <ChangeBanner change={change} />
           <h2 className="text-lg font-medium">
             Top {results.length} vessel{results.length !== 1 ? "s" : ""}
@@ -255,7 +295,11 @@ function AuthOptimizeForm({ buildId }: { buildId: string }) {
               enteredFingerprints={
                 index === 0 ? enteredKeys(change) : undefined
               }
-              inventorySource={{ build_id: buildId, profile_id: profileId }}
+              inventorySource={{
+                build_id: buildId,
+                profile_id: profileId,
+                ...staged,
+              }}
               loadoutTarget={(() => {
                 const p = profiles.find((pr) => pr.id === profileId)
                 if (!p || !selectedBuild?.character) return undefined
@@ -331,7 +375,9 @@ function AnonOptimizeForm({ buildId }: { buildId: string }) {
 
   const build = getById(buildId)
   const pinnedHandles = new Set<number>(build?.pinned_relics ?? [])
-  const key = cacheKey(
+  const pending = usePendingSlot(profile?.slot_index ?? null)
+  const sig = stagedKey(pending)
+  const baseKey = cacheKey(
     "anon",
     buildId,
     build?.updated_at,
@@ -341,22 +387,39 @@ function AnonOptimizeForm({ buildId }: { buildId: string }) {
 
   // ParsedRelicData uses flat effect_1/2/3 fields; OwnedRelic expects arrays.
   // Lifted to a memo so the full optimize and per-slot strikes share identical
-  // inventory inputs.
-  const relics = useMemo(
-    () =>
-      (profile?.relics ?? []).map((r: any) => ({
-        ga_handle: r.ga_handle,
-        item_id: r.item_id,
-        real_id: r.real_id,
-        color: r.color,
-        effects: [r.effect_1, r.effect_2, r.effect_3],
-        curses: [r.curse_1, r.curse_2, r.curse_3],
-        is_deep: r.is_deep,
-        name: r.name,
-        tier: r.tier,
+  // inventory inputs.  Inline mode has no server-side staged resolution, so the
+  // staged diff (sells filtered out, mints appended under their synthetic
+  // negative handles) is applied here — this IS the effective inventory.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: sig covers pending's staged content
+  const relics = useMemo(() => {
+    const base = (profile?.relics ?? []).map((r: any) => ({
+      ga_handle: r.ga_handle,
+      item_id: r.item_id,
+      real_id: r.real_id,
+      color: r.color,
+      effects: [r.effect_1, r.effect_2, r.effect_3],
+      curses: [r.curse_1, r.curse_2, r.curse_3],
+      is_deep: r.is_deep,
+      name: r.name,
+      tier: r.tier,
+    }))
+    if (sig === "") return base
+    const sold = new Set(pending.sells)
+    return [
+      ...base.filter((r: { ga_handle: number }) => !sold.has(r.ga_handle)),
+      ...pending.mints.map((m) => ({
+        ga_handle: m.handle,
+        item_id: m.item_id,
+        real_id: m.real_id,
+        color: m.color,
+        effects: m.effects,
+        curses: m.curses,
+        is_deep: m.isDeep,
+        name: m.name,
+        tier: m.tier,
       })),
-    [profile],
-  )
+    ]
+  }, [profile, sig])
 
   const inlineBuild = useMemo(
     () =>
@@ -379,26 +442,31 @@ function AnonOptimizeForm({ buildId }: { buildId: string }) {
   )
 
   const [results, setResults] = useState<VesselResult[]>(
-    () => resultCache.get(key) ?? [],
+    () => resultCache.get(baseKey)?.results ?? [],
+  )
+  const [resultsSig, setResultsSig] = useState<string | null>(
+    () => resultCache.get(baseKey)?.sig ?? null,
   )
   const [isPending, setIsPending] = useState(false)
   const [progress, setProgress] = useState<OptimizeProgress | null>(null)
-  const [hasRun, setHasRun] = useState(() => resultCache.has(key))
+  const [hasRun, setHasRun] = useState(() => resultCache.has(baseKey))
   const [change, setChange] = useState<BuildChange | null>(null)
-  const autoOptimizeRef = useRef(false)
+  const autoRunKeyRef = useRef<string | null>(null)
+
+  const fresh = hasRun && resultsSig === sig
 
   useEffect(() => {
-    const cached = resultCache.get(key)
-    setResults(cached ?? [])
-    setHasRun(cached !== undefined)
-  }, [key])
+    const entry = resultCache.get(baseKey)
+    setResults(entry?.results ?? [])
+    setResultsSig(entry?.sig ?? null)
+    setHasRun(entry !== undefined)
+  }, [baseKey])
 
   const handleOptimize = async () => {
     if (!build || !profile || !inlineBuild) return
 
     setIsPending(true)
     setProgress(null)
-    setResults([])
     setChange(null)
     try {
       const data = await runOptimizeStream(
@@ -407,7 +475,8 @@ function AnonOptimizeForm({ buildId }: { buildId: string }) {
         setChange,
       )
       setResults(data)
-      resultCache.set(key, data)
+      setResultsSig(sig)
+      resultCache.set(baseKey, { sig, results: data })
     } catch (err) {
       showErrorToast(err instanceof Error ? err.message : "Optimization failed")
     } finally {
@@ -417,19 +486,25 @@ function AnonOptimizeForm({ buildId }: { buildId: string }) {
     }
   }
 
-  // Auto-optimize when there's only one profile and no cached results
+  // Auto-optimize: single-profile users on first view (as before), plus
+  // whenever the staged diff makes the shown results stale (see auth form).
   useEffect(() => {
-    if (
-      allProfiles.length === 1 &&
-      build &&
-      profile &&
-      !resultCache.has(key) &&
-      !autoOptimizeRef.current
-    ) {
-      autoOptimizeRef.current = true
-      handleOptimize()
-    }
-  }, [allProfiles.length, build, handleOptimize, key, profile]) // eslint-disable-line react-hooks/exhaustive-deps
+    if (!build || !profile || isPending || fresh) return
+    if (sig === "" && allProfiles.length !== 1) return
+    const autoKey = cacheKey(baseKey, sig)
+    if (autoRunKeyRef.current === autoKey) return
+    autoRunKeyRef.current = autoKey
+    handleOptimize()
+  }, [
+    allProfiles.length,
+    build,
+    handleOptimize,
+    baseKey,
+    sig,
+    fresh,
+    isPending,
+    profile,
+  ]) // eslint-disable-line react-hooks/exhaustive-deps
 
   if (allProfiles.length === 0) {
     return (
@@ -514,6 +589,9 @@ function AnonOptimizeForm({ buildId }: { buildId: string }) {
 
       {results.length > 0 && (
         <div className="space-y-3">
+          {resultsSig !== null && resultsSig !== sig && (
+            <StaleStagedBanner running={isPending} />
+          )}
           <ChangeBanner change={change} />
           <h2 className="text-lg font-medium">
             Top {results.length} vessel{results.length !== 1 ? "s" : ""}

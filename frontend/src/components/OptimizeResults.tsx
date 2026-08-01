@@ -82,7 +82,13 @@ export function getBreakdownColor(
 
 // --- Result cache (persists across route navigations, clears on page reload) ---
 
-export const resultCache = new Map<string, VesselResult[]>()
+/** One base key (build + profile + upload) holds the latest results plus the
+ *  staged-diff signature they were computed with. A sig mismatch means the
+ *  results are STALE for the current staged state — still shown (with a
+ *  banner) while the auto re-run streams the staged replacement. */
+export type OptimizeCacheEntry = { sig: string; results: VesselResult[] }
+
+export const resultCache = new Map<string, OptimizeCacheEntry>()
 
 export function cacheKey(
   ...parts: (string | number | null | undefined)[]
@@ -174,9 +180,21 @@ export async function runOptimizeStream(
 // --- Single-slot re-optimization ("strike a relic") ---
 
 /** How the optimizer should source the relic inventory for a re-optimize:
- *  DB mode (authenticated build + profile) or inline mode (anonymous). */
+ *  DB mode (authenticated build + profile, optionally with the staged in-app
+ *  diff) or inline mode (anonymous — the diff is already applied to `relics`
+ *  client-side). */
 export type InventorySource =
-  | { build_id: string; profile_id: string }
+  | {
+      build_id: string
+      profile_id: string
+      staged_sells?: number[]
+      staged_mints?: Array<{
+        handle: number
+        real_id: number
+        effects: number[]
+        curses: number[]
+      }>
+    }
   | { build: Record<string, unknown>; relics: unknown[] }
 
 /** Re-optimize a single vessel slot, keeping every other slot frozen in its
@@ -259,6 +277,14 @@ export function SlotCard({
           {isNew && (
             <Badge className="h-4 px-1.5 py-0 text-[10px] bg-green-600 text-white hover:bg-green-600">
               NEW
+            </Badge>
+          )}
+          {relic != null && ((relic as any).ga_handle as number) < 0 && (
+            <Badge
+              className="h-4 px-1.5 py-0 text-[10px] bg-sky-600 text-white hover:bg-sky-600"
+              title="Staged Relic Rites purchase — not in your save until you export"
+            >
+              Incoming
             </Badge>
           )}
           {isPinned && (

@@ -6,10 +6,18 @@ Supports two modes:
 
 The character class used for vessel filtering is always taken from build_def.character.
 
+DB mode optionally accepts the client's staged in-app diff (staged_sells +
+staged_mints, see app.core.staged): the run then uses the EFFECTIVE inventory
+— profile relics minus sells plus validated mints under negative synthetic
+handles — so results mirror the app's live-document state. Because snapshot
+hashes are content-based, a staged run's snapshot becomes valid for the pure
+save the user gets by actually exporting and re-uploading those edits.
+
 DB-mode runs also upsert an OptimizationSnapshot keyed by (build_id, slot_index)
 and return a BuildChange describing how the best arrangement moved versus the
 previous snapshot — this powers the "your build may have improved" notification
-after a newer save is uploaded.  Inline (anonymous) runs persist nothing and
+after a newer save is uploaded (staged-diff deltas attribute as cause="staged"
+and stay out of that narration).  Inline (anonymous) runs persist nothing and
 return change=null.
 """
 import json
@@ -32,12 +40,14 @@ from app.api.deps import (
 from app.core.build_def import build_def_from_db
 from app.core.config import settings
 from app.core.db import engine
-from app.core.game_data import game_data_version
+from app.core.game_data import game_data_version, get_items_json
+from app.core.staged import apply_staged_diff, staged_diff_signature
 from app.models import (
     Build,
     OptimizationSnapshot,
     Profile,
     Relic,
+    StagedMint,
     get_datetime_utc,
 )
 from nrplanner.changes import (
@@ -45,7 +55,6 @@ from nrplanner.changes import (
     diff_results,
     fingerprint_owned,
     relevant_relics_signature,
-    relic_fingerprint,
     relics_signature,
     serialize_top_layouts,
 )
@@ -86,6 +95,13 @@ class OptimizeRequest(BaseModel):
     build_id: uuid.UUID | None = None
     profile_id: uuid.UUID | None = None
 
+    # --- Staged in-app edits (DB mode only; see app.core.staged) ---
+    # The optimizer runs on the EFFECTIVE inventory: profile relics minus
+    # staged_sells (ga_handles) plus staged_mints (validated, negative
+    # synthetic handles).  Inline mode applies its diff client-side instead.
+    staged_sells: list[int] = Field(default_factory=list)
+    staged_mints: list[StagedMint] = Field(default_factory=list)
+
     # --- Inline mode (anonymous or authenticated) ---
     build: BuildDefinition | None = None
     relics: list[OwnedRelic] | None = None
@@ -115,6 +131,10 @@ class SlotAlternativeRequest(BaseModel):
     # --- DB mode (authenticated) ---
     build_id: uuid.UUID | None = None
     profile_id: uuid.UUID | None = None
+
+    # --- Staged in-app edits (DB mode only; same semantics as OptimizeRequest) ---
+    staged_sells: list[int] = Field(default_factory=list)
+    staged_mints: list[StagedMint] = Field(default_factory=list)
 
     # --- Inline mode (anonymous or authenticated) ---
     build: BuildDefinition | None = None
@@ -161,19 +181,28 @@ def _resolve(
     req: OptimizeRequest,
     current_user: Any,
     session: Session,
+    ds: Any,
 ) -> tuple[BuildDefinition, list[OwnedRelic], _SnapshotCtx | None]:
     """Resolve a request into (build_def, owned_relics, snapshot_ctx).
 
-    snapshot_ctx is None for inline mode (nothing persisted).  Raises
-    HTTPException on the same auth/validation conditions as before.
+    DB mode returns the EFFECTIVE inventory (profile relics with the staged
+    diff applied).  snapshot_ctx is None for inline mode (nothing persisted).
+    Raises HTTPException on the same auth/validation conditions as before.
     """
     using_db = req.build_id is not None or req.profile_id is not None
     using_inline = req.build is not None or req.relics is not None
+    using_staged = bool(req.staged_sells or req.staged_mints)
 
     if using_db and using_inline:
         raise HTTPException(
             status_code=422,
             detail="Provide either (build_id + profile_id) or (build + relics), not both.",
+        )
+    if using_staged and not using_db:
+        raise HTTPException(
+            status_code=422,
+            detail="staged_sells/staged_mints require DB mode; apply the diff "
+                   "to the inline relics list client-side instead.",
         )
 
     if using_db:
@@ -197,7 +226,15 @@ def _resolve(
         db_relics = session.exec(
             select(Relic).where(Relic.profile_id == req.profile_id)
         ).all()
-        owned_relics = _owned_from_db(list(db_relics))
+        owned_relics = apply_staged_diff(
+            _owned_from_db(list(db_relics)),
+            req.staged_sells, req.staged_mints, ds, get_items_json(),
+        )
+        if len(owned_relics) > settings.MAX_RELICS_PER_OPTIMIZE:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Too many relics (max {settings.MAX_RELICS_PER_OPTIMIZE}).",
+            )
         ctx = _SnapshotCtx(
             owner_id=current_user.id,
             build_id=db_build.id,
@@ -244,7 +281,11 @@ def _run_optimizer(
 # ---------------------------------------------------------------------------
 
 def _attribute_cause(
-    snap: OptimizationSnapshot | None, relics_hash: str, build_hash: str, gdv: str
+    snap: OptimizationSnapshot | None,
+    relics_hash: str,
+    build_hash: str,
+    gdv: str,
+    staged_signature: str | None,
 ) -> str | None:
     """Which input moved since the last snapshot — for the BuildChange.cause field."""
     if snap is None:
@@ -254,6 +295,11 @@ def _attribute_cause(
     data_changed = (
         snap.game_data_version != gdv or snap.optimizer_version != OPTIMIZER_VERSION
     )
+    if relics_changed and snap.staged_signature != staged_signature:
+        # The inventory moved because the staged in-app diff (sells/mints)
+        # differs from the previous run's — a deliberate app-side edit, not a
+        # save-to-save change, so "since your last save" must stay silent.
+        return "mixed" if build_changed else "staged"
     if relics_changed and build_changed:
         return "mixed"
     if relics_changed:
@@ -274,6 +320,7 @@ def _apply_snapshot(
     ds: Any,
     top_n: int,
     max_per_vessel: int,
+    staged_signature: str | None,
 ) -> BuildChange:
     """Diff a fresh optimization against the stored snapshot, then upsert it.
 
@@ -297,11 +344,13 @@ def _apply_snapshot(
     change.build_id = str(ctx.build_id)
     change.build_name = ctx.build_name
     change.slot_index = ctx.slot_index
-    change.cause = _attribute_cause(snap, relics_hash, build_hash, gdv)
+    change.cause = _attribute_cause(
+        snap, relics_hash, build_hash, gdv, staged_signature
+    )
 
     top_layouts = serialize_top_layouts(results)
     # cumulative_effects is a serve-time presentation field (recomputed on every
-    # response, incl. GET /snapshot) — never persist it in the snapshot.
+    # response, incl. POST /snapshot/query) — never persist it in the snapshot.
     full_results = [r.model_dump(mode="json", exclude={"cumulative_effects"}) for r in results]
     best_score = max((r.total_score for r in results), default=0)
     any_truncated = any(r.search_truncated for r in results)
@@ -317,6 +366,7 @@ def _apply_snapshot(
             game_data_version=gdv,
             optimizer_version=OPTIMIZER_VERSION,
             relevant_relics_hash=relevant_hash,
+            staged_signature=staged_signature,
             top_n=top_n,
             max_per_vessel=max_per_vessel,
             top_layouts=top_layouts,
@@ -332,6 +382,7 @@ def _apply_snapshot(
         snap.game_data_version = gdv
         snap.optimizer_version = OPTIMIZER_VERSION
         snap.relevant_relics_hash = relevant_hash
+        snap.staged_signature = staged_signature
         snap.top_n = top_n
         snap.max_per_vessel = max_per_vessel
         snap.top_layouts = top_layouts
@@ -381,7 +432,7 @@ def run_optimize(
     DB mode (`build_id` + `profile_id`) additionally upserts the build's
     optimization snapshot as a side effect.  See module docstring.
     """
-    build_def, owned_relics, ctx = _resolve(req, current_user, session)
+    build_def, owned_relics, ctx = _resolve(req, current_user, session, ds)
     results = _run_optimizer(
         build_def, owned_relics, build_def.character,
         req.top_n, req.max_per_vessel, ds, executor=executor,
@@ -389,7 +440,8 @@ def run_optimize(
     if ctx is not None:
         try:
             _apply_snapshot(session, ctx, build_def, owned_relics, results, ds,
-                            req.top_n, req.max_per_vessel)
+                            req.top_n, req.max_per_vessel,
+                            staged_diff_signature(req.staged_sells, req.staged_mints))
         except Exception:
             # Snapshotting is best-effort — never fail the optimize response.
             session.rollback()
@@ -417,7 +469,7 @@ def run_optimize_stream(
     HTTP-level errors (auth, bad request, not found) are raised before streaming.
     """
     # Resolve up-front so auth/validation errors surface as normal HTTP errors.
-    build_def, owned_relics, ctx = _resolve(req, current_user, session)
+    build_def, owned_relics, ctx = _resolve(req, current_user, session, ds)
 
     def _generate():
         try:
@@ -440,6 +492,8 @@ def run_optimize_stream(
                                 change = _apply_snapshot(
                                     snap_session, ctx, build_def, owned_relics,
                                     results, ds, req.top_n, req.max_per_vessel,
+                                    staged_diff_signature(
+                                        req.staged_sells, req.staged_mints),
                                 )
                         except Exception:
                             change = None  # best-effort; don't break the stream
@@ -482,10 +536,12 @@ def optimize_slot_alternative(
     base = OptimizeRequest(
         build_id=req.build_id,
         profile_id=req.profile_id,
+        staged_sells=req.staged_sells,
+        staged_mints=req.staged_mints,
         build=req.build,
         relics=req.relics,
     )
-    build_def, owned_relics, _ctx = _resolve(base, current_user, session)
+    build_def, owned_relics, _ctx = _resolve(base, current_user, session, ds)
 
     excluded = set(req.excluded_ga_handles)
     # Freeze every other slot in its exact position. A struck/excluded relic is
@@ -521,10 +577,24 @@ class SnapshotResponse(BaseModel):
     computed_at: str | None = None
 
 
-@router.get("/snapshot", response_model=SnapshotResponse | None)
-def get_snapshot(
-    build_id: uuid.UUID,
-    profile_id: uuid.UUID,
+class SnapshotQuery(BaseModel):
+    """Freshness query for a build+profile's cached optimization.
+
+    ``staged_sells``/``staged_mints`` describe the client's staged in-app diff
+    (same semantics as OptimizeRequest): freshness is then evaluated against
+    the EFFECTIVE inventory, so a snapshot written by a staged run is served
+    back to the same staged state — and, because hashes are content-based, to
+    the pure state that results from actually exporting + re-uploading it.
+    """
+    build_id: uuid.UUID
+    profile_id: uuid.UUID
+    staged_sells: list[int] = Field(default_factory=list)
+    staged_mints: list[StagedMint] = Field(default_factory=list)
+
+
+@router.post("/snapshot/query", response_model=SnapshotResponse | None)
+def query_snapshot(
+    req: SnapshotQuery,
     current_user: CurrentUser,
     session: SessionDep,
     ds: GameDataDep,
@@ -532,21 +602,21 @@ def get_snapshot(
     """Return cached optimization results if the snapshot is fresh.
 
     A snapshot is fresh when its relics_hash and build_hash match the current
-    live inputs (cached on the Profile and Build rows at write time).
-    Returns null if stale or missing — the frontend should then trigger a
-    fresh optimization.
+    live inputs (cached on the Profile and Build rows at write time), with the
+    staged diff applied to the inventory side first.  Returns null if stale or
+    missing — the frontend should then trigger a fresh optimization.
     """
-    db_build = session.get(Build, build_id)
+    db_build = session.get(Build, req.build_id)
     if not db_build or db_build.owner_id != current_user.id:
         raise HTTPException(status_code=404, detail="Build not found")
 
-    profile = session.get(Profile, profile_id)
+    profile = session.get(Profile, req.profile_id)
     if not profile or profile.owner_id != current_user.id:
         raise HTTPException(status_code=404, detail="Profile not found")
 
     snap = session.exec(
         select(OptimizationSnapshot).where(
-            OptimizationSnapshot.build_id == build_id,
+            OptimizationSnapshot.build_id == req.build_id,
             OptimizationSnapshot.slot_index == profile.slot_index,
         )
     ).first()
@@ -567,32 +637,31 @@ def get_snapshot(
     ):
         return None
 
-    if snap.relics_hash != profile.relics_hash:
-        # Whole-inventory hash moved, but the optimum depends only on the
-        # build-RELEVANT subset (see relevant_relics_signature).  Serve the
-        # snapshot when that subset is unchanged; legacy rows without the
-        # stored hash stay stale (one re-optimize refills them).
-        if snap.relevant_relics_hash is None:
-            return None
+    staged = bool(req.staged_sells or req.staged_mints)
+    if staged or snap.relics_hash != profile.relics_hash:
+        # Fast path only when clean AND the whole-inventory hash matches; any
+        # staged diff forces the effective-inventory compare (Profile.relics_hash
+        # is frozen at upload and can never reflect staged edits).
         db_relics = session.exec(
             select(Relic).where(Relic.profile_id == profile.id)
         ).all()
-        pairs = [
-            (
-                relic_fingerprint(
-                    r.real_id,
-                    (r.effect_1, r.effect_2, r.effect_3),
-                    (r.curse_1, r.curse_2, r.curse_3),
-                ),
-                r.ga_handle,
-            )
-            for r in db_relics
-        ]
-        live_relevant = relevant_relics_signature(
-            build_def_from_db(db_build), pairs, ds
+        effective = apply_staged_diff(
+            _owned_from_db(list(db_relics)),
+            req.staged_sells, req.staged_mints, ds, get_items_json(),
         )
-        if snap.relevant_relics_hash != live_relevant:
-            return None
+        if snap.relics_hash != relics_signature(effective):
+            # Whole-inventory hash moved, but the optimum depends only on the
+            # build-RELEVANT subset (see relevant_relics_signature).  Serve the
+            # snapshot when that subset is unchanged; legacy rows without the
+            # stored hash stay stale (one re-optimize refills them).
+            if snap.relevant_relics_hash is None:
+                return None
+            pairs = [(fingerprint_owned(r), r.ga_handle) for r in effective]
+            live_relevant = relevant_relics_signature(
+                build_def_from_db(db_build), pairs, ds
+            )
+            if snap.relevant_relics_hash != live_relevant:
+                return None
 
     # Snapshot is fresh — serve the stored full results.  top_layouts is the
     # compact diff baseline and cannot reconstruct VesselResults; legacy rows

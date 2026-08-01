@@ -222,6 +222,25 @@ function LoadoutManager({
   } | null>(null)
   const [renameDraft, setRenameDraft] = useState("")
 
+  // Staged Relic Rites purchases join the lookup under their synthetic
+  // negative handles, so a staged loadout that places one renders the relic
+  // (and scores its cumulative effects) instead of "not in current inventory".
+  const relicLookup = useMemo(() => {
+    if (pending.mints.length === 0) return relicByHandle
+    const m = new Map(relicByHandle)
+    for (const mint of pending.mints) {
+      m.set(mint.handle, {
+        name: mint.name,
+        color: mint.color,
+        tier: mint.tier,
+        isDeep: mint.isDeep,
+        effects: mint.effects,
+        curses: mint.curses,
+      })
+    }
+    return m
+  }, [relicByHandle, pending.mints])
+
   // Bucket this slot's pending loadout ops by kind/index.
   const renameByIndex = new Map<number, { id: string; name: string }>()
   const deleteByIndex = new Map<number, string>()
@@ -284,7 +303,7 @@ function LoadoutManager({
   const dynamicGroups = dynamic.map(({ ga_handles }) => {
     const ids: number[] = []
     for (const h of ga_handles) {
-      const r = relicByHandle.get(h)
+      const r = relicLookup.get(h)
       if (r) ids.push(...r.effects, ...r.curses)
     }
     return ids
@@ -436,7 +455,7 @@ function LoadoutManager({
                 vesselName={d.vesselName}
                 cumulative={d.cumulative}
                 gaHandles={d.gaHandles}
-                relicByHandle={relicByHandle}
+                relicByHandle={relicLookup}
                 effectMap={effectMap}
                 actions={
                   d.source.kind === "existing" ? (

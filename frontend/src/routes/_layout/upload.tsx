@@ -6,6 +6,7 @@ import { useRef, useState } from "react"
 import type { BuildChange } from "@/client"
 import { SavesService } from "@/client"
 import { OriginalBackupCard } from "@/components/OriginalBackupCard"
+import { UploadGateDialog } from "@/components/UploadGateDialog"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import {
@@ -25,11 +26,22 @@ import {
   rawScoreTooltip,
   relicSummary,
 } from "@/lib/buildChange"
+import { exportPendingChanges, PendingExportError } from "@/lib/exportPending"
 import { startUpload, useOptimizeJob } from "@/lib/optimizeJobs"
 import { computeOverallPct, optimizingLabel } from "@/lib/optimizeProgress"
-import { clearAll } from "@/lib/pendingChanges"
-import { storeOriginalBackup } from "@/lib/saveBackup"
-import { rememberSaveFile } from "@/lib/saveFile"
+import {
+  clearAll,
+  readAll,
+  type SlotSummary,
+  summarizePending,
+} from "@/lib/pendingChanges"
+import { getOriginalBackupFile, storeOriginalBackup } from "@/lib/saveBackup"
+import { getSaveFile, rememberSaveFile } from "@/lib/saveFile"
+import {
+  classifyPending,
+  fetchCurrentInventories,
+  inspectNewSave,
+} from "@/lib/uploadGate"
 import { formatRelativeTime, handleError } from "@/utils"
 
 export const Route = createFileRoute("/_layout/upload")({
@@ -185,12 +197,18 @@ function UploadPage() {
     onError: handleError.bind(showErrorToast),
   })
 
-  function handleFile(file: File) {
-    const name = file.name.toLowerCase()
-    if (!name.endsWith(".sl2") && !name.endsWith(".dat")) {
-      showErrorToast("Please upload a .sl2 (PC) or memory.dat (PS4) file.")
-      return
-    }
+  // Divergence gate: a pending upload paused on un-exported staged changes
+  // the new file does not contain (see lib/uploadGate).
+  const [gate, setGate] = useState<{
+    file: File
+    summaries: SlotSummary[]
+    hasMints: boolean
+  } | null>(null)
+  const [gateBusy, setGateBusy] = useState(false)
+
+  /** The unconditional upload path: replace the working file, drop the (now
+   *  resolved) staged diff, back up the original, and start the upload. */
+  function proceedUpload(file: File) {
     // Keep the original file in-session so the inventory page can export an
     // edited copy without re-uploading (raw saves are never persisted).
     rememberSaveFile(file)
@@ -211,6 +229,91 @@ function UploadPage() {
     }
   }
 
+  /**
+   * Route the picked file through the divergence gate. With staged edits
+   * present, the new file is inspected (parse-only) first: edits it already
+   * contains clear silently (the user exported + played — the diff did its
+   * job); edits it lacks pause the upload behind an export-or-discard dialog.
+   * Any inspection failure gates too — never silently wipe staged work.
+   */
+  async function routeThroughGate(file: File) {
+    const pending = readAll()
+    const stagedSlots = Object.keys(pending).map(Number)
+    if (stagedSlots.length === 0) {
+      proceedUpload(file)
+      return
+    }
+    const summaries = summarizePending(pending)
+    try {
+      const [oldBySlot, newBySlot] = await Promise.all([
+        fetchCurrentInventories(stagedSlots),
+        inspectNewSave(file),
+      ])
+      const { committed, divergent } = classifyPending(
+        pending,
+        oldBySlot,
+        newBySlot,
+      )
+      if (divergent.length === 0) {
+        showSuccessToast(
+          `Detected your exported changes in this save — staged edits for slot ${committed.join(", ")} marked as applied.`,
+        )
+        proceedUpload(file)
+        return
+      }
+      setGate({
+        file,
+        summaries: summaries.filter((r) => divergent.includes(r.slot)),
+        hasMints: summaries.some(
+          (r) => divergent.includes(r.slot) && r.mints > 0,
+        ),
+      })
+    } catch {
+      // Couldn't inspect (offline, malformed, PS4 quirk…) — assume divergent.
+      setGate({
+        file,
+        summaries,
+        hasMints: summaries.some((r) => r.mints > 0),
+      })
+    }
+  }
+
+  /** Export the staged changes onto the PREVIOUS save before it's replaced. */
+  async function gateExportFirst() {
+    const oldFile = getSaveFile() ?? (await getOriginalBackupFile())
+    if (!oldFile) {
+      showErrorToast(
+        "Couldn't find the previous save file to export — use the Changes panel to re-select it, then try again.",
+      )
+      return
+    }
+    setGateBusy(true)
+    try {
+      const r = await exportPendingChanges(oldFile, readAll())
+      setGate(null)
+      showSuccessToast(
+        `Exported ${r.filename} with your staged changes. Import it in-game, then upload your save again when you're done playing.`,
+      )
+    } catch (err) {
+      showErrorToast(
+        err instanceof PendingExportError || err instanceof Error
+          ? err.message
+          : "Export failed",
+      )
+    } finally {
+      setGateBusy(false)
+    }
+  }
+
+  function handleFile(file: File) {
+    const name = file.name.toLowerCase()
+    if (!name.endsWith(".sl2") && !name.endsWith(".dat")) {
+      showErrorToast("Please upload a .sl2 (PC) or memory.dat (PS4) file.")
+      return
+    }
+    void routeThroughGate(file)
+  }
+
   function onDrop(e: React.DragEvent) {
     e.preventDefault()
     setDragging(false)
@@ -220,6 +323,8 @@ function UploadPage() {
 
   function onFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
+    // Clear the input so cancelling at the gate lets the same file re-fire.
+    e.target.value = ""
     if (file) handleFile(file)
   }
 
@@ -235,6 +340,20 @@ function UploadPage() {
           inventory.
         </p>
       </div>
+
+      <UploadGateDialog
+        open={gate !== null}
+        summaries={gate?.summaries ?? []}
+        hasMints={gate?.hasMints ?? false}
+        busy={gateBusy}
+        onExportFirst={() => void gateExportFirst()}
+        onDiscard={() => {
+          const file = gate?.file
+          setGate(null)
+          if (file) proceedUpload(file)
+        }}
+        onCancel={() => setGate(null)}
+      />
 
       <SaveStatusBanner />
 

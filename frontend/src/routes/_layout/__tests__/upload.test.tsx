@@ -255,14 +255,29 @@ describe("UploadPage — success state with uploadResult", () => {
   })
 })
 
-describe("UploadPage — pending changes reset", () => {
+describe("UploadPage — divergence gate", () => {
   // Start each case from a clean store and leave it clean for other tests
   // (the store is module-level state shared across tests in this file).
   beforeEach(() => clearAll())
   afterEach(() => clearAll())
 
-  it("clears pending changes when a valid new save is selected", () => {
-    // Seed an edit against the "previous" save (slot 0).
+  it("uploads immediately when nothing is staged", () => {
+    renderUpload()
+    const input =
+      document.querySelector<HTMLInputElement>("input[type='file']")!
+    fireEvent.change(input, {
+      target: { files: [makeFile("NR0000.sl2")] },
+    })
+    expect(mockMutate).toHaveBeenCalled()
+    expect(
+      screen.queryByText(/unsaved staged changes/i),
+    ).not.toBeInTheDocument()
+  })
+
+  it("gates instead of silently clearing when staged edits would be lost", async () => {
+    // Seed an edit against the "previous" save (slot 0). In this test env the
+    // inspect call fails (SavesService.inspectSave is unmocked), which the
+    // gate treats as divergent — the safe direction.
     toggleSell(0, 123, { name: "Old relic" })
     expect(Object.keys(readAll())).toHaveLength(1)
 
@@ -273,8 +288,37 @@ describe("UploadPage — pending changes reset", () => {
       target: { files: [makeFile("NR0000.sl2")] },
     })
 
-    // Uploading a new save voids the old diff.
+    // The gate intercepts: nothing cleared, no upload started.
+    expect(
+      await screen.findByText(/unsaved staged changes/i),
+    ).toBeInTheDocument()
+    expect(Object.keys(readAll())).toHaveLength(1)
+    expect(mockMutate).not.toHaveBeenCalled()
+
+    // Explicitly discarding proceeds: diff cleared, upload starts.
+    fireEvent.click(
+      screen.getByRole("button", { name: /discard them and upload/i }),
+    )
     expect(Object.keys(readAll())).toHaveLength(0)
+    expect(mockMutate).toHaveBeenCalled()
+  })
+
+  it("cancelling the gate keeps the staged edits and skips the upload", async () => {
+    toggleSell(0, 123, { name: "Old relic" })
+
+    renderUpload()
+    const input =
+      document.querySelector<HTMLInputElement>("input[type='file']")!
+    fireEvent.change(input, {
+      target: { files: [makeFile("NR0000.sl2")] },
+    })
+
+    expect(
+      await screen.findByText(/unsaved staged changes/i),
+    ).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: /cancel upload/i }))
+    expect(Object.keys(readAll())).toHaveLength(1)
+    expect(mockMutate).not.toHaveBeenCalled()
   })
 
   it("leaves pending changes intact when an invalid file is selected", () => {
@@ -287,7 +331,7 @@ describe("UploadPage — pending changes reset", () => {
       target: { files: [makeFile("save.txt")] },
     })
 
-    // The extension guard returns before clearAll(), so edits survive.
+    // The extension guard returns before the gate, so edits survive.
     expect(mockShowErrorToast).toHaveBeenCalled()
     expect(Object.keys(readAll())).toHaveLength(1)
   })
