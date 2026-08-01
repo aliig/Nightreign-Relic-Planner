@@ -5,9 +5,15 @@ import { type ReactNode, Suspense, useMemo, useRef, useState } from "react"
 
 import { BuildsService, GameService, SavesService } from "@/client"
 import { EmptyState } from "@/components/Common/EmptyState"
-import { buildEffectMap } from "@/components/RelicDisplay"
+import { RELIC_CAP } from "@/components/inventory/types"
+import {
+  buildEffectMap,
+  EffectList,
+  RelicNameCell,
+} from "@/components/RelicDisplay"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import {
   Select,
   SelectContent,
@@ -16,10 +22,18 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table"
 import { isLoggedIn } from "@/hooks/useAuth"
 import useCustomToast from "@/hooks/useCustomToast"
 import { useLocalBuilds } from "@/hooks/useLocalBuilds"
-import { addMints, toggleSell } from "@/lib/pendingChanges"
+import { addMints, usePendingSlot } from "@/lib/pendingChanges"
 import { getOriginalBackupFile } from "@/lib/saveBackup"
 import { getSaveFile } from "@/lib/saveFile"
 import { formatMurks } from "@/lib/sellValue"
@@ -33,7 +47,6 @@ export const Route = createFileRoute("/_layout/rites")({
 })
 
 const EMPTY = 4294967295
-const RELIC_CAP = 1950
 const TIER_NAMES: Record<number, string> = {
   1: "Delicate",
   2: "Polished",
@@ -96,9 +109,10 @@ type BuildsForm =
 
 type EffectOption = { id: number; name: string; isDebuff: boolean }
 
-// A cull rule built from inventory-style filters. Serialized to the backend
-// Rule shape (see /saves/rites/plan). Effects are split into primary vs curse
-// ids by is_debuff so the same picker feeds has_effect_ids / has_curse_ids.
+// A keep/sell rule for PURCHASED relics, built from inventory-style filters.
+// Serialized to the backend Rule shape (see /saves/rites/plan). Effects are
+// split into primary vs curse ids by is_debuff so the same picker feeds
+// has_effect_ids / has_curse_ids.
 type Rule = {
   id: string
   counts: number[] // 1|2|3
@@ -117,6 +131,7 @@ type PlanKeeper = {
   effects: number[]
   curses: number[]
   builds: string[]
+  build_ranks?: number[] // best loadout rank per builds[] entry (1 = best; 0 = unknown)
   reason?: string // "inclusion" | "build" (backend rule support; optional)
 }
 type PlanResponse = {
@@ -128,11 +143,12 @@ type PlanResponse = {
   murk_after: number
   murk_cost: number
   murk_refunded: number
-  murk_delta: number
+  murk_delta: number // mint-side net (refunds − cost); staged-sell refunds excluded
   limited_by: string | null
-  add_capacity: number
-  storage_left: number
-  cull_candidates: number[]
+  add_capacity: number // max relics one export can mint (ghost slots, pre-sells)
+  storage_left: number // all_murk: 1950 − owned after staged sells; else clamped by add_capacity
+  pending_sold: number // staged sells the plan honored (all_murk only)
+  pending_sold_refund: number // their total sell value (funded the run)
   rule_sold?: number // relics force-sold by an exclusion rule (optional)
 }
 
@@ -148,11 +164,6 @@ async function planDetail(res: Response): Promise<string> {
   } catch {
     return "Request failed"
   }
-}
-
-function nameOf(map: Map<number, string>, id: number): string | null {
-  if (id === EMPTY || id === 0 || id === -1) return null
-  return map.get(id) ?? `Effect ${id}`
 }
 
 function toggleIn<T>(arr: T[], v: T): T[] {
@@ -399,8 +410,8 @@ type ProgressEvt = {
 }
 
 // Ordered to match the backend plan phases (saves.py _rites_plan):
-// generating → matching → culling → finalizing. The two per-build passes are
-// separate steps so the count "resetting" reads as a new stage, not a restart.
+// generating → matching → finalizing. Only purchased relics are ever touched —
+// the plan never scans or sells relics already in the save.
 const PROGRESS_STEPS = [
   {
     key: "generating",
@@ -409,7 +420,6 @@ const PROGRESS_STEPS = [
     perBuild: false,
   },
   { key: "matching", label: "Match new relics against builds", perBuild: true },
-  { key: "culling", label: "Scan owned relics for culls", perBuild: true },
   { key: "finalizing", label: "Tally Murk & finalize", perBuild: false },
 ] as const
 
@@ -538,9 +548,18 @@ function RitesTool({
   // How many builds the in-flight run was started with (selection can change
   // while it runs); >0 switches the busy UI to the multi-step indicator.
   const [runBuildCount, setRunBuildCount] = useState(0)
+  // Stop mode the displayed plan was run with (the selector can change after).
+  const [planStop, setPlanStop] = useState<StopMode>("fixed")
+  // Build-match depth: keep a purchase only if it lands in one of a build's
+  // top-N ranked loadouts. 10 = the optimizer page's full list (widest).
+  const [topN, setTopN] = useState(10)
   // Last event per phase, so completed steps keep their final N/N count.
   const seenRef = useRef<Record<string, ProgressEvt>>({})
   const abortRef = useRef<AbortController | null>(null)
+  // Staged sells for this slot: the all_murk cycle treats them as already sold
+  // (freed storage + refunds funding purchases). Staging is always manual —
+  // pre-owned relics are never auto-sold.
+  const pendingSells = usePendingSlot(slotIndex).sells
 
   const activeBuckets = BUCKETS.filter((b) => (qty[b.key] ?? 0) > 0)
   const fixedCost = activeBuckets.reduce(
@@ -581,7 +600,11 @@ function RitesTool({
       )
     form.append("buckets", JSON.stringify(buckets))
     form.append("stop_mode", stopMode)
+    form.append("top_n", String(topN))
     if (stopMode === "budget") form.append("budget", String(budget))
+    // Only the all_murk cycle consumes staged sells (backend rejects otherwise).
+    if (stopMode === "all_murk" && pendingSells.length)
+      form.append("sold_handles", JSON.stringify(pendingSells))
     const inc = inclusion.filter(ruleHasCondition).map(serializeRule)
     const exc = exclusion.filter(ruleHasCondition).map(serializeRule)
     if (inc.length) form.append("inclusion_rules", JSON.stringify(inc))
@@ -636,6 +659,7 @@ function RitesTool({
       if (streamErr) throw new Error(streamErr)
       if (!result) throw new Error("No plan was returned.")
       setPlan(result)
+      setPlanStop(stopMode)
       setSelected(new Set(result.keepers.map((_, i) => i)))
     } catch (err) {
       if ((err as Error)?.name !== "AbortError")
@@ -662,6 +686,8 @@ function RitesTool({
     }
     // The plan's murk_delta assumes ALL keepers are kept. A deselected keeper is
     // instead sold, so refund its sell value on top (faithful to buy-then-sell).
+    // Staged-sell refunds are NOT in murk_delta — those sells credit themselves
+    // through the export's sell step.
     const dropped = plan.keepers.filter((_, i) => !selected.has(i))
     const extraRefund = dropped.reduce(
       (n, k) => n + sellValueLocal(k.effects, k.is_deep),
@@ -691,14 +717,6 @@ function RitesTool({
     setSelected(new Set())
   }
 
-  function cullUnused() {
-    if (!plan?.cull_candidates.length) return
-    for (const h of plan.cull_candidates) toggleSell(slotIndex, h)
-    showSuccessToast(
-      `Staged ${plan.cull_candidates.length} owned relic(s) for sale. Review in the Changes panel.`,
-    )
-  }
-
   return (
     <div className="space-y-6">
       {/* Balances */}
@@ -707,7 +725,23 @@ function RitesTool({
           <Coins className="h-4 w-4 text-amber-500" />
           <strong>{murks != null ? formatMurks(murks) : "—"}</strong> Murk
         </span>
-        <span className="text-muted-foreground">Storage cap: {RELIC_CAP}</span>
+        {plan && planStop === "all_murk" ? (
+          // storage_left = 1950 − owned after staged sells, so occupancy after
+          // staging the selected keepers is (1950 − storage_left) + selected.
+          <span className="text-muted-foreground">
+            Storage:{" "}
+            <strong>
+              {(RELIC_CAP - plan.storage_left + selected.size).toLocaleString()}
+            </strong>{" "}
+            / {RELIC_CAP.toLocaleString()}
+            {plan.pending_sold > 0 &&
+              ` (after ${plan.pending_sold} staged sell${plan.pending_sold === 1 ? "" : "s"})`}
+          </span>
+        ) : (
+          <span className="text-muted-foreground">
+            Storage cap: {RELIC_CAP}
+          </span>
+        )}
       </div>
 
       {/* Match against builds (opt-in + scoped — avoids optimizing every build) */}
@@ -776,6 +810,29 @@ function RitesTool({
                 </button>
               )
             })}
+          </div>
+        )}
+        {selectedBuilds.size > 0 && (
+          <div className="flex flex-wrap items-center gap-2 pt-1 text-xs">
+            <label htmlFor="rites-match-depth" className="font-medium">
+              Match depth
+            </label>
+            <select
+              id="rites-match-depth"
+              value={topN}
+              onChange={(e) => setTopN(Number(e.target.value))}
+              className="rounded-md border bg-background px-2 py-1"
+            >
+              {Array.from({ length: 10 }, (_, i) => i + 1).map((n) => (
+                <option key={n} value={n}>
+                  Top {n}
+                </option>
+              ))}
+            </select>
+            <span className="text-muted-foreground">
+              Keep a purchase only if it earns a spot in one of a build's top{" "}
+              {topN} ranked loadout{topN === 1 ? "" : "s"} — lower is stricter.
+            </span>
           </div>
         )}
         {selectedBuilds.size > 10 && (
@@ -946,96 +1003,167 @@ function RitesTool({
               <strong>{formatMurks(plan.murk_after)}</strong>{" "}
               <span className="text-muted-foreground">
                 (−{formatMurks(plan.murk_cost)} +
-                {formatMurks(plan.murk_refunded)})
+                {formatMurks(plan.murk_refunded)}
+                {plan.pending_sold_refund > 0 &&
+                  ` +${formatMurks(plan.pending_sold_refund)} staged sells`}
+                )
               </span>
             </span>
             {plan.limited_by && (
               <Badge variant="secondary">limited by {plan.limited_by}</Badge>
             )}
           </div>
+          {plan.limited_by === "storage" && (
+            <p className="text-xs text-muted-foreground">
+              Storage is full — trash relics from the Inventory and re-run.
+              Staged sells free space for this simulation.
+            </p>
+          )}
+          {plan.kept > plan.add_capacity + pendingSells.length && (
+            <p className="text-xs text-amber-600 dark:text-amber-500">
+              This save can mint {plan.add_capacity + pendingSells.length}{" "}
+              relic(s) in one export (each staged sell frees one slot). Stage
+              more sells or export in batches.
+            </p>
+          )}
 
           {plan.keepers.length === 0 ? (
             <p className="text-sm text-muted-foreground">
-              No keepers — none of the rolled relics improved a build's best
-              loadout or matched an "always keep" rule. Try a larger batch or a
+              No keepers — none of the rolled relics earned a spot in a selected
+              build's top loadouts (at the chosen match depth) or matched an
+              "always keep" rule. Try a larger batch, a wider match depth, or a
               rule.
             </p>
           ) : (
-            <ul className="space-y-1">
-              {plan.keepers.map((k, i) => (
-                <li
-                  key={`${k.item_id}-${i}`}
-                  className="flex items-start gap-2 rounded-md border px-3 py-2 text-sm"
-                >
-                  <input
-                    type="checkbox"
-                    checked={selected.has(i)}
-                    onChange={() =>
-                      setSelected((s) => {
-                        const n = new Set(s)
-                        n.has(i) ? n.delete(i) : n.add(i)
-                        return n
-                      })
-                    }
-                    className="mt-1 h-4 w-4"
-                  />
-                  <div className="min-w-0 flex-1">
-                    <div className="font-medium">
-                      {k.name}{" "}
-                      <span className="text-xs text-muted-foreground">
-                        {k.tier} {k.color}
-                        {k.is_deep ? " · Deep" : ""}
-                      </span>
-                    </div>
-                    <div className="truncate text-xs text-muted-foreground">
-                      {k.effects
-                        .map((e) => nameOf(effectMap, e))
-                        .filter(Boolean)
-                        .join(" · ")}
-                      {k.curses.some((c) => nameOf(effectMap, c)) && (
-                        <span className="text-red-500">
-                          {" "}
-                          ⛧{" "}
-                          {k.curses
-                            .map((c) => nameOf(effectMap, c))
-                            .filter(Boolean)
-                            .join(" · ")}
-                        </span>
-                      )}
-                    </div>
-                    <div className="mt-0.5 flex flex-wrap gap-1">
-                      {k.reason === "inclusion" && (
-                        <Badge variant="default" className="text-[10px]">
-                          kept by rule
-                        </Badge>
-                      )}
-                      {k.builds.map((b) => (
-                        <Badge
-                          key={b}
-                          variant="outline"
-                          className="text-[10px]"
-                        >
-                          {b}
-                        </Badge>
-                      ))}
-                    </div>
-                  </div>
-                </li>
-              ))}
-            </ul>
+            // Same presentation as the Inventory table (RelicNameCell +
+            // EffectList), with a "Kept for" column naming each keeper's builds.
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-10">
+                    <Checkbox
+                      checked={selected.size === plan.keepers.length}
+                      onCheckedChange={() =>
+                        setSelected((s) =>
+                          s.size === plan.keepers.length
+                            ? new Set()
+                            : new Set(plan.keepers.map((_, i) => i)),
+                        )
+                      }
+                      aria-label="Select all keepers"
+                    />
+                  </TableHead>
+                  <TableHead>Relic</TableHead>
+                  <TableHead>Effects</TableHead>
+                  <TableHead className="w-44">Kept for</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {plan.keepers.map((k, i) => {
+                  const effectsCell = EffectList({
+                    effectIds: k.effects,
+                    isCurse: false,
+                    effectMap,
+                  })
+                  const cursesCell = EffectList({
+                    effectIds: k.curses,
+                    isCurse: true,
+                    effectMap,
+                  })
+                  return (
+                    <TableRow
+                      key={`${k.item_id}-${i}`}
+                      data-state={selected.has(i) ? "selected" : undefined}
+                    >
+                      <TableCell>
+                        <Checkbox
+                          checked={selected.has(i)}
+                          onCheckedChange={() =>
+                            setSelected((s) => {
+                              const n = new Set(s)
+                              n.has(i) ? n.delete(i) : n.add(i)
+                              return n
+                            })
+                          }
+                          aria-label={`Select ${k.name}`}
+                        />
+                      </TableCell>
+                      <TableCell className="min-w-[180px]">
+                        <RelicNameCell
+                          name={k.name}
+                          color={k.color}
+                          tier={TIER_NAMES[Number(k.tier)] ?? String(k.tier)}
+                          isDeep={k.is_deep}
+                        />
+                      </TableCell>
+                      <TableCell>
+                        {effectsCell || cursesCell ? (
+                          <div className="flex flex-col gap-1.5">
+                            {effectsCell}
+                            {cursesCell}
+                          </div>
+                        ) : (
+                          <span className="text-xs text-muted-foreground italic">
+                            —
+                          </span>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex flex-wrap gap-1">
+                          {k.reason === "inclusion" && (
+                            <Badge variant="default" className="text-[10px]">
+                              kept by rule
+                            </Badge>
+                          )}
+                          {k.reason === "kept" && (
+                            <Badge variant="secondary" className="text-[10px]">
+                              no build filter
+                            </Badge>
+                          )}
+                          {k.builds.map((b, bi) => {
+                            const rank = k.build_ranks?.[bi] ?? 0
+                            const isBest = rank === 1
+                            return (
+                              <Badge
+                                key={b}
+                                variant={isBest ? "default" : "outline"}
+                                className={cn(
+                                  "text-[10px]",
+                                  isBest &&
+                                    "border-transparent bg-amber-500 text-amber-950 hover:bg-amber-500",
+                                )}
+                                title={
+                                  isBest
+                                    ? `Lands in ${b}'s single best loadout`
+                                    : rank > 0
+                                      ? `Lands in ${b}'s #${rank} ranked loadout`
+                                      : undefined
+                                }
+                              >
+                                {b}
+                                {rank > 0 && (
+                                  <span
+                                    className={
+                                      isBest ? "font-bold" : "opacity-70"
+                                    }
+                                  >
+                                    {" "}
+                                    #{rank}
+                                  </span>
+                                )}
+                              </Badge>
+                            )
+                          })}
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  )
+                })}
+              </TableBody>
+            </Table>
           )}
 
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={cullUnused}
-              disabled={!plan.cull_candidates.length}
-              className="gap-1.5"
-            >
-              <Trash2 className="h-4 w-4" />
-              Cull {plan.cull_candidates.length} owned relic(s)
-            </Button>
+          <div className="flex flex-wrap items-center justify-end gap-2">
             <Button
               onClick={stageKeepers}
               disabled={selected.size === 0}

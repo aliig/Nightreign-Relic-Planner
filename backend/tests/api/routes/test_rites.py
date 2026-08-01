@@ -55,6 +55,51 @@ class TestRitesPlanValidation:
         )
         assert resp.status_code == 422
 
+    @pytest.mark.parametrize("top_n", [0, 11])
+    def test_rejects_out_of_range_top_n(self, client: TestClient, top_n: int) -> None:
+        resp = client.post(
+            "/api/v1/saves/rites/plan",
+            files={"file": ("save.sl2", b"BND4dummy")},
+            data={
+                "slot_index": "0",
+                "builds": json.dumps([_MINIMAL_BUILD]),
+                "buckets": json.dumps([_SCENIC_BUCKET]),
+                "top_n": str(top_n),
+            },
+        )
+        assert resp.status_code == 422
+        assert "top_n" in resp.json()["detail"]
+
+    def test_rejects_malformed_sold_handles(self, client: TestClient) -> None:
+        resp = client.post(
+            "/api/v1/saves/rites/plan",
+            files={"file": ("save.sl2", b"BND4dummy")},
+            data={
+                "slot_index": "0",
+                "builds": json.dumps([_MINIMAL_BUILD]),
+                "buckets": json.dumps([{"is_deep": False, "version": "1.03"}]),
+                "stop_mode": "all_murk",
+                "sold_handles": "not-json",
+            },
+        )
+        assert resp.status_code == 422
+
+    def test_rejects_sold_handles_outside_all_murk(self, client: TestClient) -> None:
+        """Staged sells only feed the all_murk cycle — fixed/budget stay untouched."""
+        resp = client.post(
+            "/api/v1/saves/rites/plan",
+            files={"file": ("save.sl2", b"BND4dummy")},
+            data={
+                "slot_index": "0",
+                "builds": json.dumps([_MINIMAL_BUILD]),
+                "buckets": json.dumps([_SCENIC_BUCKET]),
+                "stop_mode": "fixed",
+                "sold_handles": json.dumps([123]),
+            },
+        )
+        assert resp.status_code == 422
+        assert "all_murk" in resp.json()["detail"]
+
 
 @requires_fixture
 @pytest.mark.usefixtures("override_game_data")
@@ -79,20 +124,131 @@ class TestRitesPlanFull:
         assert plan["kept"] + plan["duds"] == plan["generated"]
         assert plan["kept"] == len(plan["keepers"])
         assert plan["murk_after"] >= 0
-        assert plan["murk_after"] == plan["murk_before"] - (
-            plan["murk_cost"] - plan["murk_refunded"]
+        assert plan["murk_delta"] == plan["murk_refunded"] - plan["murk_cost"]
+        assert plan["murk_after"] == (
+            plan["murk_before"] + plan["pending_sold_refund"] + plan["murk_delta"]
         )
-        assert plan["murk_delta"] == plan["murk_after"] - plan["murk_before"]
+        assert plan["pending_sold"] == 0  # fixed mode never consumes staged sells
 
-        # keepers carry a mint-ready spec.
+        # keepers carry a mint-ready spec, with loadout ranks aligned to builds.
         for k in plan["keepers"]:
             assert {"real_id", "effects", "curses", "color", "tier", "builds"} <= set(k)
             assert len(k["effects"]) == 3 and len(k["curses"]) == 3
+            assert len(k["build_ranks"]) == len(k["builds"])
+            if k["reason"] == "build":
+                assert all(r >= 1 for r in k["build_ranks"])
 
-        # cull candidates are plain owned ga_handles.
-        assert isinstance(plan["cull_candidates"], list)
-        assert all(isinstance(h, int) for h in plan["cull_candidates"])
+        # pre-owned relics are never analyzed or sold by the plan.
+        assert "cull_candidates" not in plan
         assert plan["storage_left"] >= 0
+
+
+@requires_fixture
+@pytest.mark.usefixtures("override_game_data")
+class TestRitesAllMurkCycle:
+    """all_murk walk + staged sells (sold_handles) against the real fixture.
+
+    Uses no builds + a match-everything exclusion rule so no optimizer runs —
+    the test exercises generation, the walk, and the staged-sell plumbing only.
+    """
+
+    _SELL_ALL = json.dumps([{"effect_counts": [1, 2, 3]}])
+
+    @staticmethod
+    def _save_state():
+        """(owned_count, murk, one sellable ga_handle) from the fixture."""
+        import tempfile
+        from pathlib import Path as _P
+
+        from nrplanner import LoadoutHandler, decrypt_sl2, parse_relics
+        from nrplanner.writer import read_favorite_handles
+
+        from app.core.game_data import get_game_data
+
+        with tempfile.TemporaryDirectory() as td:
+            decrypt_sl2(FIXTURE_PATH, td)
+            blob = (_P(td) / "USERDATA_00").read_bytes()
+        relics, items_end = parse_relics(blob)
+        ds = get_game_data()
+        loadout = LoadoutHandler(ds)
+        loadout.parse(blob)
+        equipped = set(loadout.relic_ga_hero_map.keys())
+        favorites = read_favorite_handles(blob, items_end)
+        sellable = next(
+            r.ga_handle for r in relics
+            if r.ga_handle not in equipped and r.ga_handle not in favorites
+        )
+        return len(relics), sellable, equipped | favorites
+
+    def _plan(self, client: TestClient, sold: list[int]) -> dict:
+        resp = client.post(
+            "/api/v1/saves/rites/plan",
+            files={"file": ("NR0000.sl2", FIXTURE_PATH.read_bytes())},
+            data={
+                "slot_index": "0",
+                "buckets": json.dumps([{"is_deep": False, "version": "1.03"}]),
+                "stop_mode": "all_murk",
+                "exclusion_rules": self._SELL_ALL,
+                "sold_handles": json.dumps(sold),
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        return resp.json()
+
+    def test_staged_sell_frees_slot_and_funds_walk(
+        self, client: TestClient
+    ) -> None:
+        owned_count, sellable, _ = self._save_state()
+        plan = self._plan(client, [sellable])
+
+        assert plan["pending_sold"] == 1
+        assert plan["pending_sold_refund"] > 0
+        # Pure in-game cap, post-staged-sells; no ghost-capacity clamp.
+        assert plan["storage_left"] == 1950 - (owned_count - 1)
+        # Walk invariants: everything sold back, wallet drained below one buy.
+        assert plan["kept"] == 0 and plan["duds"] == plan["generated"]
+        assert plan["limited_by"] == "murk"
+        assert 0 <= plan["murk_after"] < 600
+        assert plan["murk_delta"] == plan["murk_refunded"] - plan["murk_cost"]
+        assert plan["murk_after"] == (
+            plan["murk_before"] + plan["pending_sold_refund"] + plan["murk_delta"]
+        )
+
+    def test_deterministic_rerun(self, client: TestClient) -> None:
+        """Same save + same staged sells -> byte-identical plan (anti-save-scum)."""
+        _, sellable, _ = self._save_state()
+        assert self._plan(client, [sellable]) == self._plan(client, [sellable])
+
+    def test_protected_sold_handle_rejected(self, client: TestClient) -> None:
+        _, _, protected = self._save_state()
+        if not protected:
+            pytest.skip("fixture has no equipped/bookmarked relic")
+        resp = client.post(
+            "/api/v1/saves/rites/plan",
+            files={"file": ("NR0000.sl2", FIXTURE_PATH.read_bytes())},
+            data={
+                "slot_index": "0",
+                "buckets": json.dumps([{"is_deep": False, "version": "1.03"}]),
+                "stop_mode": "all_murk",
+                "sold_handles": json.dumps([next(iter(protected))]),
+            },
+        )
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["error"] == "protected_relics"
+
+    def test_unknown_sold_handle_rejected(self, client: TestClient) -> None:
+        resp = client.post(
+            "/api/v1/saves/rites/plan",
+            files={"file": ("NR0000.sl2", FIXTURE_PATH.read_bytes())},
+            data={
+                "slot_index": "0",
+                "buckets": json.dumps([{"is_deep": False, "version": "1.03"}]),
+                "stop_mode": "all_murk",
+                "sold_handles": json.dumps([0xDEADBEEF]),
+            },
+        )
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["error"] == "unknown_relics"
 
 
 class TestValidatedSeedFps:

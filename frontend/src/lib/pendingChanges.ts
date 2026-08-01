@@ -15,6 +15,8 @@
  */
 import { useEffect, useRef, useSyncExternalStore } from "react"
 
+import { effectCountOf, sellValue } from "./sellValue"
+
 export type PendingLoadoutOp =
   | {
       id: string
@@ -281,11 +283,27 @@ export function addMints(
   }))
 }
 
-/** Un-stage one minted relic. Resets the Murk delta once the last mint is removed. */
+/**
+ * Un-stage one minted relic. Faithful buy-then-sell: the relic was still bought
+ * in the simulated session, so removing it credits its SELL value back into the
+ * batch's Murk delta (exactly like deselecting it before staging). Removing the
+ * LAST mint instead cancels the whole purchase session — no mints staged means
+ * the session never happened, so the delta resets to 0.
+ */
 export function removeMint(slot: number, id: string): void {
   updateSlot(slot, (s) => {
+    const removed = s.mints.find((m) => m.id === id)
+    if (!removed) return s
     const mints = s.mints.filter((m) => m.id !== id)
-    return { ...s, mints, murkDelta: mints.length === 0 ? 0 : s.murkDelta }
+    return {
+      ...s,
+      mints,
+      murkDelta:
+        mints.length === 0
+          ? 0
+          : s.murkDelta +
+            sellValue(effectCountOf(removed.effects), removed.isDeep),
+    }
   })
 }
 

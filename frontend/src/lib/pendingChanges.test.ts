@@ -123,6 +123,19 @@ describe("pendingChanges mints (Relic Rites)", () => {
     expect(pc.readAll()[0]).toBeUndefined()
   })
 
+  it("credits the removed keeper's sell value into the murk delta", async () => {
+    const pc = await freshStore()
+    pc.addMints(0, [spec(200), spec(201)], -1200)
+    const firstId = pc.readSlot(0).mints[0].id
+    pc.removeMint(0, firstId)
+    // spec() is a 3-effect normal relic -> sold back for 550 (buy-then-sell).
+    expect(pc.readSlot(0).murkDelta).toBe(-1200 + 550)
+    // Removing the LAST mint cancels the session outright (slot dropped, no
+    // lingering delta) rather than crediting another sale.
+    pc.removeMint(0, pc.readSlot(0).mints[0].id)
+    expect(pc.readAll()[0]).toBeUndefined()
+  })
+
   it("is a no-op for an empty batch", async () => {
     const pc = await freshStore()
     pc.addMints(0, [], 0)

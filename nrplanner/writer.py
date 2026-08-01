@@ -15,11 +15,13 @@ Write recipe (per character USERDATA blob, ``items_end`` = return of
   * slot MD5      ``md5(blob[4 : len-28])`` written at ``blob[len-28 : len-12]``
   * encryption    AES-128-CBC, key ``_DS2_KEY``, fresh 16-byte IV per entry
 
-Deleting a relic must preserve the blob's total byte length (the BND4 repack
-rejects size changes). We mirror the proven upstream removal: empty the relic's
-ItemState record (relic ~80 bytes -> 8-byte empty record), zero its 14-byte
-ItemEntry, decrement the entry count, then re-insert the freed bytes as zero
-padding immediately before the final 28-byte trailer.
+Selling a relic must preserve the blob's total byte length (the BND4 repack
+rejects size changes). We tombstone in place: the relic's 80-byte ItemState
+record is left byte-for-byte intact and only its 14-byte ItemEntry row is
+zeroed (entry count decremented). The intact record becomes a "ghost" — a
+Layer-1 record with no Layer-2 row, the exact shape the game itself leaves
+after a run session (ghost resurrection in-game validated 2026-07-14) — so
+``add_relics`` can reuse it: every sell raises ``add_capacity`` by one.
 """
 import hashlib
 import os
@@ -43,7 +45,6 @@ _NAME_REL_OFFSET = 0x94               # player name region
 _MURKS_REL_OFFSET = 0x94 + 52         # Murks (u32 little-endian)
 _ENTRY_COUNT_REL_OFFSET = 0x94 + 0x5B8  # ItemEntry count (u32), then records
 _TRAILER_LEN = 0x1C                   # 28-byte trailer: md5(16) + padding(12)
-_EMPTY_STATE = b"\x00" * 8            # empty ItemState record
 _U32_MAX = 0xFFFFFFFF
 
 # --- BND4 container constants (mirror save.decrypt_sl2) --------------------
@@ -84,7 +85,6 @@ class DeleteResult:
     entry_count_after: int = 0
     murks_before: int = 0
     murks_after: int = 0
-    bytes_freed: int = 0
 
 
 def sell_value(effect_count: int, is_deep: bool) -> int:
@@ -194,7 +194,11 @@ def patch_slot_checksum(blob: bytearray) -> None:
 
 
 def delete_relics(blob: bytes, ga_handles, murk_credit: int = 0) -> tuple[bytes, DeleteResult]:
-    """Delete relics by ga_handle and credit Murk, preserving total byte length.
+    """Sell relics by ga_handle and credit Murk, preserving total byte length.
+
+    Tombstones in place: the relic's ItemState record is left intact and only
+    its ItemEntry row is removed (see the module docstring). The record becomes
+    a resurrectable ghost, so each sell raises ``add_capacity`` by one.
 
     Args:
         blob: a decrypted USERDATA character blob.
@@ -210,67 +214,43 @@ def delete_relics(blob: bytes, ga_handles, murk_credit: int = 0) -> tuple[bytes,
 
     items, items_end = _parse_items(data, start_offset=0x14, slot_count=5120)
 
-    # --- rebuild the ItemState region, emptying targeted relic records ------
-    region = bytearray()
-    freed = 0
-    matched: set[int] = set()
-    for item in items:
-        original = data[item.offset:item.offset + item.size]
-        if item.gaitem_handle in targets:
-            if (item.gaitem_handle & 0xF0000000) != ITEM_TYPE_RELIC:
-                # Only relics are sellable; leave non-relics untouched.
-                region += original
-                continue
-            region += _EMPTY_STATE
-            freed += item.size - len(_EMPTY_STATE)
-            matched.add(item.gaitem_handle)
-        else:
-            region += original
-
+    # Only relics are sellable; non-relic and absent targets land in not_found.
+    matched = {
+        item.gaitem_handle for item in items
+        if item.gaitem_handle in targets
+        and (item.gaitem_handle & 0xF0000000) == ITEM_TYPE_RELIC
+    }
     result.not_found_handles = sorted(targets - matched)
-    result.bytes_freed = freed
-
-    # --- operate on the tail (everything from items_end onward) -------------
-    tail = bytearray(data[items_end:])
 
     # Murks
-    murks_off = _MURKS_REL_OFFSET
-    murks_before = struct.unpack_from("<I", tail, murks_off)[0]
+    murks_off = items_end + _MURKS_REL_OFFSET
+    murks_before = struct.unpack_from("<I", data, murks_off)[0]
     murks_after = min(murks_before + max(murk_credit, 0), _U32_MAX)
-    struct.pack_into("<I", tail, murks_off, murks_after)
+    struct.pack_into("<I", data, murks_off, murks_after)
     result.murks_before = murks_before
     result.murks_after = murks_after
 
-    # ItemEntry table: zero matching records, decrement count
-    count_off = _ENTRY_COUNT_REL_OFFSET
+    # ItemEntry table: zero matching records, decrement count. The ItemState
+    # records are deliberately untouched — that is what makes them ghosts.
+    count_off = items_end + _ENTRY_COUNT_REL_OFFSET
     entries_start = count_off + 4
-    entry_count_before = struct.unpack_from("<I", tail, count_off)[0]
+    entry_count_before = struct.unpack_from("<I", data, count_off)[0]
     removed = 0
     for i in range(_ITEM_ENTRY_SLOT_COUNT):
         off = entries_start + i * _ITEM_ENTRY_SIZE
-        if off + _ITEM_ENTRY_SIZE > len(tail):
+        if off + _ITEM_ENTRY_SIZE > len(data):
             break
-        handle = struct.unpack_from("<I", tail, off)[0]
+        handle = struct.unpack_from("<I", data, off)[0]
         if handle in matched:
-            tail[off:off + _ITEM_ENTRY_SIZE] = b"\x00" * _ITEM_ENTRY_SIZE
+            data[off:off + _ITEM_ENTRY_SIZE] = b"\x00" * _ITEM_ENTRY_SIZE
             removed += 1
     entry_count_after = max(entry_count_before - removed, 0)
-    struct.pack_into("<I", tail, count_off, entry_count_after)
+    struct.pack_into("<I", data, count_off, entry_count_after)
     result.entry_count_before = entry_count_before
     result.entry_count_after = entry_count_after
 
-    # Re-insert freed bytes as zero padding just before the final trailer so
-    # the total blob length is preserved.
-    if freed:
-        tail = tail[:-_TRAILER_LEN] + b"\x00" * freed + tail[-_TRAILER_LEN:]
-
-    new_data = bytearray(data[:0x14]) + region + tail
-    assert len(new_data) == len(blob), (
-        f"length changed: {len(blob)} -> {len(new_data)}"
-    )
-
     result.removed_handles = sorted(matched)
-    return bytes(new_data), result
+    return bytes(data), result
 
 
 _RELIC_STATE_SIZE = 80  # full relic ItemState record (see save.Item.from_bytes)

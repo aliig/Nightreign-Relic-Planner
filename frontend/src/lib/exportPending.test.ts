@@ -74,6 +74,64 @@ describe("exportPendingChanges", () => {
     expect(summary.filename).toBe("NR0000_edited.sl2")
   })
 
+  it("runs sells before mints so refunds land before the mint debit", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(res({ "x-relics-removed": "1" }))
+      .mockResolvedValueOnce(res({ "x-relics-added": "2" }))
+      .mockResolvedValueOnce(res({ "x-loadouts-added": "1" }))
+    vi.stubGlobal("fetch", fetchMock)
+
+    const pending: Record<number, SlotPending> = {
+      0: {
+        sells: [10],
+        favorites: {},
+        loadoutOps: [
+          {
+            id: "a",
+            kind: "add",
+            character: "Wylder",
+            vessel_id: 1002,
+            ga_handles: [],
+            name: "x",
+          },
+        ],
+        mints: [
+          {
+            id: "m1",
+            real_id: 205,
+            item_id: 205 + 2147483648,
+            effects: [310000, 4294967295, 4294967295],
+            curses: [4294967295, 4294967295, 4294967295],
+            name: "Minted",
+            color: "Red",
+            tier: "Delicate",
+            isDeep: false,
+            oddsSource: "exact",
+            builds: [],
+          },
+        ],
+        murkDelta: -450,
+        meta: {},
+      },
+    }
+
+    const summary = await exportPendingChanges(
+      new File([new Uint8Array([0])], "s.sl2"),
+      pending,
+    )
+
+    expect(fetchMock.mock.calls.map((c) => c[0])).toEqual([
+      "/api/v1/saves/export",
+      "/api/v1/saves/export-add-relics",
+      "/api/v1/saves/export-loadouts",
+    ])
+    const addForm = fetchMock.mock.calls[1][1].body as FormData
+    expect(addForm.get("murk_delta")).toBe("-450")
+    expect(summary.sold).toBe(1)
+    expect(summary.minted).toBe(2)
+  })
+
   it("skips the relic call when only loadout ops are pending", async () => {
     const fetchMock = vi
       .fn()

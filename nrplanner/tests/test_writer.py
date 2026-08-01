@@ -207,6 +207,26 @@ class TestRoundTrip:
         assert _read_entry_count(rt_blob) == count_before - 1
         assert _read_murks(rt_blob) == min(murks_before + credit, 0xFFFFFFFF)
 
+        # Tombstone: the sold record survives as a resurrectable ghost, so
+        # selling RAISES add_capacity by one (1 ghost + 1 free ItemEntry row).
+        assert victim.ga_handle in {g.gaitem_handle for g in _ghost_relics(new_blob)}
+        assert add_capacity(new_blob) == add_capacity(userdata) + 1
+
+    def test_sell_then_mint_reuses_freed_slot(self, userdata, items_json, ds):
+        """The export chain runs sells before mints: a slot freed by a sell must
+        be mintable in the same pass, exactly like any pre-existing ghost."""
+        victim = _pick_deletable(userdata, items_json, ds)
+        sold_blob, _ = delete_relics(userdata, {victim.ga_handle})
+        cap = add_capacity(sold_blob)
+        assert cap == add_capacity(userdata) + 1
+
+        relics, _ = parse_relics(sold_blob)
+        record = sold_blob[relics[0].offset:relics[0].offset + 80]
+        new_blob, res = add_relics(sold_blob, [record] * cap)
+        assert res.entry_count_after == res.entry_count_before + cap
+        with pytest.raises(AddCapacityError):
+            add_relics(new_blob, [record])
+
     def test_other_entries_unchanged(self, raw_save, userdata, items_json, ds):
         """Repacking entry 0 must leave the other BND4 entries byte-identical."""
         victim = _pick_deletable(userdata, items_json, ds)

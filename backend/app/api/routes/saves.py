@@ -83,7 +83,7 @@ from nrplanner import (
     set_favorites,
     split_memory_dat,
 )
-from nrplanner.constants import CHARACTER_NAMES, EMPTY_EFFECT
+from nrplanner.constants import CHARACTER_NAMES, EMPTY_EFFECT, RELIC_STORAGE_CAP
 from nrplanner.cumulative import summarize_cumulative_effects
 from nrplanner.changes import (
     build_signature,
@@ -110,8 +110,6 @@ from nrplanner.rites import (
     BuildContext,
     PurchaseBucket,
     bulk_acquire,
-    select_cull_handles,
-    unused_owned_handles,
 )
 from nrplanner.scoring import BuildScorer
 
@@ -1559,10 +1557,32 @@ async def export_add_relics(
 
 
 # ---------------------------------------------------------------------------
-# Relic Rites (bulk purchase + build-aware cull)
+# Relic Rites (bulk purchase simulation)
 # ---------------------------------------------------------------------------
 
-_RELIC_CAP = 1950  # in-game per-character relic storage cap (mirrors frontend RELIC_CAP)
+
+def _parse_sold_handles(raw: str, stop_mode: str) -> set[int]:
+    """Parse the staged-sell ga_handles form field. 422 on malformed input.
+
+    Only the all_murk cycle consumes staged sells (they free storage and fund
+    the walk); rejecting them elsewhere keeps fixed/budget behavior untouched.
+    """
+    try:
+        val = json.loads(raw or "[]")
+    except json.JSONDecodeError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail="sold_handles must be a JSON array of integers.") from exc
+    if not isinstance(val, list) or not all(isinstance(h, int) for h in val):
+        raise HTTPException(
+            status_code=422,
+            detail="sold_handles must be a JSON array of integers.")
+    out = set(val)
+    if out and stop_mode != "all_murk":
+        raise HTTPException(
+            status_code=422,
+            detail="sold_handles is only supported with stop_mode=all_murk.")
+    return out
 
 
 def _resolve_rites_builds(
@@ -1688,8 +1708,8 @@ def _rites_roll_seed(slot_index: int, current_murk: int, owned: list) -> int:
     return int.from_bytes(hashlib.sha256(fp.encode()).digest()[:8], "big")
 
 
-# Must match bulk_acquire/select_cull_handles' max_per_vessel default — the
-# snapshot-seed gate compares stored run params against this value.
+# Must match bulk_acquire's max_per_vessel default — the snapshot-seed gate
+# compares stored run params against this value.
 _RITES_MAX_PER_VESSEL = 3
 
 
@@ -1778,21 +1798,25 @@ def _rites_plan(
     file_bytes: bytes, filename: str, slot_index: int,
     build_ctxs: list[BuildContext], buckets: list[PurchaseBucket],
     stop_mode: str, budget: int | None, ds: Any, executor: Any, top_n: int,
-    include_cull: bool,
     inclusion_rules: list[dict] | None = None,
     exclusion_rules: list[dict] | None = None,
     progress: Any = None,
     snapshot_seeds: dict[str, dict] | None = None,
+    sold_handles: set[int] | None = None,
 ) -> dict:
-    """Compute a bulk-purchase + cull plan. Reads current Murk, owned relics, and
+    """Compute a bulk-purchase plan. Reads current Murk, owned relics, and
     capacity from the uploaded save (1:1 fidelity — never client-supplied). Persists
     nothing.
 
-    With no builds selected, keeping/culling are rules-only and NO optimizer runs
-    (instant). With builds, one optimize pass runs per build for the purchase and one per
-    build for the cull. ``progress`` (if given) is called (phase, current, total, message,
-    name) — ``name`` is the current build's name on per-build phases, else None — so
-    callers can stream feedback.
+    Pre-owned relics are NEVER analyzed or sold by this plan — only relics bought
+    within the run are auto-sold (duds). ``sold_handles`` (all_murk only) are owned
+    relics the user has already manually staged for sale elsewhere: the plan treats
+    them as gone (freed storage, refunds funding the purchase walk).
+
+    With no builds selected, keeping is rules-only and NO optimizer runs (instant).
+    With builds, one optimize pass runs per build. ``progress`` (if given) is called
+    (phase, current, total, message, name) — ``name`` is the current build's name on
+    per-build phases, else None — so callers can stream feedback.
     """
     def _emit(phase: str, current: int, total: int, message: str,
               name: str | None = None) -> None:
@@ -1801,24 +1825,76 @@ def _rites_plan(
 
     blob = _decrypt_slot_blob(file_bytes, filename, slot_index)
     raw_relics, items_end = parse_relics(blob)
-    owned = RelicInventory(raw_relics, get_items_json(), ds).relics
+    owned_all = RelicInventory(raw_relics, get_items_json(), ds).relics
     current_murk = read_murks(blob, items_end)
     cap = add_capacity(blob)
-    storage_left = max(0, min(_RELIC_CAP - len(owned), cap))
+
+    # Parsed once: staged-sell validation here + cull protection below.
+    loadout = LoadoutHandler(ds)
+    loadout.parse(blob)
+    equipped = set(loadout.relic_ga_hero_map.keys())
+    favorites = read_favorite_handles(blob, items_end)
+
+    sold_set = set(sold_handles or ())
+    if sold_set:
+        known = {o.ga_handle for o in owned_all}
+        missing = sorted(h for h in sold_set if h not in known)
+        if missing:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error": "unknown_relics",
+                    "message": "Some staged sells are not in this save file. "
+                               "Make sure you uploaded the same save the "
+                               "inventory came from.",
+                    "ga_handles": missing,
+                },
+            )
+        blocked_equipped = sorted(h for h in sold_set if h in equipped)
+        blocked_favorite = sorted(h for h in sold_set if h in favorites)
+        if blocked_equipped or blocked_favorite:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error": "protected_relics",
+                    "message": "Cannot sell equipped or bookmarked relics.",
+                    "equipped": blocked_equipped,
+                    "favorite": blocked_favorite,
+                },
+            )
+
+    # The plan's world state: staged sells are already gone (their slots freed,
+    # their content no longer owned, their refund value funding the walk).
+    owned = [o for o in owned_all if o.ga_handle not in sold_set]
+    pending_sold_refund = sum(
+        sell_value(o.effect_count, o.is_deep)
+        for o in owned_all if o.ga_handle in sold_set)
+
+    if stop_mode == "all_murk":
+        # Pure in-game storage cap. The writer's ghost add-capacity is an
+        # export-time concern only — the in-game buy/sell cycle is never
+        # constrained by it, so neither is the simulation.
+        storage_left = max(0, RELIC_STORAGE_CAP - len(owned))
+    else:
+        storage_left = max(0, min(RELIC_STORAGE_CAP - len(owned), cap))
 
     scorer = BuildScorer(ds)
     optimizer = VesselOptimizer(ds, scorer)
 
-    # Per-plan owned-only solve cache, shared by the purchase and cull passes
-    # and pre-seeded from optimization snapshots proven fresh for this save —
-    # each build's owned-only optimization runs at most once per plan, and not
-    # at all on a snapshot hit.
+    # Per-plan owned-only solve cache pre-seeded from optimization snapshots
+    # proven fresh for this save — a build with no relevant candidates skips
+    # its enlarged solve, and not even the owned-only one on a snapshot hit.
+    # Freshness is judged against the EFFECTIVE
+    # inventory (staged sells excluded): a snapshot whose relevant subset
+    # contains a staged-sold relic correctly misses (owned-only re-solve —
+    # accepted cost when staged sells overlap a build's relevant relics).
     owned_used: dict[str, set] = _validated_seed_fps(
         build_ctxs, snapshot_seeds, owned, ds)
 
     keepers: list[RitesKeeper] = []
     generated = kept = duds = 0
-    murk_after, murk_cost, murk_refunded = current_murk, 0, 0
+    murk_after = current_murk + pending_sold_refund
+    murk_cost, murk_refunded = 0, 0
     limited_by: str | None = None
 
     if buckets:
@@ -1829,12 +1905,17 @@ def _rites_plan(
             stop_mode=stop_mode, budget=budget,
             inclusion_rules=inclusion_rules, exclusion_rules=exclusion_rules,
             storage_cap_left=storage_left,
+            extra_budget=pending_sold_refund,
+            extra_reserved_handles=sold_set,
             scorer=scorer, optimizer=optimizer, executor=executor, top_n=top_n,
             max_per_vessel=_RITES_MAX_PER_VESSEL,
             progress=(lambda i, t, name: _emit(
                 "matching", i, t, f"Matching build {i}/{t}: {name}", name)),
-            # Deterministic per save-state: re-running without exporting can't re-roll.
-            seed=_rites_roll_seed(slot_index, current_murk, owned),
+            # Deterministic per save-state: re-running without exporting can't
+            # re-roll. Seeded from the RAW save (owned_all, save Murk) — staged
+            # sells are app-side state and must never perturb the roll stream
+            # (re-staging different sells is not a free re-roll).
+            seed=_rites_roll_seed(slot_index, current_murk, owned_all),
             owned_used_fps=owned_used,
         )
         for k in r.keepers:
@@ -1843,29 +1924,12 @@ def _rites_plan(
                 real_id=rel.real_id, item_id=rel.item_id, color=rel.color,
                 tier=rel.effect_count, is_deep=rel.is_deep, name=rel.name,
                 effects=list(rel.effects), curses=list(rel.curses), builds=k.builds,
-                reason=k.reason,
+                build_ranks=k.ranks, reason=k.reason,
             ))
         generated, kept, duds = r.generated, r.kept, r.duds
         murk_after, murk_cost, murk_refunded = (
             r.murk_after, r.murk_gross_cost, r.murk_refunded)
         limited_by = r.limited_by
-
-    cull: list[int] = []
-    if include_cull:
-        loadout = LoadoutHandler(ds)
-        loadout.parse(blob)
-        protected = set(loadout.relic_ga_hero_map.keys()) | read_favorite_handles(
-            blob, items_end)
-        _emit("culling", 0, len(build_ctxs), "Checking inventory to cull…")
-        cull = select_cull_handles(
-            owned, build_ctxs, ds,
-            inclusion_rules=inclusion_rules, exclusion_rules=exclusion_rules,
-            protected_handles=protected,
-            scorer=scorer, optimizer=optimizer, executor=executor, top_n=top_n,
-            max_per_vessel=_RITES_MAX_PER_VESSEL,
-            progress=(lambda i, t, name: _emit(
-                "culling", i, t, f"Cull check {i}/{t}: {name}", name)),
-            owned_used_fps=owned_used)
 
     _emit("finalizing", 1, 1, "Finalizing plan…")
     return {
@@ -1873,10 +1937,15 @@ def _rites_plan(
         "generated": generated, "kept": kept, "duds": duds,
         "murk_before": current_murk, "murk_after": murk_after,
         "murk_cost": murk_cost, "murk_refunded": murk_refunded,
-        "murk_delta": murk_after - current_murk,
+        # Mint-side net ONLY (rides /saves/export-add-relics). Staged-sell
+        # refunds are NOT included — the sells credit themselves via
+        # /saves/export. Invariant:
+        #   murk_after == murk_before + pending_sold_refund + murk_delta
+        "murk_delta": murk_refunded - murk_cost,
         "limited_by": limited_by,
         "add_capacity": cap, "storage_left": storage_left,
-        "cull_candidates": cull,
+        "pending_sold": len(sold_set),
+        "pending_sold_refund": pending_sold_refund,
     }
 
 
@@ -1894,28 +1963,31 @@ async def rites_plan(
     stop_mode: str = Form("fixed"),
     budget: int | None = Form(None),
     top_n: int = Form(10),
-    include_cull: bool = Form(True),
     inclusion_rules: str = Form("[]"),
     exclusion_rules: str = Form("[]"),
+    sold_handles: str = Form("[]"),
 ) -> RitesPlanResponse:
-    """Plan a bulk relic purchase + build-aware cull against the uploaded save.
+    """Plan a bulk relic purchase against the uploaded save.
 
     Reads Murk / owned relics / capacity from the save (never client-supplied — 1:1
     fidelity), rolls purchases with exact effect odds, keeps only relics used in a saved
-    build's top-N loadouts, and returns the keepers (to mint), the cull candidates (owned
-    relics no build uses, minus equipped/bookmarked), and the exact Murk math. Writes
-    NOTHING — the frontend stages this and applies it via /saves/export-add-relics
-    (mints + murk_delta) and /saves/export (cull sells). Synchronous MVP; a background/
-    SSE variant is a follow-up for very large batches.
+    build's top-N loadouts, and returns the keepers (to mint) and the exact Murk math.
+    Pre-owned relics are never analyzed or sold. Writes NOTHING — the frontend stages
+    this and applies it via /saves/export-add-relics (mints + murk_delta). Synchronous
+    MVP; the SSE variant below streams progress for large batches.
     """
     if stop_mode not in ("fixed", "budget", "all_murk"):
         raise HTTPException(
             status_code=422, detail="stop_mode must be one of fixed|budget|all_murk.")
+    if not 1 <= top_n <= 10:
+        raise HTTPException(
+            status_code=422, detail="top_n must be between 1 and 10.")
 
     build_ctxs = _resolve_rites_builds(build_ids, builds, current_user, session)
     parsed_buckets = _resolve_buckets(buckets)
     incl = _parse_rules(inclusion_rules, "inclusion_rules")
     excl = _parse_rules(exclusion_rules, "exclusion_rules")
+    sold = _parse_sold_handles(sold_handles, stop_mode)
 
     file_bytes = await file.read()
     if not file_bytes:
@@ -1925,8 +1997,8 @@ async def rites_plan(
     seeds = _rites_snapshot_seed_rows(session, build_ctxs, slot_index, top_n)
     plan = await run_in_threadpool(
         _rites_plan, file_bytes, filename, slot_index, build_ctxs, parsed_buckets,
-        stop_mode, budget, ds, executor, top_n, include_cull, incl, excl,
-        snapshot_seeds=seeds,
+        stop_mode, budget, ds, executor, top_n, incl, excl,
+        snapshot_seeds=seeds, sold_handles=sold,
     )
     return RitesPlanResponse(**plan)
 
@@ -1945,9 +2017,9 @@ async def rites_plan_stream(
     stop_mode: str = Form("fixed"),
     budget: int | None = Form(None),
     top_n: int = Form(10),
-    include_cull: bool = Form(True),
     inclusion_rules: str = Form("[]"),
     exclusion_rules: str = Form("[]"),
+    sold_handles: str = Form("[]"),
 ) -> StreamingResponse:
     """Streaming (SSE) form of /rites/plan — emits progress while it runs.
 
@@ -1965,11 +2037,15 @@ async def rites_plan_stream(
     if stop_mode not in ("fixed", "budget", "all_murk"):
         raise HTTPException(
             status_code=422, detail="stop_mode must be one of fixed|budget|all_murk.")
+    if not 1 <= top_n <= 10:
+        raise HTTPException(
+            status_code=422, detail="top_n must be between 1 and 10.")
 
     build_ctxs = _resolve_rites_builds(build_ids, builds, current_user, session)
     parsed_buckets = _resolve_buckets(buckets)
     incl = _parse_rules(inclusion_rules, "inclusion_rules")
     excl = _parse_rules(exclusion_rules, "exclusion_rules")
+    sold = _parse_sold_handles(sold_handles, stop_mode)
 
     file_bytes = await file.read()
     if not file_bytes:
@@ -1991,8 +2067,8 @@ async def rites_plan_stream(
             try:
                 holder["plan"] = _rites_plan(
                     file_bytes, filename, slot_index, build_ctxs, parsed_buckets,
-                    stop_mode, budget, ds, executor, top_n, include_cull, incl, excl,
-                    progress=_progress, snapshot_seeds=seeds)
+                    stop_mode, budget, ds, executor, top_n, incl, excl,
+                    progress=_progress, snapshot_seeds=seeds, sold_handles=sold)
             except HTTPException as exc:
                 holder["error"] = exc.detail
             except Exception as exc:  # noqa: BLE001 - surfaced as an SSE error event

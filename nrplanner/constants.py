@@ -8,6 +8,11 @@ ITEM_TYPE_RELIC  = 0xC0000000
 # Sentinel value for empty effect slots in save data
 EMPTY_EFFECT = 4294967295  # 0xFFFFFFFF
 
+# In-game per-character relic storage cap. Source: community-verified in-game
+# limit (the shop refuses purchases that would exceed it). Mirrored in the
+# frontend as RELIC_CAP (frontend/src/components/inventory/types.ts).
+RELIC_STORAGE_CAP = 1950
+
 # Character names (index 0-9 = playable; "All" used as a UI filter only)
 CHARACTER_NAME_ID = [100000, 100030, 100050, 100010, 100040, 100090,
                      100070, 100060, 110000, 110010]

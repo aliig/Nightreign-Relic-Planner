@@ -99,9 +99,12 @@ function filenameFrom(res: Response, fallback: string): string {
 
 /**
  * POST /saves/export-add-relics — mint purchased relics + apply the net Murk delta.
- * Returns the modified blob (fed to the next chain step). Runs FIRST in the chain so
- * ga_handles are assigned before anything downstream; a minted relic therefore cannot be
- * referenced by a same-export loadout op (its handle only exists after this call).
+ * Returns the modified blob (fed to the next chain step). Runs AFTER the sell step:
+ * the mint delta may exceed the save's current Murk when refunds funded purchasing,
+ * so the sell credit must land first (adjust_murks clamps at 0 — a debit-first
+ * order would silently manufacture Murk), and each tombstoned sell frees a ghost
+ * slot this call's mints can consume. Minted relics get server-assigned handles,
+ * so a same-export loadout op cannot reference them (loadouts still run last).
  */
 async function postAddRelicsExport(
   file: Blob,
@@ -218,21 +221,11 @@ export async function exportPendingChanges(
   for (const [slotStr, slot] of Object.entries(pending)) {
     const slotIndex = Number(slotStr)
 
-    // Mints first: they assign new ga_handles, so downstream steps operate on the
-    // final relic set. The net Murk delta (purchase cost − dud refunds) rides along.
-    if (slot.mints.length) {
-      const r = await postAddRelicsExport(
-        current,
-        filename,
-        slotIndex,
-        slot.mints,
-        slot.murkDelta,
-      )
-      current = r.blob
-      filename = r.filename
-      sum.minted += Number(r.headers.get("x-relics-added") ?? 0)
-    }
-
+    // Sells first: their Murk credit must land before the mint step's debit
+    // (which can exceed current Murk when refunds funded purchasing and would
+    // clamp at 0 — manufacturing Murk), and each tombstoned sell frees a ghost
+    // slot the mints below can consume. Sells/favorites only reference
+    // pre-existing handles, so mint ordering cannot affect them.
     if (slot.sells.length || Object.keys(slot.favorites).length) {
       const r = await postRelicExport(
         current,
@@ -245,6 +238,20 @@ export async function exportPendingChanges(
       filename = r.filename
       sum.sold += Number(r.headers.get("x-relics-removed") ?? 0)
       sum.bookmarks += Number(r.headers.get("x-favorites-changed") ?? 0)
+    }
+
+    // Mints second: the net Murk delta (purchase cost − dud refunds) rides along.
+    if (slot.mints.length) {
+      const r = await postAddRelicsExport(
+        current,
+        filename,
+        slotIndex,
+        slot.mints,
+        slot.murkDelta,
+      )
+      current = r.blob
+      filename = r.filename
+      sum.minted += Number(r.headers.get("x-relics-added") ?? 0)
     }
 
     const ops = slot.loadoutOps.map(toBackendOp)

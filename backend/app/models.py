@@ -278,24 +278,32 @@ class RitesKeeper(SQLModel):
     effects: list[int]
     curses: list[int]
     builds: list[str]               # names of builds whose top-N use this relic
+    # Best 1-based loadout rank per entry in `builds` (aligned): 1 = the build's
+    # single best loadout, N = the N-th ranked alternative. 0 = unknown.
+    build_ranks: list[int] = []
     reason: str = "build"           # "build" (used by a build's top-N) | "inclusion" (rule)
 
 
 class RitesPlanResponse(SQLModel):
     """The plan a bulk-purchase + cull request produces (nothing is written yet)."""
     keepers: list[RitesKeeper]      # relics to mint (feed to /saves/export-add-relics)
-    generated: int
+    generated: int                  # relics actually bought (all_murk: affordable prefix)
     kept: int
     duds: int
-    murk_before: int
-    murk_after: int                 # after net purchase cost (buys − dud refunds)
-    murk_cost: int                  # gross Murk spent buying everything generated
+    murk_before: int                # the save's real Murk
+    murk_after: int                 # projected save Murk after BOTH export steps
+    murk_cost: int                  # gross Murk spent buying everything bought
     murk_refunded: int              # Murk credited from selling the duds
-    murk_delta: int                 # signed net to apply on export (= murk_after − murk_before)
+    # Mint-side net for /saves/export-add-relics (= murk_refunded − murk_cost).
+    # Staged-sell refunds are excluded — the sells credit themselves via
+    # /saves/export. murk_after == murk_before + pending_sold_refund + murk_delta.
+    murk_delta: int
     limited_by: str | None = None   # "murk" | "storage" | "gen_max" | None
-    add_capacity: int               # max relics the save can accept this export
-    storage_left: int               # min(1950 − owned, add_capacity)
-    cull_candidates: list[int]      # ga_handles of owned relics no build's top-N uses
+    add_capacity: int               # max relics one export can mint (ghost slots)
+    storage_left: int               # all_murk: 1950 − owned after staged sells;
+                                    # fixed/budget: min(1950 − owned, add_capacity)
+    pending_sold: int = 0           # staged sells the plan honored (all_murk only)
+    pending_sold_refund: int = 0    # their total sell value (funds the walk)
 
 
 # ---------------------------------------------------------------------------

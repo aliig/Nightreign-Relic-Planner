@@ -107,19 +107,22 @@ class Keeper:
     """A generated relic worth keeping, and why."""
     relic: OwnedRelic
     builds: list[str] = field(default_factory=list)   # build names whose top-N use its content
+    # Best 1-based loadout rank per entry in `builds` (aligned; 1 = the build's
+    # single best loadout). 0 when unknown.
+    ranks: list[int] = field(default_factory=list)
     reason: str = "build"                              # "build" | "inclusion"
 
 
 @dataclass
 class BulkResult:
     keepers: list[Keeper]
-    generated: int
+    generated: int          # relics actually bought (all_murk: the affordable prefix)
     kept: int
     duds: int
-    murk_before: int
-    murk_after: int
-    murk_gross_cost: int    # total spent buying everything generated
-    murk_refunded: int      # total credited from selling the duds
+    murk_before: int        # the save's real Murk (never includes extra_budget)
+    murk_after: int         # >= 0; includes extra_budget (staged-sell refunds)
+    murk_gross_cost: int    # total spent buying everything bought
+    murk_refunded: int      # total credited from selling the duds (excludes extra_budget)
     limited_by: str | None  # "murk" | "storage" | "gen_max" | None
 
 
@@ -160,18 +163,29 @@ def _reserve_handles(count: int, taken: set[int]) -> list[int]:
 
 
 def _plan_counts(buckets: list[PurchaseBucket], stop_mode: str, budget: int | None,
-                 current_murk: int, gen_max: int) -> tuple[list[int], bool]:
+                 current_murk: int, gen_max: int,
+                 extra_budget: int = 0) -> tuple[list[int], bool]:
     """How many relics to generate per bucket. Approximate — exact Murk is settled later."""
     if stop_mode == "fixed":
         counts = [max(0, b.quantity or 0) for b in buckets]
     else:
-        target = budget if (stop_mode == "budget" and budget is not None) else current_murk
+        if stop_mode == "budget" and budget is not None:
+            target = budget
+        else:
+            target = current_murk + extra_budget
         target = max(0, target)
         share = target / len(buckets) if buckets else 0
         counts = []
         for b in buckets:
-            # Estimate net cost per relic (most get sold back); mid refund estimate.
-            net_per = max(1, b.buy_cost - sell_value(2, b.is_deep))
+            if stop_mode == "all_murk":
+                # Overshoot on purpose: assume every roll is a max-refund dud
+                # (sell_value(3): scenic 600−550=50, deep 1800−1100=700) so the
+                # settlement walk — not this estimate — decides where spending
+                # stops, and refunds are never left unspent. gen_max caps rolls.
+                net_per = max(1, b.buy_cost - sell_value(3, b.is_deep))
+            else:
+                # Estimate net cost per relic (most get sold back); mid refund estimate.
+                net_per = max(1, b.buy_cost - sell_value(2, b.is_deep))
             counts.append(int(share // net_per))
     total = sum(counts)
     gen_max_hit = False
@@ -190,6 +204,22 @@ def _used_fps_from_results(results) -> set:
             if a.relic is not None:
                 used.add(fingerprint_owned(a.relic))
     return used
+
+
+def _used_fp_ranks(results) -> dict:
+    """Content fingerprint -> best (lowest) 1-based loadout rank it appears at.
+
+    ``results`` is the globally ranked top-N list from ``optimize_all_vessels``
+    (best first), so list position IS the rank shown on the optimizer page.
+    """
+    ranks: dict = {}
+    for pos, res in enumerate(results, start=1):
+        for a in res.assignments:
+            if a.relic is not None:
+                fp = fingerprint_owned(a.relic)
+                if fp not in ranks:
+                    ranks[fp] = pos
+    return ranks
 
 
 def _optimize_used_fps(build_ctx: BuildContext, inventory: RelicInventory,
@@ -250,6 +280,8 @@ def bulk_acquire(*, builds: list[BuildContext], owned: list[OwnedRelic],
                  inclusion_rules: list[dict] | None = None,
                  exclusion_rules: list[dict] | None = None,
                  storage_cap_left: int = 10**9,
+                 extra_budget: int = 0,
+                 extra_reserved_handles: set[int] | None = None,
                  scorer: BuildScorer | None = None,
                  optimizer: VesselOptimizer | None = None, executor=None,
                  top_n: int = 10, max_per_vessel: int = 3, deadline_secs: float = 6.0,
@@ -260,8 +292,23 @@ def bulk_acquire(*, builds: list[BuildContext], owned: list[OwnedRelic],
     """Bulk-generate purchases, keep only build-relevant relics, refund the rest.
 
     Returns a BulkResult with the keepers (tagged by build), counts, and the exact Murk
-    delta (buys deducted, dud sells refunded). ``storage_cap_left`` bounds keepers added;
-    ``murk_after`` is guaranteed >= 0 (trims keepers/duds to fit the Murk you have).
+    delta (buys deducted, dud sells refunded). ``murk_after`` is guaranteed >= 0.
+
+    Settlement depends on ``stop_mode``:
+
+    * ``fixed`` / ``budget`` — one static settlement: ``storage_cap_left`` bounds
+      keepers added (lowest priority trimmed first), then keepers/duds are
+      dropped to fit the Murk you have.
+    * ``all_murk`` — a chronological per-relic walk that emulates the in-game
+      buy/sell cycle: each roll is bought in stream order (needs Murk and one
+      free storage slot), keepers consume a slot, duds are sold back on the spot
+      and their refunds fund further buying. ``storage_cap_left`` here means
+      free slots under the pure in-game 1950 cap. ``extra_budget`` (refund value
+      of the caller's already-staged sells of owned relics) is credited before
+      the first buy; it is excluded from ``murk_gross_cost``/``murk_refunded``
+      but included in ``murk_after``. ``owned`` must already exclude those
+      staged-sold relics; pass their handles via ``extra_reserved_handles`` so
+      synthetic handles cannot collide with them.
 
     ``owned_used_fps`` is the per-plan owned-only solve cache (see
     ``_owned_used_fps``): builds for which NO generated relic can score are
@@ -274,8 +321,9 @@ def bulk_acquire(*, builds: list[BuildContext], owned: list[OwnedRelic],
         rng = random.Random(seed)
 
     # 1. plan + 2. generate ------------------------------------------------------
-    counts, gen_max_hit = _plan_counts(buckets, stop_mode, budget, current_murk, gen_max)
-    taken = {o.ga_handle for o in owned}
+    counts, gen_max_hit = _plan_counts(
+        buckets, stop_mode, budget, current_murk, gen_max, extra_budget)
+    taken = {o.ga_handle for o in owned} | set(extra_reserved_handles or ())
     handles = _reserve_handles(sum(counts), taken)
 
     generated: list[OwnedRelic] = []
@@ -365,7 +413,10 @@ def bulk_acquire(*, builds: list[BuildContext], owned: list[OwnedRelic],
                         deadline_secs=deadline_secs))
                     return
 
-        build_used: dict[str, set] = {}
+        # Solved builds map fp -> best loadout rank; skipped builds keep the
+        # owned-only fp SET from the shared cache (a candidate fp can never
+        # appear there — candidates are new content, owned dups are duds).
+        build_used: dict[str, dict | set] = {}
         total_builds = len(builds)
         for i, b in enumerate(builds):
             if progress is not None:
@@ -385,17 +436,19 @@ def bulk_acquire(*, builds: list[BuildContext], owned: list[OwnedRelic],
                     executor=executor, deadline_secs=deadline_secs)
             _prefetch_after(i)
             if futures is not None:
-                build_used[b.name] = _used_fps_from_results(
+                build_used[b.name] = _used_fp_ranks(
                     optimizer.collect_all_vessels(
                         b.build, b.hero_type, futures, top_n=top_n,
                         n_relics=len(inv)))
             else:
-                build_used[b.name] = _optimize_used_fps(
-                    b, inv, optimizer, executor, top_n, max_per_vessel,
-                    deadline_secs)
+                build_used[b.name] = _used_fp_ranks(
+                    optimizer.optimize_all_vessels(
+                        b.build, inv, b.hero_type, top_n=top_n,
+                        max_per_vessel=max_per_vessel, executor=executor,
+                        deadline_secs=deadline_secs))
         all_used: set = set()
         for s in build_used.values():
-            all_used |= s
+            all_used.update(s)
 
         # 5. keepers = inclusion-forced + build-used candidates --------------------
         seen_fp: set = set()
@@ -410,8 +463,14 @@ def bulk_acquire(*, builds: list[BuildContext], owned: list[OwnedRelic],
             if fp in seen_fp or fp in owned_fps or fp not in all_used:
                 continue
             seen_fp.add(fp)
-            names = [name for name, used in build_used.items() if fp in used]
-            keepers.append(Keeper(relic=o, builds=names, reason="build"))
+            names: list[str] = []
+            ranks: list[int] = []
+            for name, used in build_used.items():
+                if fp in used:
+                    names.append(name)
+                    ranks.append(used[fp] if isinstance(used, dict) else 0)
+            keepers.append(Keeper(relic=o, builds=names, ranks=ranks,
+                                  reason="build"))
     else:
         # No builds selected -> NO optimizer runs (instant). Keep every generated relic
         # except those an exclusion rule sells (inclusion still wins). Each kept instance
@@ -432,7 +491,54 @@ def bulk_acquire(*, builds: list[BuildContext], owned: list[OwnedRelic],
 
     keepers.sort(key=_keep_priority, reverse=True)
 
-    # 6. storage cap (drop lowest-priority keepers first) ------------------------
+    if stop_mode == "all_murk":
+        # 6b. (all_murk) Chronological settlement walk — emulates the in-game
+        #     buy/sell cycle at the shop: buy one relic (needs Murk AND one free
+        #     storage slot, even if immediately resold), keep it (slot consumed)
+        #     or sell it back on the spot (refund credited, slot released).
+        #     Stops at the first unaffordable or unfittable roll; every later
+        #     roll is un-bought entirely. Duds never occupy storage and their
+        #     refunds immediately fund further buying — all legal in-game
+        #     (purchase quantity 1-10 is selectable and selling is available at
+        #     the shop), just smoother. Pre-owned relics are never sold here.
+        keeper_handles = {k.relic.ga_handle for k in keepers}
+        murk = current_murk + extra_budget  # staged-sell refunds land first
+        slots_free = max(0, storage_cap_left)
+        settled = gross = refunds = 0
+        kept_handles: set[int] = set()
+        for o in generated:                 # generation order == roll order
+            cost = buy_cost_of[o.ga_handle]
+            if slots_free <= 0:             # buying transits storage even if resold
+                limited = "storage"
+                break
+            if murk - cost < 0:             # buying may not overdraw the wallet
+                limited = "murk"
+                break
+            murk -= cost
+            gross += cost
+            settled += 1
+            if o.ga_handle in keeper_handles:
+                kept_handles.add(o.ga_handle)
+                slots_free -= 1
+            else:
+                r = refund(o)
+                murk += r
+                refunds += r
+        # Filtering the priority-sorted list keeps presentation order.
+        keepers = [k for k in keepers if k.relic.ga_handle in kept_handles]
+        return BulkResult(
+            keepers=keepers,
+            generated=settled,
+            kept=len(keepers),
+            duds=settled - len(keepers),
+            murk_before=current_murk,
+            murk_after=murk,
+            murk_gross_cost=gross,
+            murk_refunded=refunds,
+            limited_by=limited,
+        )
+
+    # 6. storage cap (fixed/budget: drop lowest-priority keepers first) ----------
     if storage_cap_left is not None and len(keepers) > storage_cap_left:
         keepers = keepers[:max(0, storage_cap_left)]
         limited = "storage"

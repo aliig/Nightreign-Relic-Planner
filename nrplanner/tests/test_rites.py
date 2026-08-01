@@ -11,6 +11,7 @@ from nrplanner.generator import GeneratedRelic
 from nrplanner.models import BuildDefinition, OwnedRelic, WeightGroup
 from nrplanner.rites import (
     _SYNTH_HANDLE_BASE,
+    _plan_counts,
     _reserve_handles,
     BuildContext,
     PurchaseBucket,
@@ -123,6 +124,9 @@ def test_keeper_detection(ds, wylder_eff):
     assert res.duds == 1
     assert wylder_eff in res.keepers[0].relic.effects
     assert res.keepers[0].builds == ["B1"]
+    # The only scoring relic must appear in the build's best loadout -> rank 1,
+    # aligned with the builds list.
+    assert res.keepers[0].ranks == [1]
 
 
 def test_murk_math(ds, wylder_eff, all_effects):
@@ -293,6 +297,136 @@ def test_select_cull_handles_rules_and_protection(ds, wylder_eff):
     # explicitly protected handles are never culled
     prot = select_cull_handles(owned, builds, ds, protected_handles={0xC1000002}, **_OPT)
     assert 0xC1000002 not in prot
+
+
+# ---------------------------------------------------------------------------
+# all_murk: chronological buy/sell-cycle walk
+# ---------------------------------------------------------------------------
+
+def test_plan_counts_all_murk_overshoots_budget_unchanged():
+    scenic = PurchaseBucket(False, "1.03", 600)
+    deep = PurchaseBucket(True, "1.03", 1800)
+    # all_murk: optimistic max-refund net (scenic 50, deep 700) -> overshoot.
+    assert _plan_counts([scenic], "all_murk", None, 1000, 8000) == ([20], False)
+    assert _plan_counts([deep], "all_murk", None, 1000, 8000) == ([1], False)
+    # extra_budget extends the all_murk target.
+    assert _plan_counts([scenic], "all_murk", None, 1000, 8000, 500) == ([30], False)
+    # budget keeps the mid estimate (scenic 600-350=250) and ignores extra_budget.
+    assert _plan_counts([scenic], "budget", 1000, 10**6, 8000) == ([4], False)
+    assert _plan_counts([scenic], "budget", 1000, 10**6, 8000, 500) == ([4], False)
+
+
+def test_all_murk_dud_refund_funds_next_buy(ds, wylder_eff, all_effects):
+    """The walk stops exactly where a live buy/sell cycle would: the dud's
+    refund is available for the next buy, and un-bought rolls vanish."""
+    unrelated = next(e["id"] for e in all_effects if e["id"] != wylder_eff)
+    dud = _gen([unrelated, EMPTY, EMPTY], color="Red")    # refund 150
+    keeper = _gen([wylder_eff, EMPTY, EMPTY], color="Red")
+    res = bulk_acquire(
+        builds=[_ctx([wylder_eff])], owned=[], current_murk=650,
+        buckets=[PurchaseBucket(False, "1.03", 600)],
+        generator=_StubGen([dud, keeper]), ds=ds, stop_mode="all_murk",
+        storage_cap_left=10, **_OPT,
+    )
+    # Roll 1 (dud): 650 -> 50 -> 200 after refund. Roll 2 (keeper): 200 < 600.
+    assert res.generated == 1 and res.duds == 1 and res.kept == 0
+    assert res.murk_gross_cost == 600 and res.murk_refunded == 150
+    assert res.murk_after == 200
+    assert res.limited_by == "murk"
+
+
+def test_all_murk_storage_stops_purchasing(ds, wylder_eff, all_effects):
+    e2 = next(e["id"] for e in all_effects if e["id"] != wylder_eff)
+    k0 = _gen([wylder_eff, EMPTY, EMPTY], color="Red")
+    k1 = _gen([e2, EMPTY, EMPTY], color="Red")
+    res = bulk_acquire(
+        builds=[_ctx([wylder_eff, e2])], owned=[], current_murk=1300,
+        buckets=[PurchaseBucket(False, "1.03", 600)],
+        generator=_StubGen([k0, k1]), ds=ds, stop_mode="all_murk",
+        storage_cap_left=1, **_OPT,
+    )
+    # Roll 1 fills the only slot; roll 2 cannot even transit storage.
+    assert res.generated == 1 and res.kept == 1 and res.duds == 0
+    assert res.murk_after == 700
+    assert res.limited_by == "storage"
+
+
+def test_all_murk_zero_slots_blocks_even_duds(ds, wylder_eff):
+    """Buying transits storage even when immediately resold — with 0 free
+    slots nothing can be bought at all."""
+    junk = _gen([EMPTY, EMPTY, EMPTY], color="Red")
+    res = bulk_acquire(
+        builds=[_ctx([wylder_eff])], owned=[], current_murk=600,
+        buckets=[PurchaseBucket(False, "1.03", 600)],
+        generator=_StubGen([junk]), ds=ds, stop_mode="all_murk",
+        storage_cap_left=0, **_OPT,
+    )
+    assert res.generated == 0 and res.kept == 0 and res.duds == 0
+    assert res.murk_after == 600 and res.murk_gross_cost == 0
+    assert res.limited_by == "storage"
+
+
+def test_all_murk_extra_budget_funds_buys_but_stays_out_of_totals(
+    ds, wylder_eff, all_effects
+):
+    """Staged-sell refunds (extra_budget) fund the walk but murk_before and
+    the gross/refund tallies stay purchase-only."""
+    unrelated = next(e["id"] for e in all_effects if e["id"] != wylder_eff)
+    dud = _gen([unrelated, EMPTY, EMPTY], color="Red")
+    res = bulk_acquire(
+        builds=[_ctx([wylder_eff])], owned=[], current_murk=0,
+        buckets=[PurchaseBucket(False, "1.03", 600)],
+        generator=_StubGen([dud]), ds=ds, stop_mode="all_murk",
+        extra_budget=650, storage_cap_left=10, **_OPT,
+    )
+    assert res.murk_before == 0
+    assert res.generated == 1 and res.duds == 1
+    assert res.murk_gross_cost == 600 and res.murk_refunded == 150
+    # murk_after = before + extra_budget + (refunded - gross)
+    assert res.murk_after == 0 + 650 + (150 - 600)
+
+
+def test_all_murk_exactly_affordable_buy_goes_through(ds):
+    """A buy at exactly the wallet's balance succeeds (stop is strictly
+    negative), and the run then ends 'limited by murk' at 0 — the all_murk
+    terminal state."""
+    a = _gen([111, EMPTY, EMPTY], color="Red")
+    res = bulk_acquire(
+        builds=[], owned=[], current_murk=600,
+        buckets=[PurchaseBucket(False, "1.03", 600)],
+        generator=_StubGen([a]), ds=ds, stop_mode="all_murk",
+        storage_cap_left=10, **_OPT,
+    )
+    assert res.generated == 1 and res.kept == 1
+    assert res.murk_after == 0
+    assert res.limited_by == "murk"
+
+
+def test_all_murk_no_builds_keepers_occupy_storage(ds):
+    a = _gen([111, EMPTY, EMPTY], color="Red")
+    b = _gen([222, EMPTY, EMPTY], color="Blue")
+    res = bulk_acquire(
+        builds=[], owned=[], current_murk=1300,
+        buckets=[PurchaseBucket(False, "1.03", 600)],
+        generator=_StubGen([a, b]), ds=ds, stop_mode="all_murk",
+        storage_cap_left=1, **_OPT,
+    )
+    # No-builds mode keeps everything not excluded, and kept relics fill slots.
+    assert res.generated == 1 and res.kept == 1
+    assert res.limited_by == "storage"
+
+
+def test_all_murk_extra_reserved_handles_kept_off_generated(ds):
+    a = _gen([111, EMPTY, EMPTY], color="Red")
+    reserved = {_SYNTH_HANDLE_BASE, _SYNTH_HANDLE_BASE + 1}
+    res = bulk_acquire(
+        builds=[], owned=[], current_murk=1300,
+        buckets=[PurchaseBucket(False, "1.03", 600)],
+        generator=_StubGen([a]), ds=ds, stop_mode="all_murk",
+        storage_cap_left=10, extra_reserved_handles=reserved, **_OPT,
+    )
+    assert res.kept >= 1
+    assert not {k.relic.ga_handle for k in res.keepers} & reserved
 
 
 # ---------------------------------------------------------------------------
