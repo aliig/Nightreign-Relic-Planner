@@ -33,7 +33,13 @@ import {
 import { isLoggedIn } from "@/hooks/useAuth"
 import useCustomToast from "@/hooks/useCustomToast"
 import { toInlineBuild, useLocalBuilds } from "@/hooks/useLocalBuilds"
-import { addMints, usePendingSlot } from "@/lib/pendingChanges"
+import {
+  addMints,
+  effectiveMurks,
+  murkAdjustment,
+  stagedFields,
+  usePendingSlot,
+} from "@/lib/pendingChanges"
 import { getOriginalBackupFile } from "@/lib/saveBackup"
 import { getSaveFile } from "@/lib/saveFile"
 import { formatMurks } from "@/lib/sellValue"
@@ -139,15 +145,15 @@ type PlanResponse = {
   generated: number
   kept: number
   duds: number
-  murk_before: number
+  murk_before: number // effective wallet: save Murk + staged mint delta
   murk_after: number
   murk_cost: number
   murk_refunded: number
   murk_delta: number // mint-side net (refunds − cost); staged-sell refunds excluded
   limited_by: string | null
   add_capacity: number // max relics one export can mint (ghost slots, pre-sells)
-  storage_left: number // all_murk: 1950 − owned after staged sells; else clamped by add_capacity
-  pending_sold: number // staged sells the plan honored (all_murk only)
+  storage_left: number // 1950 − effective owned (staged diff applied); fixed/budget also capped by ghost capacity
+  pending_sold: number // staged sells the plan honored (any mode)
   pending_sold_refund: number // their total sell value (funded the run)
   rule_sold?: number // relics force-sold by an exclusion rule (optional)
 }
@@ -528,9 +534,17 @@ function RitesTool({
   effectOptions: EffectOption[]
 }) {
   const { showErrorToast, showSuccessToast } = useCustomToast()
+  // Staged diff for this slot. Murk is emulated LIVE against it: the wallet
+  // shown, budgeted, and planned with is the save's Murk plus the staged
+  // adjustment (rites spend + staged-sell refunds), so staged spending
+  // persists across refreshes and re-runs until export.
+  const pending = usePendingSlot(slotIndex)
+  const pendingSells = pending.sells
+  const staged = murkAdjustment(pending)
+  const effMurks = effectiveMurks(murks, pending)
   const [stopMode, setStopMode] = useState<StopMode>("fixed")
   const [budget, setBudget] = useState<number>(
-    Math.min(murks ?? 100000, 100000),
+    Math.min(effMurks ?? 100000, 100000),
   )
   const [qty, setQty] = useState<Record<string, number>>({
     n103: 50,
@@ -556,17 +570,14 @@ function RitesTool({
   // Last event per phase, so completed steps keep their final N/N count.
   const seenRef = useRef<Record<string, ProgressEvt>>({})
   const abortRef = useRef<AbortController | null>(null)
-  // Staged sells for this slot: the all_murk cycle treats them as already sold
-  // (freed storage + refunds funding purchases). Staging is always manual —
-  // pre-owned relics are never auto-sold.
-  const pendingSells = usePendingSlot(slotIndex).sells
 
   const activeBuckets = BUCKETS.filter((b) => (qty[b.key] ?? 0) > 0)
   const fixedCost = activeBuckets.reduce(
     (n, b) => n + (qty[b.key] ?? 0) * b.cost,
     0,
   )
-  const overspend = stopMode === "fixed" && murks != null && fixedCost > murks
+  const overspend =
+    stopMode === "fixed" && effMurks != null && fixedCost > effMurks
 
   async function findKeepers() {
     const file = getSaveFile() ?? (await getOriginalBackupFile())
@@ -602,9 +613,21 @@ function RitesTool({
     form.append("stop_mode", stopMode)
     form.append("top_n", String(topN))
     if (stopMode === "budget") form.append("budget", String(budget))
-    // Only the all_murk cycle consumes staged sells (backend rejects otherwise).
-    if (stopMode === "all_murk" && pendingSells.length)
+    // The staged diff rides along so the plan runs against the LIVE app
+    // state in every mode: sells are already gone (freed storage, refunds
+    // spendable), staged mints are already owned (no double-mint), the
+    // batch's net Murk delta spends down the wallet (no double-spend), and
+    // staged bookmark toggles drive the protected-sell gate (un-bookmark +
+    // trash in one session must not 422).
+    if (pendingSells.length)
       form.append("sold_handles", JSON.stringify(pendingSells))
+    const stagedMints = stagedFields(pending).staged_mints
+    if (stagedMints.length)
+      form.append("staged_mints", JSON.stringify(stagedMints))
+    if (pending.murkDelta !== 0)
+      form.append("staged_murk_delta", String(pending.murkDelta))
+    if (Object.keys(pending.favorites).length)
+      form.append("staged_favorites", JSON.stringify(pending.favorites))
     const inc = inclusion.filter(ruleHasCondition).map(serializeRule)
     const exc = exclusion.filter(ruleHasCondition).map(serializeRule)
     if (inc.length) form.append("inclusion_rules", JSON.stringify(inc))
@@ -719,11 +742,17 @@ function RitesTool({
 
   return (
     <div className="space-y-6">
-      {/* Balances */}
+      {/* Balances (live: save Murk with the staged diff applied) */}
       <div className="flex flex-wrap gap-4 text-sm">
         <span className="inline-flex items-center gap-1.5">
           <Coins className="h-4 w-4 text-amber-500" />
-          <strong>{murks != null ? formatMurks(murks) : "—"}</strong> Murk
+          <strong>{effMurks != null ? formatMurks(effMurks) : "—"}</strong> Murk
+          {staged !== 0 && murks != null && (
+            <span className="text-xs text-muted-foreground">
+              (save {formatMurks(murks)} {staged < 0 ? "−" : "+"}{" "}
+              {formatMurks(Math.abs(staged))} staged)
+            </span>
+          )}
         </span>
         {plan && planStop === "all_murk" ? (
           // storage_left = 1950 − owned after staged sells, so occupancy after
@@ -876,7 +905,7 @@ function RitesTool({
             <input
               type="number"
               min={0}
-              max={murks ?? undefined}
+              max={effMurks ?? undefined}
               value={budget}
               onChange={(e) => setBudget(Number(e.target.value))}
               className="w-32 rounded-md border bg-background px-2 py-1 text-sm"
@@ -1019,11 +1048,12 @@ function RitesTool({
               Staged sells free space for this simulation.
             </p>
           )}
-          {plan.kept > plan.add_capacity + pendingSells.length && (
+          {plan.kept > plan.add_capacity && (
             <p className="text-xs text-amber-600 dark:text-amber-500">
-              This save can mint {plan.add_capacity + pendingSells.length}{" "}
-              relic(s) in one export (each staged sell frees one slot). Stage
-              more sells or export in batches.
+              Your next export can mint {plan.add_capacity} more relic(s) — the
+              server already counts staged sells (each frees a slot) and staged
+              purchases (each claims one). Stage more sells or export in
+              batches.
             </p>
           )}
 

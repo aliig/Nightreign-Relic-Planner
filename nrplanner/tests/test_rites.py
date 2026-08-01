@@ -595,3 +595,63 @@ def test_seeded_cache_skips_all_solves(ds, monkeypatch):
     assert counter.inventory_sizes == [], "seeded cache must avoid every solve"
     # Empty used-set seed -> the owned relic is unused -> cull candidate.
     assert cull == [0xC1000001]
+
+
+# ---------------------------------------------------------------------------
+# Live Murk emulation: extra_budget in every mode + per-bucket roll streams
+# ---------------------------------------------------------------------------
+
+def test_fixed_mode_extra_budget_funds_settlement(ds):
+    """Staged-sell refunds are spendable in fixed mode, not just all_murk —
+    without the credit the buy is unaffordable and the keeper is dropped."""
+    def _run(extra):
+        return bulk_acquire(
+            builds=[], owned=[], current_murk=500, extra_budget=extra,
+            buckets=[PurchaseBucket(False, "1.03", 600, quantity=1)],
+            generator=_StubGen([_gen([111, EMPTY, EMPTY])]), ds=ds,
+            stop_mode="fixed", storage_cap_left=10, **_OPT,
+        )
+
+    base = _run(0)
+    assert base.kept == 0 and base.limited_by == "murk"
+    assert base.murk_after == 500 - (600 - 150)  # dropped keeper sold as dud
+
+    funded = _run(200)
+    assert funded.kept == 1 and funded.limited_by is None
+    assert funded.murk_after == 500 + 200 - 600
+    assert funded.murk_before == 500  # wallet base never includes the credit
+
+
+class _RngProbeGen:
+    """Rolls whose content is a pure function of the rng draw, so tests can
+    observe exactly which stream position each purchase consumed."""
+
+    def roll(self, is_deep=False, version="1.03", mode="random", rng=None):
+        return _gen([rng.randrange(1, 10**6)], is_deep=is_deep)
+
+
+def test_bucket_rng_streams_are_independent(ds):
+    """One category's Nth roll depends only on (seed, is_deep, version):
+    adding/removing another bucket never perturbs it (no cross-bucket dice
+    shaking), and the same seed always replays the same rolls."""
+    def _run(buckets, seed):
+        res = bulk_acquire(
+            builds=[], owned=[], current_murk=10**6, buckets=buckets,
+            generator=_RngProbeGen(), ds=ds, stop_mode="fixed",
+            storage_cap_left=100, seed=seed, **_OPT,
+        )
+        # No builds/rules -> every roll is a keeper; stable priority sort
+        # preserves generation order within a bucket's relics.
+        return [k.relic.effects[0] for k in res.keepers
+                if not k.relic.is_deep]
+
+    scenic = [PurchaseBucket(False, "1.03", 600, quantity=4)]
+    mixed = [PurchaseBucket(True, "1.03", 1800, quantity=3),
+             PurchaseBucket(False, "1.03", 600, quantity=4)]
+
+    scenic_only = _run(scenic, seed=99)
+    assert len(scenic_only) == 4
+    assert _run(scenic, seed=99) == scenic_only, "same seed must replay"
+    assert _run(mixed, seed=99) == scenic_only, (
+        "a deep bucket must not shift the scenic stream")
+    assert _run(scenic, seed=100) != scenic_only, "new save state, new rolls"

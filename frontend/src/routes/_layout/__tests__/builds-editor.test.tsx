@@ -62,6 +62,11 @@ const MOCK_BUILD = {
 // reads it at render time.
 let mockBuild: typeof MOCK_BUILD = MOCK_BUILD
 
+// Read lazily by the mock factories (at render time), so declaration order
+// relative to the hoisted vi.mock calls doesn't matter.
+const mockNavigate = vi.fn()
+const mockRemove = vi.fn()
+
 // ---------------------------------------------------------------------------
 // Mocks (must be declared before imports under test)
 // ---------------------------------------------------------------------------
@@ -72,6 +77,7 @@ vi.mock("@tanstack/react-router", async (importOriginal) => {
     ...mod,
     createFileRoute: () => (config: Record<string, unknown>) => config,
     useParams: () => ({ buildId: "build-1" }),
+    useNavigate: () => mockNavigate,
   }
 })
 
@@ -121,6 +127,7 @@ vi.mock("@/hooks/useLocalBuilds", () => ({
   useLocalBuilds: () => ({
     getById: () => mockBuild,
     update: vi.fn(),
+    remove: mockRemove,
   }),
   // WeightGroup is a type-only import in builds.$buildId.tsx — no runtime value needed
 }))
@@ -322,6 +329,78 @@ describe("Tier weighting – family weight floor", () => {
     expect(screen.queryByText("25")).not.toBeInTheDocument()
     expect(screen.getByText("40")).toBeInTheDocument()
   })
+
+  it("clamps the floor strictly below the group weight", () => {
+    mockFamilies = [
+      {
+        name: "Poise",
+        member_names: ["Poise +1", "Poise +2"],
+        member_ids: [1, 2],
+        tiers: [
+          { name: "Poise +1", weight_fraction: 0.5 },
+          { name: "Poise +2", weight_fraction: 1.0 },
+        ],
+      },
+    ]
+    mockEffects = [
+      { id: 1, name: "Poise +1" },
+      { id: 2, name: "Poise +2" },
+    ]
+
+    renderEditor()
+
+    // Assign to the highest-weight group (50); a floor equal to (or above)
+    // the group weight would flatten every tier, so it must clamp to 49.
+    fireEvent.click(screen.getByText("Poise"))
+    fireEvent.click(screen.getByLabelText("Tier weighting for Poise"))
+    const floorInput = screen.getByTitle(/Lift the weakest tiers/i)
+    fireEvent.change(floorInput, { target: { value: "50" } })
+    fireEvent.blur(floorInput)
+    expect(floorInput).toHaveValue(49)
+
+    fireEvent.change(floorInput, { target: { value: "120" } })
+    fireEvent.blur(floorInput)
+    expect(floorInput).toHaveValue(49)
+  })
+
+  it("rescales the floor proportionally when the group weight changes", () => {
+    mockFamilies = [
+      {
+        name: "Poise",
+        member_names: ["Poise +1", "Poise +2"],
+        member_ids: [1, 2],
+        tiers: [
+          { name: "Poise +1", weight_fraction: 0.5 },
+          { name: "Poise +2", weight_fraction: 1.0 },
+        ],
+      },
+    ]
+    mockEffects = [
+      { id: 1, name: "Poise +1" },
+      { id: 2, name: "Poise +2" },
+    ]
+
+    renderEditor()
+
+    // Assign to the weight-50 group and set a floor of 40 (80% of ceiling).
+    fireEvent.click(screen.getByText("Poise"))
+    fireEvent.click(screen.getByLabelText("Tier weighting for Poise"))
+    const floorInput = screen.getByTitle(/Lift the weakest tiers/i)
+    fireEvent.change(floorInput, { target: { value: "40" } })
+    fireEvent.blur(floorInput)
+    expect(screen.getByText("40")).toBeInTheDocument()
+
+    // Halve the group weight 50 → 25: the floor keeps its 80% share → 20.
+    const weightInput = screen.getByDisplayValue("50")
+    fireEvent.change(weightInput, { target: { value: "25" } })
+    fireEvent.blur(weightInput)
+
+    // The weight change re-sections the group (remount closes the dialog);
+    // reopen it and check the rescaled floor and the lifted weakest tier.
+    fireEvent.click(screen.getByLabelText("Tier weighting for Poise"))
+    expect(screen.getByTitle(/Lift the weakest tiers/i)).toHaveValue(20)
+    expect(screen.getByText("20")).toBeInTheDocument()
+  })
 })
 
 describe("Effect Browser – 'Improved Damage Negation at Low HP' regression", () => {
@@ -378,5 +457,34 @@ describe("Effect Browser – 'Improved Damage Negation at Low HP' regression", (
     expect(
       screen.getAllByText("Improved Damage Negation at Low HP").length,
     ).toBeGreaterThanOrEqual(1)
+  })
+})
+
+describe("Delete build from editor", () => {
+  it("removes the local build and navigates to /builds after confirming", () => {
+    mockEffects = [{ id: 1, name: "Poise +1" }]
+    renderEditor()
+
+    fireEvent.click(screen.getByRole("button", { name: /delete build/i }))
+
+    // Confirmation dialog — nothing deleted yet.
+    expect(screen.getByText(/cannot be undone/i)).toBeInTheDocument()
+    expect(mockRemove).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole("button", { name: /^delete$/i }))
+
+    expect(mockRemove).toHaveBeenCalledWith("build-1")
+    expect(mockNavigate).toHaveBeenCalledWith({ to: "/builds" })
+  })
+
+  it("does not delete when the dialog is cancelled", () => {
+    mockEffects = [{ id: 1, name: "Poise +1" }]
+    renderEditor()
+
+    fireEvent.click(screen.getByRole("button", { name: /delete build/i }))
+    fireEvent.click(screen.getByRole("button", { name: /cancel/i }))
+
+    expect(mockRemove).not.toHaveBeenCalled()
+    expect(mockNavigate).not.toHaveBeenCalled()
   })
 })

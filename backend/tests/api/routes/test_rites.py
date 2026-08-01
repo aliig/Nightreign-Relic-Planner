@@ -84,8 +84,7 @@ class TestRitesPlanValidation:
         )
         assert resp.status_code == 422
 
-    def test_rejects_sold_handles_outside_all_murk(self, client: TestClient) -> None:
-        """Staged sells only feed the all_murk cycle — fixed/budget stay untouched."""
+    def test_rejects_malformed_staged_mints(self, client: TestClient) -> None:
         resp = client.post(
             "/api/v1/saves/rites/plan",
             files={"file": ("save.sl2", b"BND4dummy")},
@@ -93,12 +92,40 @@ class TestRitesPlanValidation:
                 "slot_index": "0",
                 "builds": json.dumps([_MINIMAL_BUILD]),
                 "buckets": json.dumps([_SCENIC_BUCKET]),
-                "stop_mode": "fixed",
-                "sold_handles": json.dumps([123]),
+                "staged_mints": "not-json",
             },
         )
         assert resp.status_code == 422
-        assert "all_murk" in resp.json()["detail"]
+        assert "staged_mints" in str(resp.json()["detail"])
+
+    def test_rejects_malformed_staged_favorites(self, client: TestClient) -> None:
+        resp = client.post(
+            "/api/v1/saves/rites/plan",
+            files={"file": ("save.sl2", b"BND4dummy")},
+            data={
+                "slot_index": "0",
+                "builds": json.dumps([_MINIMAL_BUILD]),
+                "buckets": json.dumps([_SCENIC_BUCKET]),
+                "staged_favorites": json.dumps([123]),  # array, not an object
+            },
+        )
+        assert resp.status_code == 422
+        assert "staged_favorites" in str(resp.json()["detail"])
+
+    def test_rejects_staged_mint_missing_fields(self, client: TestClient) -> None:
+        """A mint spec must carry handle/real_id/effects/curses (StagedMint)."""
+        resp = client.post(
+            "/api/v1/saves/rites/plan",
+            files={"file": ("save.sl2", b"BND4dummy")},
+            data={
+                "slot_index": "0",
+                "builds": json.dumps([_MINIMAL_BUILD]),
+                "buckets": json.dumps([_SCENIC_BUCKET]),
+                "staged_mints": json.dumps([{"handle": -1}]),
+            },
+        )
+        assert resp.status_code == 422
+        assert "staged_mints" in str(resp.json()["detail"])
 
 
 @requires_fixture
@@ -249,6 +276,409 @@ class TestRitesAllMurkCycle:
         )
         assert resp.status_code == 422
         assert resp.json()["detail"]["error"] == "unknown_relics"
+
+
+@requires_fixture
+@pytest.mark.usefixtures("override_game_data")
+class TestRitesStagedMurk:
+    """Live Murk emulation: staged (unexported) rites purchases persist into
+    every later plan — the wallet spends down, staged mints occupy storage,
+    and re-planning can never double-spend or re-roll. Scenarios mirror real
+    user journeys (spend → stage → refresh/re-run → export).
+
+    No builds and no rules -> the plan keeps every generated relic and runs
+    no optimizer, so these exercise generation + Murk/storage accounting only.
+    """
+
+    _SCENIC = {"is_deep": False, "version": "1.03"}
+    _DEEP = {"is_deep": True, "version": "1.03"}
+
+    @staticmethod
+    def _profile(client: TestClient) -> dict:
+        with FIXTURE_PATH.open("rb") as f:
+            resp = client.post(
+                "/api/v1/saves/upload",
+                files={"file": ("NR0000.sl2", f, "application/octet-stream")},
+            )
+        assert resp.status_code == 200, resp.text
+        return next(p for p in resp.json()["profiles"] if p["relics"])
+
+    @staticmethod
+    def _plan(client: TestClient, slot: int, **extra) -> dict:
+        data = {"slot_index": str(slot), **extra}
+        resp = client.post(
+            "/api/v1/saves/rites/plan",
+            files={"file": ("NR0000.sl2", FIXTURE_PATH.read_bytes())},
+            data=data,
+        )
+        assert resp.status_code == 200, resp.text
+        return resp.json()
+
+    @staticmethod
+    def _fp(k: dict) -> tuple:
+        return (k["real_id"], tuple(k["effects"]), tuple(k["curses"]))
+
+    @staticmethod
+    def _stage(keepers: list[dict], start: int = -1) -> list[dict]:
+        """Keepers -> the wire shape the frontend stages (synthetic handles)."""
+        return [
+            {
+                "handle": start - i,
+                "real_id": k["real_id"],
+                "effects": k["effects"],
+                "curses": k["curses"],
+            }
+            for i, k in enumerate(keepers)
+        ]
+
+    def _spend_plan(self, client: TestClient, slot: int, qty: int) -> dict:
+        """A fixed-mode 'buy qty scenics, keep all' plan (no builds/rules)."""
+        return self._plan(
+            client, slot,
+            buckets=json.dumps([{**self._SCENIC, "quantity": qty}]),
+            stop_mode="fixed",
+        )
+
+    def test_staged_spend_persists_and_replays_the_stream(
+        self, client: TestClient
+    ) -> None:
+        """THE reported bug: spend Murk, stage the keepers, come back — the
+        wallet must stay spent, and a same-bucket re-run must replay the same
+        roll stream (no free re-roll, Murk only ever declines further)."""
+        prof = self._profile(client)
+        murk = prof["murks"]
+        if murk < 2500:
+            pytest.skip("fixture wallet too small for a 2x2-scenic scenario")
+
+        plan_a = self._spend_plan(client, prof["slot_index"], qty=2)
+        if plan_a["limited_by"]:
+            pytest.skip(f"fixture-limited plan: {plan_a['limited_by']}")
+        assert plan_a["kept"] == 2 and plan_a["murk_delta"] == -1200
+        assert plan_a["murk_before"] == murk
+
+        staged = {
+            "staged_mints": json.dumps(self._stage(plan_a["keepers"])),
+            "staged_murk_delta": str(plan_a["murk_delta"]),
+        }
+        plan_b = self._plan(
+            client, prof["slot_index"],
+            buckets=json.dumps([{**self._SCENIC, "quantity": 2}]),
+            stop_mode="fixed", **staged,
+        )
+        # The wallet stayed spent — re-planning starts from the live value.
+        assert plan_b["murk_before"] == murk - 1200
+        # Same save state -> same roll stream: the re-run regenerates the very
+        # same relics (buying real duplicate copies, never new rolls).
+        assert sorted(map(self._fp, plan_b["keepers"])) == sorted(
+            map(self._fp, plan_a["keepers"])
+        )
+        # And it pays full price for them again — no manufactured value.
+        assert plan_b["murk_delta"] == -1200
+        assert plan_b["murk_after"] == (
+            plan_b["murk_before"]
+            + plan_b["pending_sold_refund"]
+            + plan_b["murk_delta"]
+        )
+
+    def test_identical_staged_state_is_deterministic(
+        self, client: TestClient
+    ) -> None:
+        """Spamming Find Keepers with the same staged diff changes nothing."""
+        prof = self._profile(client)
+        if prof["murks"] < 2500:
+            pytest.skip("fixture wallet too small")
+        plan_a = self._spend_plan(client, prof["slot_index"], qty=2)
+        staged = {
+            "staged_mints": json.dumps(self._stage(plan_a["keepers"])),
+            "staged_murk_delta": str(plan_a["murk_delta"]),
+        }
+        args = dict(
+            buckets=json.dumps([{**self._SCENIC, "quantity": 2}]),
+            stop_mode="fixed", **staged,
+        )
+        first = self._plan(client, prof["slot_index"], **args)
+        second = self._plan(client, prof["slot_index"], **args)
+        assert first == second
+
+    def test_positive_staged_delta_is_clamped(self, client: TestClient) -> None:
+        """A client cannot manufacture planning Murk with a positive delta."""
+        prof = self._profile(client)
+        plan = self._plan(
+            client, prof["slot_index"],
+            buckets=json.dumps([{**self._SCENIC, "quantity": 1}]),
+            stop_mode="fixed", staged_murk_delta=str(10**9),
+        )
+        assert plan["murk_before"] == prof["murks"]
+
+    def test_staged_mints_occupy_storage(self, client: TestClient) -> None:
+        """all_murk storage: staged (unexported) mints already hold slots."""
+        prof = self._profile(client)
+        if prof["murks"] < 2500:
+            pytest.skip("fixture wallet too small")
+        plan_a = self._spend_plan(client, prof["slot_index"], qty=2)
+        sell_all = json.dumps([{"effect_counts": [1, 2, 3]}])
+        base = self._plan(
+            client, prof["slot_index"],
+            buckets=json.dumps([self._SCENIC]), stop_mode="all_murk",
+            exclusion_rules=sell_all,
+        )
+        staged = self._plan(
+            client, prof["slot_index"],
+            buckets=json.dumps([self._SCENIC]), stop_mode="all_murk",
+            exclusion_rules=sell_all,
+            staged_mints=json.dumps(self._stage(plan_a["keepers"])),
+            staged_murk_delta=str(plan_a["murk_delta"]),
+        )
+        assert staged["storage_left"] == base["storage_left"] - 2
+
+    def test_unmintable_staged_mint_rejected(self, client: TestClient) -> None:
+        """Fidelity gate: an impossible relic can never enter the world state."""
+        prof = self._profile(client)
+        resp = client.post(
+            "/api/v1/saves/rites/plan",
+            files={"file": ("NR0000.sl2", FIXTURE_PATH.read_bytes())},
+            data={
+                "slot_index": str(prof["slot_index"]),
+                "buckets": json.dumps([{**self._SCENIC, "quantity": 1}]),
+                "stop_mode": "fixed",
+                "staged_mints": json.dumps(
+                    [{"handle": -1, "real_id": 0, "effects": [], "curses": []}]
+                ),
+            },
+        )
+        assert resp.status_code == 422
+        assert "mintable" in str(resp.json()["detail"])
+
+    def test_sold_handles_credit_in_fixed_mode(self, client: TestClient) -> None:
+        """Staged sells now fund every mode (in-game: sell first, then buy)."""
+        prof = self._profile(client)
+        sellable = next(
+            (r for r in prof["relics"]
+             if not r["equipped"] and not r["is_favorite"]),
+            None,
+        )
+        if sellable is None:
+            pytest.skip("fixture has no sellable relic")
+        plan = self._plan(
+            client, prof["slot_index"],
+            buckets=json.dumps([{**self._SCENIC, "quantity": 1}]),
+            stop_mode="fixed",
+            sold_handles=json.dumps([sellable["ga_handle"]]),
+        )
+        assert plan["pending_sold"] == 1
+        assert plan["pending_sold_refund"] > 0
+        assert plan["murk_after"] == (
+            plan["murk_before"]
+            + plan["pending_sold_refund"]
+            + plan["murk_delta"]
+        )
+
+    def test_bucket_streams_are_independent(self, client: TestClient) -> None:
+        """Adding a deep bucket must not re-roll the scenic stream — one
+        category's Nth roll is fixed for a given save, no cross-bucket
+        perturbation (closes the 'buy 1 deep to shake the dice' lever)."""
+        prof = self._profile(client)
+        if prof["murks"] < 3500:
+            pytest.skip("fixture wallet too small for scenic+deep")
+        scenic_only = self._spend_plan(client, prof["slot_index"], qty=2)
+        mixed = self._plan(
+            client, prof["slot_index"],
+            buckets=json.dumps([
+                {**self._DEEP, "quantity": 1},
+                {**self._SCENIC, "quantity": 2},
+            ]),
+            stop_mode="fixed",
+        )
+        if scenic_only["limited_by"] or mixed["limited_by"]:
+            pytest.skip("fixture-limited plan")
+        scenic_fps = sorted(
+            self._fp(k) for k in mixed["keepers"] if not k["is_deep"]
+        )
+        assert scenic_fps == sorted(map(self._fp, scenic_only["keepers"]))
+
+    def test_staged_favorites_drive_the_protected_sell_gate(
+        self, client: TestClient
+    ) -> None:
+        """The gate judges LIVE bookmark state: un-bookmarking in-app makes a
+        relic sellable (no 422), and bookmarking in-app protects one."""
+        prof = self._profile(client)
+        buckets = json.dumps([{**self._SCENIC, "quantity": 1}])
+        base = {
+            "slot_index": str(prof["slot_index"]),
+            "buckets": buckets,
+            "stop_mode": "fixed",
+        }
+
+        favorited = next(
+            (r for r in prof["relics"]
+             if r["is_favorite"] and not r["equipped"]),
+            None,
+        )
+        if favorited is not None:
+            h = favorited["ga_handle"]
+            blocked = client.post(
+                "/api/v1/saves/rites/plan",
+                files={"file": ("NR0000.sl2", FIXTURE_PATH.read_bytes())},
+                data={**base, "sold_handles": json.dumps([h])},
+            )
+            assert blocked.status_code == 422
+            assert blocked.json()["detail"]["error"] == "protected_relics"
+
+            unblocked = client.post(
+                "/api/v1/saves/rites/plan",
+                files={"file": ("NR0000.sl2", FIXTURE_PATH.read_bytes())},
+                data={
+                    **base,
+                    "sold_handles": json.dumps([h]),
+                    "staged_favorites": json.dumps({str(h): False}),
+                },
+            )
+            assert unblocked.status_code == 200, unblocked.text
+            assert unblocked.json()["pending_sold"] == 1
+
+        sellable = next(
+            (r for r in prof["relics"]
+             if not r["equipped"] and not r["is_favorite"]),
+            None,
+        )
+        if sellable is None and favorited is None:
+            pytest.skip("fixture has neither a favorited nor a sellable relic")
+        if sellable is not None:
+            h = sellable["ga_handle"]
+            protected = client.post(
+                "/api/v1/saves/rites/plan",
+                files={"file": ("NR0000.sl2", FIXTURE_PATH.read_bytes())},
+                data={
+                    **base,
+                    "sold_handles": json.dumps([h]),
+                    "staged_favorites": json.dumps({str(h): True}),
+                },
+            )
+            assert protected.status_code == 422
+            assert protected.json()["detail"]["error"] == "protected_relics"
+
+    def test_add_capacity_reflects_the_staged_diff(
+        self, client: TestClient
+    ) -> None:
+        """add_capacity is the EFFECTIVE export capacity: staged sells free a
+        ghost slot each, already-staged mints have claimed theirs."""
+        prof = self._profile(client)
+        if prof["murks"] < 2500:
+            pytest.skip("fixture wallet too small")
+        plan_a = self._spend_plan(client, prof["slot_index"], qty=2)
+        if plan_a["limited_by"]:
+            pytest.skip(f"fixture-limited plan: {plan_a['limited_by']}")
+        base_cap = plan_a["add_capacity"]
+
+        minted = self._plan(
+            client, prof["slot_index"],
+            buckets=json.dumps([{**self._SCENIC, "quantity": 1}]),
+            stop_mode="fixed",
+            staged_mints=json.dumps(self._stage(plan_a["keepers"])),
+            staged_murk_delta=str(plan_a["murk_delta"]),
+        )
+        assert minted["add_capacity"] == max(0, base_cap - 2)
+
+        sellable = next(
+            (r for r in prof["relics"]
+             if not r["equipped"] and not r["is_favorite"]),
+            None,
+        )
+        if sellable is not None:
+            sold = self._plan(
+                client, prof["slot_index"],
+                buckets=json.dumps([{**self._SCENIC, "quantity": 1}]),
+                stop_mode="fixed",
+                sold_handles=json.dumps([sellable["ga_handle"]]),
+            )
+            assert sold["add_capacity"] == base_cap + 1
+
+    def test_export_round_trip_lands_effective_murk(
+        self, client: TestClient
+    ) -> None:
+        """Full journey, exactly as the app exports it: plan (with a staged
+        sell) → export sells FIRST (credit + freed ghost slot) → mint with the
+        batch delta → the final save holds exactly the plan's murk_after, and
+        a fresh plan on the new save starts from it (export is what unlocks
+        new rolls)."""
+        prof = self._profile(client)
+        if prof["murks"] < 1500:
+            pytest.skip("fixture wallet too small")
+        sellable = next(
+            (r for r in prof["relics"]
+             if not r["equipped"] and not r["is_favorite"]),
+            None,
+        )
+        if sellable is None:
+            pytest.skip("fixture has no sellable relic")
+
+        plan = self._plan(
+            client, prof["slot_index"],
+            buckets=json.dumps([{**self._SCENIC, "quantity": 1}]),
+            stop_mode="fixed",
+            sold_handles=json.dumps([sellable["ga_handle"]]),
+        )
+        if plan["limited_by"]:
+            pytest.skip(f"fixture-limited plan: {plan['limited_by']}")
+        assert plan["kept"] == 1
+
+        # Step 1 — sells land first (their credit + ghost slot fund the mint).
+        sold = client.post(
+            "/api/v1/saves/export",
+            files={"file": ("NR0000.sl2", FIXTURE_PATH.read_bytes())},
+            data={
+                "slot_index": str(prof["slot_index"]),
+                "ga_handles": json.dumps([sellable["ga_handle"]]),
+            },
+        )
+        assert sold.status_code == 200, sold.text
+
+        # Step 2 — mint the staged keepers with the batch's net delta.
+        specs = [
+            {"real_id": k["real_id"], "effects": k["effects"],
+             "curses": k["curses"]}
+            for k in plan["keepers"]
+        ]
+        exported = client.post(
+            "/api/v1/saves/export-add-relics",
+            files={"file": ("NR0000_edited.sl2", sold.content,
+                            "application/octet-stream")},
+            data={
+                "slot_index": str(prof["slot_index"]),
+                "specs": json.dumps(specs),
+                "murk_delta": str(plan["murk_delta"]),
+            },
+        )
+        assert exported.status_code == 200, exported.text
+        assert exported.headers["x-murks-total"] == str(plan["murk_after"])
+
+        reup = client.post(
+            "/api/v1/saves/upload",
+            files={"file": ("NR0000_edited2.sl2", exported.content,
+                            "application/octet-stream")},
+        )
+        assert reup.status_code == 200, reup.text
+        new_prof = next(
+            p for p in reup.json()["profiles"]
+            if p["slot_index"] == prof["slot_index"]
+        )
+        assert new_prof["murks"] == plan["murk_after"]
+        assert new_prof["relic_count"] == prof["relic_count"]  # -1 sold, +1 minted
+
+        # The committed save is a NEW state: planning starts from the landed
+        # wallet with no staged fields — the diff never carries over.
+        fresh = client.post(
+            "/api/v1/saves/rites/plan",
+            files={"file": ("fresh.sl2", exported.content,
+                            "application/octet-stream")},
+            data={
+                "slot_index": str(prof["slot_index"]),
+                "buckets": json.dumps([{**self._SCENIC, "quantity": 1}]),
+                "stop_mode": "fixed",
+            },
+        )
+        assert fresh.status_code == 200, fresh.text
+        assert fresh.json()["murk_before"] == plan["murk_after"]
 
 
 class TestValidatedSeedFps:

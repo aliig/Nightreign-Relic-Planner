@@ -501,6 +501,240 @@ export function stagedKey(s: SlotPending): string {
   return `s:${sells}|m:${mints}`
 }
 
+/**
+ * Net Murk adjustment of a slot's staged diff: the mint batches' net delta
+ * (purchases minus dud refunds, usually negative) plus every staged sell's
+ * cached refund. This is exactly what export applies (sells credit first,
+ * then the mint delta), so `save Murk + murkAdjustment` is the Murk the
+ * exported save will hold.
+ */
+export function murkAdjustment(s: SlotPending): number {
+  const sellRefund = s.sells.reduce((n, h) => n + (s.meta[h]?.murk ?? 0), 0)
+  return s.murkDelta + sellRefund
+}
+
+/**
+ * Live "effective" Murk for a slot: the save's Murk with the staged diff
+ * applied, clamped to the save field's range [0, u32]. Every surface that
+ * shows or spends Murk should use this — staged actions persist everywhere
+ * until export. Null when the save value is unknown.
+ */
+export function effectiveMurks(
+  saveMurks: number | null | undefined,
+  s: SlotPending,
+): number | null {
+  if (saveMurks == null) return null
+  return Math.max(0, Math.min(saveMurks + murkAdjustment(s), 0xffffffff))
+}
+
+// --- effective-state composition (the sanctioned way to read save state) ----
+//
+// Every surface that shows or computes save-derived state must compose
+// (base state + this slot's staged diff) through these helpers — reading the
+// base raw is how staged edits "disappear" on some page. If a page needs a
+// shape these don't cover, add a selector here rather than hand-rolling.
+
+/** A staged mint as a snake_case relic row (the shape save-derived relic
+ * lists use), marked `incoming`. */
+export type StagedRelicRow = {
+  id: string
+  ga_handle: number
+  real_id: number
+  name: string
+  color: string
+  tier: string
+  is_deep: boolean
+  effect_1: number
+  effect_2: number
+  effect_3: number
+  curse_1: number
+  curse_2: number
+  curse_3: number
+  incoming: true
+}
+
+/** The slot's staged mints as relic rows, for appending to a base list. */
+export function stagedMintRows(s: SlotPending): StagedRelicRow[] {
+  return s.mints.map((m) => ({
+    id: m.id,
+    ga_handle: m.handle,
+    real_id: m.real_id,
+    name: m.name,
+    color: m.color,
+    tier: m.tier,
+    is_deep: m.isDeep,
+    effect_1: m.effects[0],
+    effect_2: m.effects[1],
+    effect_3: m.effects[2],
+    curse_1: m.curses[0],
+    curse_2: m.curses[1],
+    curse_3: m.curses[2],
+    incoming: true,
+  }))
+}
+
+/** Base relic rows minus the slot's staged sells (trashed -> already gone). */
+export function excludeStagedSells<T extends { ga_handle: number }>(
+  rows: T[],
+  s: SlotPending,
+): T[] {
+  if (s.sells.length === 0) return rows
+  const sold = new Set(s.sells)
+  return rows.filter((r) => !sold.has(r.ga_handle))
+}
+
+/** Full effective relic-row list: base − staged sells + staged mints. */
+export function effectiveRelicRows<T extends { ga_handle: number }>(
+  rows: T[],
+  s: SlotPending,
+): Array<T | StagedRelicRow> {
+  return [...excludeStagedSells(rows, s), ...stagedMintRows(s)]
+}
+
+/** Resolve a synthetic (negative) mint handle across ALL slots — pins and
+ * loadout refs are stored per build/save, not per page. */
+export function stagedMintByHandle(handle: number): MintSpec | undefined {
+  for (const s of Object.values(state)) {
+    const m = s.mints.find((mm) => mm.handle === handle)
+    if (m) return m
+  }
+  return undefined
+}
+
+/** The slot's pending loadout ops bucketed by kind/index — the one shape
+ * every preset-list surface composes with (Loadouts page, save-as-loadout
+ * target picker). */
+export type LoadoutOpBuckets = {
+  renameByIndex: Map<number, { id: string; name: string }>
+  deleteByIndex: Map<number, string>
+  overwriteByIndex: Map<
+    number,
+    { id: string; ga_handles: number[]; name?: string }
+  >
+  adds: Array<{
+    id: string
+    name: string
+    character: string
+    vesselName?: string
+    ga_handles: number[]
+  }>
+  resetVesselsId?: string
+  resetPresetsId?: string
+}
+
+export function bucketLoadoutOps(s: SlotPending): LoadoutOpBuckets {
+  const out: LoadoutOpBuckets = {
+    renameByIndex: new Map(),
+    deleteByIndex: new Map(),
+    overwriteByIndex: new Map(),
+    adds: [],
+  }
+  for (const op of s.loadoutOps) {
+    if (op.kind === "rename")
+      out.renameByIndex.set(op.index, { id: op.id, name: op.name })
+    else if (op.kind === "delete") out.deleteByIndex.set(op.index, op.id)
+    else if (op.kind === "overwrite")
+      out.overwriteByIndex.set(op.index, {
+        id: op.id,
+        ga_handles: op.ga_handles,
+        name: op.name,
+      })
+    else if (op.kind === "add")
+      out.adds.push({
+        id: op.id,
+        name: op.name,
+        character: op.character,
+        vesselName: op.vesselName,
+        ga_handles: op.ga_handles,
+      })
+    else if (op.kind === "reset_vessels") out.resetVesselsId = op.id
+    else if (op.kind === "reset_presets") out.resetPresetsId = op.id
+  }
+  return out
+}
+
+/** A valid "replace this loadout" target under the LIVE preset list. */
+export type ReplaceTarget =
+  | {
+      kind: "existing"
+      index: number
+      name: string
+      /** An earlier staged overwrite of the same preset (superseded on queue). */
+      staleOverwriteId?: string
+    }
+  | { kind: "staged-add"; opId: string; name: string }
+
+/**
+ * The loadouts a "save as loadout → replace" flow may target, composed with
+ * the staged diff: staged deletes are not targets (an overwrite would
+ * silently fight the delete), staged renames show their new names, a staged
+ * full reset leaves only staged adds, and staged adds ARE targets (replacing
+ * one swaps the add op in place — it has no in-save index yet).
+ */
+export function replaceTargets(
+  existing: Array<{ index: number; name: string }>,
+  s: SlotPending,
+  character: string,
+): ReplaceTarget[] {
+  const b = bucketLoadoutOps(s)
+  const out: ReplaceTarget[] = []
+  if (b.resetPresetsId === undefined) {
+    for (const e of existing) {
+      if (b.deleteByIndex.has(e.index)) continue
+      out.push({
+        kind: "existing",
+        index: e.index,
+        name: b.renameByIndex.get(e.index)?.name ?? e.name,
+        staleOverwriteId: b.overwriteByIndex.get(e.index)?.id,
+      })
+    }
+  }
+  for (const a of b.adds) {
+    if (a.character === character)
+      out.push({ kind: "staged-add", opId: a.id, name: a.name })
+  }
+  return out
+}
+
+/**
+ * Queue "replace `target` with this relic set" with clean diff semantics:
+ * an existing preset gets ONE overwrite op (a repeat replace supersedes the
+ * earlier staged op), and a staged add is swapped in place (same name, new
+ * vessel/relics) — never an overwrite, it has no in-save index yet.
+ */
+export function queueReplaceLoadout(
+  slot: number,
+  target: ReplaceTarget,
+  spec: {
+    character: string
+    vessel_id: number
+    ga_handles: number[]
+    vesselName?: string
+  },
+): void {
+  if (target.kind === "staged-add") {
+    removeLoadoutOp(slot, target.opId)
+    addLoadoutOp(slot, {
+      kind: "add",
+      character: spec.character,
+      vessel_id: spec.vessel_id,
+      ga_handles: spec.ga_handles,
+      name: target.name,
+      vesselName: spec.vesselName,
+    })
+    return
+  }
+  if (target.staleOverwriteId) removeLoadoutOp(slot, target.staleOverwriteId)
+  addLoadoutOp(slot, {
+    kind: "overwrite",
+    index: target.index,
+    character: spec.character,
+    vessel_id: spec.vessel_id,
+    ga_handles: spec.ga_handles,
+    targetName: target.name,
+  })
+}
+
 /** Per-slot rollup of the staged diff (upload divergence gate dialog). */
 export type SlotSummary = {
   slot: number

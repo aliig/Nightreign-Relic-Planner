@@ -15,7 +15,7 @@ import {
   useQueryClient,
   useSuspenseQuery,
 } from "@tanstack/react-query"
-import { createFileRoute, useParams } from "@tanstack/react-router"
+import { createFileRoute, useNavigate, useParams } from "@tanstack/react-router"
 import { Info, Pin, Plus, Search, Trash2, X } from "lucide-react"
 import {
   Suspense,
@@ -73,6 +73,11 @@ import {
   type WeightGroup,
 } from "@/hooks/useLocalBuilds"
 import { CHARACTER_NAMES } from "@/lib/constants"
+import {
+  effectiveRelicRows,
+  stagedMintByHandle,
+  usePendingSlot,
+} from "@/lib/pendingChanges"
 import { cn } from "@/lib/utils"
 import { handleError } from "@/utils"
 
@@ -185,7 +190,11 @@ function WeightInput({
   function commit() {
     const n = Number(draft)
     if (!Number.isNaN(n) && n !== value) {
-      onChange(Math.max(min, Math.min(max, n)))
+      const clamped = Math.max(min, Math.min(max, n))
+      onChange(clamped)
+      // Show what was actually committed — the value prop won't change (so
+      // the sync effect won't fire) when clamping lands on the old value.
+      setDraft(String(clamped))
     } else {
       setDraft(String(value)) // revert invalid input
     }
@@ -209,6 +218,24 @@ function WeightInput({
       title={title}
     />
   )
+}
+
+/** A family's weight floor is set relative to its group's weight (the
+ *  ceiling). When the ceiling changes, rescale the floor to preserve the
+ *  floor/ceiling ratio — e.g. a 70-of-80 floor becomes 53-of-60. Returns the
+ *  new floor, or undefined when it should be dropped (non-positive ceiling,
+ *  or nothing left after rounding). Result stays strictly below the ceiling. */
+function rescaleFloorToCeiling(
+  floor: number,
+  oldWeight: number,
+  newWeight: number,
+): number | undefined {
+  if (newWeight <= 0) return undefined
+  // A stale floor with no positive old ceiling has no ratio to keep — clamp.
+  const scaled =
+    oldWeight > 0 ? Math.round((floor * newWeight) / oldWeight) : floor
+  const clamped = Math.min(scaled, newWeight - 1)
+  return clamped > 0 ? clamped : undefined
 }
 
 function getLabelForWeight(weight: number): { label: string; color: string } {
@@ -400,10 +427,12 @@ function DraggableBrowserRow({
 
 function PinnedRelicPickerContent({
   profileId,
+  slotIndex,
   onSelect,
   effects,
 }: {
   profileId: string
+  slotIndex: number | null
   onSelect: (relic: RelicForPicker) => void
   effects: EffectMeta[]
 }) {
@@ -413,7 +442,11 @@ function PinnedRelicPickerContent({
     staleTime: 5 * 60 * 1000,
   })
   const [search, setSearch] = useState("")
-  const relics = (data.data ?? []).filter(
+  // Live inventory: staged sells can't be pinned (they're already gone) and
+  // staged Relic Rites purchases CAN (pin by synthetic handle — the optimizer
+  // request resolves it via staged_mints).
+  const pending = usePendingSlot(slotIndex)
+  const relics = effectiveRelicRows(data.data ?? [], pending).filter(
     (r) => !search || r.name.toLowerCase().includes(search.toLowerCase()),
   )
   const effectMap = useMemo(() => buildEffectMap(effects), [effects])
@@ -463,6 +496,7 @@ function PinnedRelicPickerContent({
                     {r.name}
                   </span>
                   <span className="ml-auto text-xs text-muted-foreground shrink-0">
+                    {"incoming" in r ? "Incoming · " : ""}
                     {r.tier} {r.is_deep ? "· Deep" : ""}
                   </span>
                 </button>
@@ -515,6 +549,8 @@ function AuthPinnedRelicDialog({
   })
   const profiles = profilesData?.data ?? []
   const selectedProfileId = selectedId ?? profiles[0]?.id ?? null
+  const selectedSlotIndex =
+    profiles.find((p) => p.id === selectedProfileId)?.slot_index ?? null
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -545,6 +581,7 @@ function AuthPinnedRelicDialog({
           <Suspense fallback={<Skeleton className="h-40 w-full" />}>
             <PinnedRelicPickerContent
               profileId={selectedProfileId}
+              slotIndex={selectedSlotIndex}
               effects={effects}
               onSelect={(relic) => {
                 if (!pinnedHandles.includes(relic.ga_handle)) {
@@ -580,9 +617,14 @@ function AnonPinnedRelicDialog({
 
   const raw = sessionStorage.getItem("selectedProfile")
   const profile = raw ? JSON.parse(raw) : null
-  const relics: ParsedRelicData[] = (profile?.relics ?? []).filter(
-    (r: ParsedRelicData) =>
-      !search || r.name.toLowerCase().includes(search.toLowerCase()),
+  // Live inventory, same composition as the auth picker: staged sells out,
+  // staged mints in (pinnable by synthetic handle).
+  const pending = usePendingSlot(profile?.slot_index ?? null)
+  const relics = effectiveRelicRows(
+    (profile?.relics ?? []) as ParsedRelicData[],
+    pending,
+  ).filter(
+    (r) => !search || r.name.toLowerCase().includes(search.toLowerCase()),
   )
   const effectMap = useMemo(() => buildEffectMap(effects), [effects])
 
@@ -636,6 +678,7 @@ function AnonPinnedRelicDialog({
                       {r.name}
                     </span>
                     <span className="ml-auto text-xs text-muted-foreground shrink-0">
+                      {"incoming" in r ? "Incoming · " : ""}
                       {r.is_deep ? "Deep" : "Standard"}
                     </span>
                   </button>
@@ -691,6 +734,7 @@ interface EditorUIProps {
   familyLimits: Record<string, number>
   familyWeightFloors: Record<string, number>
   saving: boolean
+  deleting: boolean
   effects: EffectMeta[]
   families: FamilyMeta[]
   isAuth: boolean
@@ -712,6 +756,7 @@ interface EditorUIProps {
   onFamilyWeightFloorsChange: (floors: Record<string, number>) => void
   onRename: (newName: string) => void
   onChangeCharacter: (character: string) => void
+  onDelete: () => void
 }
 
 function BuildEditorUI({
@@ -730,6 +775,7 @@ function BuildEditorUI({
   excludedStackingCategories,
   stackingCategories,
   saving,
+  deleting,
   effects,
   families,
   isAuth,
@@ -751,9 +797,11 @@ function BuildEditorUI({
   onFamilyWeightFloorsChange,
   onRename,
   onChangeCharacter,
+  onDelete,
 }: EditorUIProps) {
   const [effectSearch, setEffectSearch] = useState("")
   const [draftName, setDraftName] = useState(name)
+  const [deleteOpen, setDeleteOpen] = useState(false)
   const [activeDragName, setActiveDragName] = useState<string | null>(null)
 
   useEffect(() => {
@@ -894,6 +942,7 @@ function BuildEditorUI({
   // Move family to a zone (removing it from all other zones first)
   const assignFamily = useCallback(
     (familyName: string, targetZone: string) => {
+      const oldGroup = groups.find((g) => g.families.includes(familyName))
       const newGroups = groups.map((g) => ({
         ...g,
         families: g.families.filter((n) => n !== familyName),
@@ -909,16 +958,29 @@ function BuildEditorUI({
         }
       }
 
+      // A weight floor only means something relative to a group's weight:
+      // moving to Required/Excluded drops it, moving between groups rescales
+      // it so the floor keeps its share of the new ceiling.
+      const dropFloor = () => {
+        if (familyName in familyWeightFloors) {
+          const next = { ...familyWeightFloors }
+          delete next[familyName]
+          onFamilyWeightFloorsChange(next)
+        }
+      }
+
       if (targetZone === "zone:required") {
         onGroupsChange(newGroups)
         onRequiredFamiliesChange([...newRequired, familyName])
         onExcludedFamiliesChange(newExcluded)
         dropLimit()
+        dropFloor()
       } else if (targetZone === "zone:excluded") {
         onGroupsChange(newGroups)
         onRequiredFamiliesChange(newRequired)
         onExcludedFamiliesChange([...newExcluded, familyName])
         dropLimit()
+        dropFloor()
       } else if (targetZone.startsWith("zone:group:")) {
         const idx = parseInt(targetZone.slice("zone:group:".length), 10)
         onGroupsChange(
@@ -928,6 +990,20 @@ function BuildEditorUI({
         )
         onRequiredFamiliesChange(newRequired)
         onExcludedFamiliesChange(newExcluded)
+        const floor = familyWeightFloors[familyName]
+        if (floor !== undefined) {
+          // No old group means a stale floor with no ceiling to scale from
+          // (family re-added from the browser / Required / Excluded) — drop.
+          const rescaled = oldGroup
+            ? rescaleFloorToCeiling(floor, oldGroup.weight, groups[idx].weight)
+            : undefined
+          if (rescaled !== floor) {
+            const next = { ...familyWeightFloors }
+            if (rescaled === undefined) delete next[familyName]
+            else next[familyName] = rescaled
+            onFamilyWeightFloorsChange(next)
+          }
+        }
       }
     },
     [
@@ -939,6 +1015,8 @@ function BuildEditorUI({
       onExcludedFamiliesChange,
       familyLimits,
       onFamilyLimitsChange,
+      familyWeightFloors,
+      onFamilyWeightFloorsChange,
     ],
   )
 
@@ -1014,10 +1092,45 @@ function BuildEditorUI({
               </SelectContent>
             </Select>
           </div>
-          {saving && (
-            <span className="text-sm text-muted-foreground">Saving…</span>
-          )}
+          <div className="flex items-center gap-3">
+            {saving && (
+              <span className="text-sm text-muted-foreground">Saving…</span>
+            )}
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-destructive hover:text-destructive"
+              onClick={() => setDeleteOpen(true)}
+            >
+              <Trash2 className="mr-2 h-4 w-4" />
+              Delete build
+            </Button>
+          </div>
         </div>
+
+        {/* Delete confirmation */}
+        <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Delete "{draftName}"?</DialogTitle>
+            </DialogHeader>
+            <p className="text-sm text-muted-foreground">
+              This action cannot be undone.
+            </p>
+            <div className="flex justify-end gap-2 mt-4">
+              <Button variant="outline" onClick={() => setDeleteOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                variant="destructive"
+                onClick={onDelete}
+                disabled={deleting}
+              >
+                {deleting ? "Deleting…" : "Delete"}
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
 
         {/* Settings */}
         <div className="p-4 rounded-md border border-border/60 bg-card/60 backdrop-blur-md space-y-4">
@@ -1330,13 +1443,31 @@ function BuildEditorUI({
                     <div key={idx} className="flex items-start gap-2">
                       <WeightInput
                         value={group.weight}
-                        onChange={(w) =>
+                        onChange={(w) => {
                           onGroupsChange(
                             groups.map((g, i) =>
                               i === idx ? { ...g, weight: w } : g,
                             ),
                           )
-                        }
+                          // The group weight is each member family's floor
+                          // ceiling — rescale floors to keep their ratio.
+                          let changed = false
+                          const next = { ...familyWeightFloors }
+                          for (const fam of group.families) {
+                            const f = next[fam]
+                            if (f === undefined) continue
+                            const rescaled = rescaleFloorToCeiling(
+                              f,
+                              group.weight,
+                              w,
+                            )
+                            if (rescaled === f) continue
+                            if (rescaled === undefined) delete next[fam]
+                            else next[fam] = rescaled
+                            changed = true
+                          }
+                          if (changed) onFamilyWeightFloorsChange(next)
+                        }}
                         className="mt-2 w-14 text-xs text-center bg-transparent border border-border/60 rounded px-1 py-0.5 focus:border-primary focus:outline-none focus:ring-0 shrink-0 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                         title="Group weight (−100 to 100)"
                       />
@@ -1464,7 +1595,14 @@ function BuildEditorUI({
                                                   value={floor}
                                                   onChange={setFloor}
                                                   min={0}
-                                                  max={group.weight}
+                                                  // Strictly below the family
+                                                  // weight — a floor AT the
+                                                  // ceiling would flatten all
+                                                  // tiers to the same value.
+                                                  max={Math.max(
+                                                    0,
+                                                    group.weight - 1,
+                                                  )}
                                                   className="w-16 text-xs text-center bg-transparent border border-border/60 rounded px-1 py-0.5 focus:border-primary focus:outline-none focus:ring-0 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                                                   title="Lift the weakest tiers to at least this value (0 = no floor)"
                                                 />
@@ -1544,9 +1682,19 @@ function BuildEditorUI({
                       </DroppableZone>
                       <button
                         type="button"
-                        onClick={() =>
+                        onClick={() => {
                           onGroupsChange(groups.filter((_, i) => i !== idx))
-                        }
+                          // Floors of this group's families lose their
+                          // ceiling with the group — drop them.
+                          const orphaned = group.families.filter(
+                            (n) => n in familyWeightFloors,
+                          )
+                          if (orphaned.length > 0) {
+                            const next = { ...familyWeightFloors }
+                            for (const n of orphaned) delete next[n]
+                            onFamilyWeightFloorsChange(next)
+                          }
+                        }}
                         className="mt-2 text-muted-foreground hover:text-destructive transition-colors shrink-0"
                         aria-label="Remove group"
                       >
@@ -1767,8 +1915,9 @@ function BuildEditorUI({
 // ---------------------------------------------------------------------------
 
 function AuthBuildEditorContent({ buildId }: { buildId: string }) {
-  const { showErrorToast } = useCustomToast()
+  const { showSuccessToast, showErrorToast } = useCustomToast()
   const queryClient = useQueryClient()
+  const navigate = useNavigate()
 
   const { data: buildRaw } = useSuspenseQuery({
     queryKey: ["builds", buildId],
@@ -1888,6 +2037,21 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
       const profiles = profilesResponse?.data ?? []
       const meta = new Map<number, RelicForPicker>()
 
+      // Synthetic (negative) handles are staged Relic Rites purchases — they
+      // exist only in the staged diff, never in any profile's relic rows.
+      for (const handle of [...pinnedSet]) {
+        const mint = handle < 0 ? stagedMintByHandle(handle) : undefined
+        if (mint) {
+          meta.set(handle, {
+            ga_handle: handle,
+            name: mint.name,
+            color: mint.color,
+            is_deep: mint.isDeep,
+          })
+          pinnedSet.delete(handle)
+        }
+      }
+
       for (const prof of profiles) {
         if (pinnedSet.size === 0) break
         const relicsResponse = await queryClient.fetchQuery({
@@ -1965,6 +2129,28 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
     onError: handleError.bind(showErrorToast),
   })
 
+  const deleteMutation = useMutation({
+    mutationFn: () => {
+      // A queued auto-save flushing after the DELETE would PUT a 404 — drop
+      // it (nulling the ref also disarms the unmount flush).
+      if (saveTimerRef.current) {
+        clearTimeout(saveTimerRef.current)
+        saveTimerRef.current = null
+      }
+      return BuildsService.deleteBuild({ buildId })
+    },
+    onSuccess: async () => {
+      showSuccessToast(`"${nameRef.current}" deleted.`)
+      // Leave the editor before touching caches — removing the active
+      // suspense query while still mounted would refetch the deleted build.
+      await navigate({ to: "/builds" })
+      queryClient.removeQueries({ queryKey: ["builds", buildId] })
+      queryClient.removeQueries({ queryKey: ["snapshot", buildId] })
+      queryClient.invalidateQueries({ queryKey: ["builds"], exact: true })
+    },
+    onError: handleError.bind(showErrorToast),
+  })
+
   // Store flush function in ref so cleanup always calls latest version
   const flushSaveRef = useRef(() => saveMutation.mutate())
   flushSaveRef.current = () => saveMutation.mutate()
@@ -2000,6 +2186,7 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
       excludedStackingCategories={excludedStackingCategories}
       stackingCategories={stackingCategories}
       saving={saveMutation.isPending}
+      deleting={deleteMutation.isPending}
       effects={effects}
       families={families}
       isAuth={true}
@@ -2068,6 +2255,7 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
         characterRef.current = c
         scheduleAutoSave()
       }}
+      onDelete={() => deleteMutation.mutate()}
     />
   )
 }
@@ -2077,7 +2265,8 @@ function AuthBuildEditorContent({ buildId }: { buildId: string }) {
 // ---------------------------------------------------------------------------
 
 function LocalBuildEditorContent({ buildId }: { buildId: string }) {
-  const { getById, update } = useLocalBuilds()
+  const { getById, update, remove } = useLocalBuilds()
+  const navigate = useNavigate()
 
   const { data: effectsData } = useSuspenseQuery({
     queryKey: ["game", "effects"],
@@ -2142,6 +2331,20 @@ function LocalBuildEditorContent({ buildId }: { buildId: string }) {
           name: r.name,
           color: r.color,
           is_deep: r.is_deep,
+        })
+      }
+    }
+    // Synthetic (negative) handles are staged Relic Rites purchases — resolve
+    // them from the staged diff so a pinned mint shows its name, not "#-3".
+    for (const handle of handles) {
+      if (handle >= 0 || map.has(handle)) continue
+      const mint = stagedMintByHandle(handle)
+      if (mint) {
+        map.set(handle, {
+          ga_handle: handle,
+          name: mint.name,
+          color: mint.color,
+          is_deep: mint.isDeep,
         })
       }
     }
@@ -2268,6 +2471,7 @@ function LocalBuildEditorContent({ buildId }: { buildId: string }) {
       excludedStackingCategories={excludedStackingCategories}
       stackingCategories={stackingCategories}
       saving={false}
+      deleting={false}
       effects={effects}
       families={families}
       isAuth={false}
@@ -2335,6 +2539,16 @@ function LocalBuildEditorContent({ buildId }: { buildId: string }) {
         setCharacter(c)
         characterRef.current = c
         scheduleAutoSave()
+      }}
+      onDelete={() => {
+        // Disarm the debounced auto-save so the unmount flush can't
+        // resurrect the build via a trailing update().
+        if (saveTimerRef.current) {
+          clearTimeout(saveTimerRef.current)
+          saveTimerRef.current = null
+        }
+        remove(buildId)
+        navigate({ to: "/builds" })
       }}
     />
   )

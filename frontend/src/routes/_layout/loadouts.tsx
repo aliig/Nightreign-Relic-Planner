@@ -35,6 +35,7 @@ import useAuth from "@/hooks/useAuth"
 import useCustomToast from "@/hooks/useCustomToast"
 import {
   addLoadoutOp,
+  bucketLoadoutOps,
   removeLoadoutOp,
   usePendingSlot,
   useReconcileSlotBases,
@@ -222,12 +223,16 @@ function LoadoutManager({
   } | null>(null)
   const [renameDraft, setRenameDraft] = useState("")
 
-  // Staged Relic Rites purchases join the lookup under their synthetic
-  // negative handles, so a staged loadout that places one renders the relic
-  // (and scores its cumulative effects) instead of "not in current inventory".
+  // Live relic lookup: staged Relic Rites purchases join under their
+  // synthetic negative handles (a staged loadout that places one renders the
+  // relic instead of "not in current inventory"), and staged sells drop OUT —
+  // a preset holding a trashed relic shows the slot as missing, exactly like
+  // the game renders a preset whose relic was sold.
   const relicLookup = useMemo(() => {
-    if (pending.mints.length === 0) return relicByHandle
+    if (pending.mints.length === 0 && pending.sells.length === 0)
+      return relicByHandle
     const m = new Map(relicByHandle)
+    for (const h of pending.sells) m.delete(h)
     for (const mint of pending.mints) {
       m.set(mint.handle, {
         name: mint.name,
@@ -239,45 +244,18 @@ function LoadoutManager({
       })
     }
     return m
-  }, [relicByHandle, pending.mints])
+  }, [relicByHandle, pending.mints, pending.sells])
 
-  // Bucket this slot's pending loadout ops by kind/index.
-  const renameByIndex = new Map<number, { id: string; name: string }>()
-  const deleteByIndex = new Map<number, string>()
-  const overwriteByIndex = new Map<
-    number,
-    { id: string; ga_handles: number[]; name?: string }
-  >()
-  const adds: Array<{
-    id: string
-    name: string
-    character: string
-    vesselName?: string
-    ga_handles: number[]
-  }> = []
-  let resetVesselsId: string | undefined
-  let resetPresetsId: string | undefined
-  for (const op of pending.loadoutOps) {
-    if (op.kind === "rename")
-      renameByIndex.set(op.index, { id: op.id, name: op.name })
-    else if (op.kind === "delete") deleteByIndex.set(op.index, op.id)
-    else if (op.kind === "overwrite")
-      overwriteByIndex.set(op.index, {
-        id: op.id,
-        ga_handles: op.ga_handles,
-        name: op.name,
-      })
-    else if (op.kind === "add")
-      adds.push({
-        id: op.id,
-        name: op.name,
-        character: op.character,
-        vesselName: op.vesselName,
-        ga_handles: op.ga_handles,
-      })
-    else if (op.kind === "reset_vessels") resetVesselsId = op.id
-    else if (op.kind === "reset_presets") resetPresetsId = op.id
-  }
+  // Bucket this slot's pending loadout ops by kind/index (shared selector —
+  // the save-as-loadout target picker composes with the same shape).
+  const {
+    renameByIndex,
+    deleteByIndex,
+    overwriteByIndex,
+    adds,
+    resetVesselsId,
+    resetPresetsId,
+  } = bucketLoadoutOps(pending)
   const resetPresets = resetPresetsId !== undefined
   const resetVessels = resetVesselsId !== undefined
   const hasOtherLoadoutEdits =

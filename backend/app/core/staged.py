@@ -1,10 +1,15 @@
-"""Effective inventory: DB relics + staged in-app edits, per request.
+"""Effective slot state: base save state + staged in-app edits, per request.
 
 The frontend stages save edits client-side (sold relics, Relic Rites purchases
-a.k.a. "mints") and passes them with each optimizer request as a stateless
-diff — the same philosophy as the rites ``sold_handles`` form field.  This
-module turns (profile inventory + staged diff) into the *effective* inventory
-the optimizer and the snapshot freshness gate operate on.
+a.k.a. "mints", their net Murk delta) and passes them with each request as a
+stateless diff — the same philosophy as the rites ``sold_handles`` form field.
+This module is the ONE place that composes (base state + staged diff) into the
+*effective* state endpoints compute over:
+
+- ``apply_staged_diff`` — effective inventory (optimizer, snapshot gate, rites)
+- ``effective_slot_state`` — inventory + wallet + storage/ghost capacity for
+  endpoints that read a whole save slot (rites plan; any future save-reading
+  endpoint should start here instead of hand-rolling the composition)
 
 Fidelity: staged mints are re-validated exactly like the export path
 (``_export_added_save``) — safe relic id + RelicChecker legality — and their
@@ -13,14 +18,16 @@ trusted from the client.
 """
 import hashlib
 import json
+from dataclasses import dataclass
 
 from fastapi import HTTPException
 
 from app.models import StagedMint
 from nrplanner.changes import relic_fingerprint
 from nrplanner.checker import InvalidReason, RelicChecker
-from nrplanner.constants import EMPTY_EFFECT
+from nrplanner.constants import EMPTY_EFFECT, RELIC_STORAGE_CAP
 from nrplanner.models import OwnedRelic
+from nrplanner.writer import sell_value
 
 
 def staged_diff_signature(
@@ -122,3 +129,65 @@ def apply_staged_diff(
             tier=tier,
         ))
     return effective
+
+
+@dataclass
+class EffectiveSlotState:
+    """A save slot with the staged diff applied — the LIVE state the app shows.
+
+    Compute over these fields, never the raw save values, wherever staged
+    edits should already be reflected. ``murk_raw`` is the only sanctioned
+    raw read-through: the rites anti-scum roll seed must hash committed save
+    state, never the staged diff (see _rites_roll_seed).
+    """
+    owned: list[OwnedRelic]     # base − staged sells + staged mints
+    wallet: int                 # spendable Murk: max(0, raw + min(0, delta))
+    murk_raw: int               # the save's on-disk Murk (seed input only)
+    pending_sold_refund: int    # total sell value of the staged sells
+    sold_handles: set[int]
+    mint_count: int
+    storage_left_ingame: int    # free slots under the pure in-game 1950 cap
+    ghost_capacity: int         # export-time mintable slots: cap + sells − mints
+
+
+def effective_slot_state(
+    owned_all: list[OwnedRelic],
+    murk_raw: int,
+    ghost_cap: int,
+    staged_sells: list[int],
+    staged_mints: list[StagedMint],
+    staged_murk_delta: int,
+    ds,
+    items_json: dict,
+) -> EffectiveSlotState:
+    """Compose (parsed save slot + staged diff) into the effective slot state.
+
+    - Inventory via ``apply_staged_diff`` (mints legality-gated, sells removed).
+    - Wallet: the save's Murk spent down by the staged batch delta. The delta
+      is client-supplied (dud refunds cannot be reconstructed from keepers —
+      same trust model as /saves/export-add-relics) but only ever LOWERS the
+      wallet: a staged batch's net is always <= 0 (buy price exceeds
+      sell-back), so positive values are clamped and a client can never
+      manufacture planning Murk.
+    - Storage: staged mints occupy in-game slots now, and will each consume a
+      ghost record at export while every staged sell tombstones one free.
+
+    Callers wanting stricter sell validation than apply_staged_diff's
+    silent-ignore (e.g. rites' unknown/protected 422s) check BEFORE composing.
+    """
+    sold = set(staged_sells)
+    owned = apply_staged_diff(owned_all, staged_sells, staged_mints, ds, items_json)
+    refund = sum(
+        sell_value(o.effect_count, o.is_deep)
+        for o in owned_all if o.ga_handle in sold
+    )
+    return EffectiveSlotState(
+        owned=owned,
+        wallet=max(0, murk_raw + min(0, staged_murk_delta)),
+        murk_raw=murk_raw,
+        pending_sold_refund=refund,
+        sold_handles=sold,
+        mint_count=len(staged_mints),
+        storage_left_ingame=max(0, RELIC_STORAGE_CAP - len(owned)),
+        ghost_capacity=max(0, ghost_cap + len(sold) - len(staged_mints)),
+    )

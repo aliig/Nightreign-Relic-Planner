@@ -307,7 +307,7 @@ class RitesPlanResponse(SQLModel):
     generated: int                  # relics actually bought (all_murk: affordable prefix)
     kept: int
     duds: int
-    murk_before: int                # the save's real Murk
+    murk_before: int                # effective wallet: save Murk + staged mint delta
     murk_after: int                 # projected save Murk after BOTH export steps
     murk_cost: int                  # gross Murk spent buying everything bought
     murk_refunded: int              # Murk credited from selling the duds
@@ -316,11 +316,14 @@ class RitesPlanResponse(SQLModel):
     # /saves/export. murk_after == murk_before + pending_sold_refund + murk_delta.
     murk_delta: int
     limited_by: str | None = None   # "murk" | "storage" | "gen_max" | None
-    add_capacity: int               # max relics one export can mint (ghost slots)
-    storage_left: int               # all_murk: 1950 − owned after staged sells;
-                                    # fixed/budget: min(1950 − owned, add_capacity)
-    pending_sold: int = 0           # staged sells the plan honored (all_murk only)
-    pending_sold_refund: int = 0    # their total sell value (funds the walk)
+    add_capacity: int               # effective ghost capacity: raw slots +
+                                    # staged sells − staged mints (how many MORE
+                                    # relics the next export can mint)
+    storage_left: int               # all_murk: 1950 − effective owned (staged diff
+                                    # applied); fixed/budget: also capped by ghost
+                                    # add-capacity ± the staged diff
+    pending_sold: int = 0           # staged sells the plan honored (any mode)
+    pending_sold_refund: int = 0    # their total sell value (spendable in-plan)
 
 
 # ---------------------------------------------------------------------------

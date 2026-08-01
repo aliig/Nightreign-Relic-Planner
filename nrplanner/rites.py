@@ -119,7 +119,7 @@ class BulkResult:
     generated: int          # relics actually bought (all_murk: the affordable prefix)
     kept: int
     duds: int
-    murk_before: int        # the save's real Murk (never includes extra_budget)
+    murk_before: int        # the caller's wallet base (never includes extra_budget)
     murk_after: int         # >= 0; includes extra_budget (staged-sell refunds)
     murk_gross_cost: int    # total spent buying everything bought
     murk_refunded: int      # total credited from selling the duds (excludes extra_budget)
@@ -298,7 +298,9 @@ def bulk_acquire(*, builds: list[BuildContext], owned: list[OwnedRelic],
 
     * ``fixed`` / ``budget`` — one static settlement: ``storage_cap_left`` bounds
       keepers added (lowest priority trimmed first), then keepers/duds are
-      dropped to fit the Murk you have.
+      dropped to fit the Murk you have (``current_murk + extra_budget`` — a
+      staged sell's refund is spendable in every mode, since in-game the
+      player can sell at the shop before buying).
     * ``all_murk`` — a chronological per-relic walk that emulates the in-game
       buy/sell cycle: each roll is bought in stream order (needs Murk and one
       free storage slot), keepers consume a slot, duds are sold back on the spot
@@ -317,8 +319,19 @@ def bulk_acquire(*, builds: list[BuildContext], owned: list[OwnedRelic],
     """
     scorer = scorer or BuildScorer(ds)
     optimizer = optimizer or VesselOptimizer(ds, scorer)
-    if rng is None:
-        rng = random.Random(seed)
+
+    def _bucket_rng(bucket: PurchaseBucket) -> random.Random:
+        # Independent deterministic sub-stream per flatstone type: a bucket's
+        # Nth roll depends only on (seed, is_deep, version), never on the other
+        # buckets' presence or quantities. Anti-scum: toggling one category's
+        # quantity can never perturb another category's rolls (a shared stream
+        # would let "buy 1 deep first" re-roll every scenic). An explicit
+        # ``rng`` overrides this with a single shared stream (test hook).
+        if rng is not None:
+            return rng
+        if seed is None:
+            return random.Random()
+        return random.Random(f"{seed}|{int(bucket.is_deep)}|{bucket.version}")
 
     # 1. plan + 2. generate ------------------------------------------------------
     counts, gen_max_hit = _plan_counts(
@@ -330,9 +343,10 @@ def bulk_acquire(*, builds: list[BuildContext], owned: list[OwnedRelic],
     buy_cost_of: dict[int, int] = {}
     hi = 0
     for bucket, n in zip(buckets, counts):
+        brng = _bucket_rng(bucket)
         for _ in range(n):
             g = generator.roll(is_deep=bucket.is_deep, version=bucket.version,
-                               mode="random", rng=rng)
+                               mode="random", rng=brng)
             o = generated_to_owned(g, handles[hi])
             hi += 1
             generated.append(o)
@@ -544,30 +558,34 @@ def bulk_acquire(*, builds: list[BuildContext], owned: list[OwnedRelic],
         limited = "storage"
 
     # 7. Murk settlement (guarantee murk_after >= 0) -----------------------------
+    #    The wallet includes extra_budget (staged-sell refunds): in-game the
+    #    player can sell those relics at the shop before buying, so the refund
+    #    is spendable in every mode, not just the all_murk cycle walk.
+    wallet = current_murk + extra_budget
     keeper_handles = {k.relic.ga_handle for k in keepers}
     gross = sum(buy_cost_of[o.ga_handle] for o in generated)
     refunds = sum(refund(o) for o in generated if o.ga_handle not in keeper_handles)
     net = gross - refunds
 
-    if current_murk - net < 0:
+    if wallet - net < 0:
         limited = "murk"
         # 7a. drop lowest-priority keepers first (build before inclusion); a dropped
         #     keeper becomes a refunded dud, which improves affordability.
         keepers.sort(key=_keep_priority)
         drop = 0
-        while current_murk - net < 0 and drop < len(keepers):
+        while wallet - net < 0 and drop < len(keepers):
             net -= refund(keepers[drop].relic)
             drop += 1
         keepers = keepers[drop:]
         keeper_handles = {k.relic.ga_handle for k in keepers}
         # 7b. still negative -> un-buy the most-expensive-net duds
-        if current_murk - net < 0:
+        if wallet - net < 0:
             duds = sorted(
                 (o for o in generated if o.ga_handle not in keeper_handles),
                 key=lambda o: buy_cost_of[o.ga_handle] - refund(o), reverse=True)
             removed: set[int] = set()
             for o in duds:
-                if current_murk - net >= 0:
+                if wallet - net >= 0:
                     break
                 net -= (buy_cost_of[o.ga_handle] - refund(o))
                 removed.add(o.ga_handle)
@@ -586,7 +604,7 @@ def bulk_acquire(*, builds: list[BuildContext], owned: list[OwnedRelic],
         kept=kept,
         duds=len(generated) - kept,
         murk_before=current_murk,
-        murk_after=current_murk - net,
+        murk_after=wallet - net,
         murk_gross_cost=gross,
         murk_refunded=refunds,
         limited_by=limited,

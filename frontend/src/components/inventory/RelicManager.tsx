@@ -43,7 +43,12 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import type { RelicBuildRef } from "@/hooks/useRelicUsage"
-import { setFavorite, toggleSell, usePendingSlot } from "@/lib/pendingChanges"
+import {
+  effectiveMurks,
+  setFavorite,
+  toggleSell,
+  usePendingSlot,
+} from "@/lib/pendingChanges"
 import { type RelicStatus, relicStatus } from "@/lib/relicStatus"
 import { effectCountOf, formatMurks, sellValue } from "@/lib/sellValue"
 import { cn } from "@/lib/utils"
@@ -231,7 +236,9 @@ export function RelicManager({
   // Murk reflects the modified save: every trashed relic's value is already
   // added, and the staged Relic Rites batch's net delta (murkDelta, usually a
   // cost) is applied too — the two are disjoint by construction (rites sells
-  // only what it buys; trashes here are pre-owned relics).
+  // only what it buys; trashes here are pre-owned relics). The total comes
+  // from the shared live-Murk selector so every page projects the same value;
+  // murkGain is recomputed from live relic data only for the breakdown chip.
   const trashedRelics = useMemo(
     () => relics.filter((r) => trashed.has(r.gaHandle)),
     [relics, trashed],
@@ -240,10 +247,7 @@ export function RelicManager({
     (sum, r) => sum + sellValue(effectCountOf(r.effects), r.isDeep),
     0,
   )
-  const projectedMurks = Math.max(
-    0,
-    Math.min(murks + murkGain + pending.murkDelta, 0xffffffff),
-  )
+  const projectedMurks = effectiveMurks(murks, pending) ?? 0
   const trashedCount = trashedRelics.length
   // Owned-vs-cap readout reflects pending trashes and staged mints — `relics`
   // already contains the incoming rows, each occupying one storage slot.

@@ -53,7 +53,13 @@ import {
   rawScoreTooltip,
   relicSummary,
 } from "@/lib/buildChange"
-import { addLoadoutOp } from "@/lib/pendingChanges"
+import {
+  addLoadoutOp,
+  queueReplaceLoadout,
+  type ReplaceTarget,
+  replaceTargets,
+  usePendingSlot,
+} from "@/lib/pendingChanges"
 
 // --- Types ---
 
@@ -747,15 +753,27 @@ function SaveLoadoutDialog({
   const { showSuccessToast } = useCustomToast()
   const [mode, setMode] = useState<"add" | "overwrite">("add")
   const [name, setName] = useState("")
-  const [overwriteIndex, setOverwriteIndex] = useState<string>("")
-  const existing = target.existing ?? []
+  // Selected replace target: "idx-<presetIndex>" | "add-<stagedOpId>".
+  const [overwriteKey, setOverwriteKey] = useState<string>("")
+
+  // The LIVE preset list, not the raw save's (staged deletes/renames/reset/
+  // adds composed) — same world the Loadouts page renders. All semantics live
+  // in the pendingChanges selectors so they stay unit-tested.
+  const pending = usePendingSlot(target.slotIndex)
+  const targets = replaceTargets(
+    target.existing ?? [],
+    pending,
+    target.character,
+  )
+  const keyOf = (t: ReplaceTarget) =>
+    t.kind === "existing" ? `idx-${t.index}` : `add-${t.opId}`
 
   // Relics ordered by slot index (0..5), 0 for empty slots.
   const gaHandles = [...vessel.assignments]
     .sort((a, b) => a.slot_index - b.slot_index)
     .map((a) => (a.relic as { ga_handle?: number } | null)?.ga_handle ?? 0)
 
-  const valid = mode === "add" ? name.trim().length > 0 : overwriteIndex !== ""
+  const valid = mode === "add" ? name.trim().length > 0 : overwriteKey !== ""
 
   function doQueue() {
     if (!valid) return
@@ -772,22 +790,23 @@ function SaveLoadoutDialog({
         `Added loadout "${name.trim()}" — export from the Changes panel to save it.`,
       )
     } else {
-      const ex = existing.find((e) => String(e.index) === overwriteIndex)
-      addLoadoutOp(target.slotIndex, {
-        kind: "overwrite",
-        index: Number(overwriteIndex),
+      const t = targets.find((x) => keyOf(x) === overwriteKey)
+      if (!t) return
+      queueReplaceLoadout(target.slotIndex, t, {
         character: target.character,
         vessel_id: vessel.vessel_id,
         ga_handles: gaHandles,
-        targetName: ex?.name ?? "",
+        vesselName: vessel.vessel_name,
       })
       showSuccessToast(
-        `Replaced "${ex?.name || "loadout"}" — export from the Changes panel to save it.`,
+        `Replaced ${t.kind === "staged-add" ? "staged loadout " : ""}"${
+          t.name || "loadout"
+        }" — export from the Changes panel to save it.`,
       )
     }
     onOpenChange(false)
     setName("")
-    setOverwriteIndex("")
+    setOverwriteKey("")
   }
 
   return (
@@ -803,7 +822,7 @@ function SaveLoadoutDialog({
           </DialogDescription>
         </DialogHeader>
 
-        {existing.length > 0 && (
+        {targets.length > 0 && (
           <div className="flex gap-2">
             <Button
               variant={mode === "add" ? "default" : "outline"}
@@ -836,14 +855,15 @@ function SaveLoadoutDialog({
             </div>
           </div>
         ) : (
-          <Select value={overwriteIndex} onValueChange={setOverwriteIndex}>
+          <Select value={overwriteKey} onValueChange={setOverwriteKey}>
             <SelectTrigger>
               <SelectValue placeholder="Choose a loadout to replace" />
             </SelectTrigger>
             <SelectContent>
-              {existing.map((l) => (
-                <SelectItem key={l.index} value={String(l.index)}>
-                  {l.name || "(unnamed)"}
+              {targets.map((t) => (
+                <SelectItem key={keyOf(t)} value={keyOf(t)}>
+                  {t.name || "(unnamed)"}
+                  {t.kind === "staged-add" ? " (staged)" : ""}
                 </SelectItem>
               ))}
             </SelectContent>

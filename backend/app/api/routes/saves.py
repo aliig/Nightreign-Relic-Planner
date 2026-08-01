@@ -53,8 +53,10 @@ from app.models import (
     RelicsPublic,
     SaveUpload,
     SaveStatusPublic,
+    StagedMint,
     UploadResponse,
 )
+from app.core.staged import effective_slot_state
 from nrplanner import (
     AddCapacityError,
     InvalidReason,
@@ -1627,11 +1629,13 @@ async def export_add_relics(
 # ---------------------------------------------------------------------------
 
 
-def _parse_sold_handles(raw: str, stop_mode: str) -> set[int]:
+def _parse_sold_handles(raw: str) -> set[int]:
     """Parse the staged-sell ga_handles form field. 422 on malformed input.
 
-    Only the all_murk cycle consumes staged sells (they free storage and fund
-    the walk); rejecting them elsewhere keeps fixed/budget behavior untouched.
+    Staged sells apply in EVERY stop mode: their relics are gone from the
+    plan's world state (freed storage) and their refund is spendable Murk —
+    in-game the player can sell at the shop before buying, so crediting the
+    refund in fixed/budget plans is as faithful as funding the all_murk walk.
     """
     try:
         val = json.loads(raw or "[]")
@@ -1643,12 +1647,55 @@ def _parse_sold_handles(raw: str, stop_mode: str) -> set[int]:
         raise HTTPException(
             status_code=422,
             detail="sold_handles must be a JSON array of integers.")
-    out = set(val)
-    if out and stop_mode != "all_murk":
+    return set(val)
+
+
+def _parse_staged_favorites(raw: str) -> dict[int, bool]:
+    """Parse staged bookmark toggles ({ga_handle: desired}) — 422 on bad input.
+
+    Same shape as /saves/export's ``favorite_changes``. The protected-sell
+    gate judges the live bookmark state, so a bookmark staged OFF makes its
+    relic sellable and one staged ON protects it.
+    """
+    try:
+        val = json.loads(raw or "{}")
+    except json.JSONDecodeError as exc:
         raise HTTPException(
             status_code=422,
-            detail="sold_handles is only supported with stop_mode=all_murk.")
-    return out
+            detail="staged_favorites must be a JSON object of "
+                   "ga_handle -> bool.") from exc
+    if not isinstance(val, dict):
+        raise HTTPException(
+            status_code=422,
+            detail="staged_favorites must be a JSON object of "
+                   "ga_handle -> bool.")
+    try:
+        return {int(k): bool(v) for k, v in val.items()}
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=422,
+            detail="staged_favorites must be a JSON object of "
+                   "ga_handle -> bool.") from exc
+
+
+def _parse_staged_mints(raw: str) -> list[StagedMint]:
+    """Parse the staged-mints form field (JSON array of StagedMint). 422 on bad input.
+
+    These are Relic Rites purchases already staged in the app but not yet
+    exported — the same stateless diff the optimizer receives. Legality is
+    enforced later by ``apply_staged_diff`` (RelicChecker + safe relic ids),
+    so an impossible relic can never enter the plan's world state.
+    """
+    from pydantic import TypeAdapter, ValidationError
+
+    try:
+        val = json.loads(raw or "[]")
+        return TypeAdapter(list[StagedMint]).validate_python(val)
+    except (json.JSONDecodeError, ValidationError) as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=f"staged_mints must be a JSON array of staged mints: {exc}",
+        ) from exc
 
 
 def _resolve_rites_builds(
@@ -1869,15 +1916,28 @@ def _rites_plan(
     progress: Any = None,
     snapshot_seeds: dict[str, dict] | None = None,
     sold_handles: set[int] | None = None,
+    staged_mints: list[StagedMint] | None = None,
+    staged_murk_delta: int = 0,
+    staged_favorites: dict[int, bool] | None = None,
 ) -> dict:
     """Compute a bulk-purchase plan. Reads current Murk, owned relics, and
     capacity from the uploaded save (1:1 fidelity — never client-supplied). Persists
     nothing.
 
     Pre-owned relics are NEVER analyzed or sold by this plan — only relics bought
-    within the run are auto-sold (duds). ``sold_handles`` (all_murk only) are owned
+    within the run are auto-sold (duds). ``sold_handles`` (any mode) are owned
     relics the user has already manually staged for sale elsewhere: the plan treats
-    them as gone (freed storage, refunds funding the purchase walk).
+    them as gone (freed storage, refunds spendable).
+
+    ``staged_mints`` + ``staged_murk_delta`` are the app's live Murk emulation:
+    purchases staged in an earlier rites run but not yet exported. Mints join the
+    world state as owned content (they occupy storage and dedup re-rolled copies
+    to duds — a staged keeper can never be minted twice) and the wallet starts
+    from the spent-down value, so re-planning can never double-spend Murk the
+    app already committed. The delta is client-supplied (dud refunds from the
+    original batch cannot be reconstructed from the keepers alone — same trust
+    model as /saves/export-add-relics) but only ever LOWERS the wallet: positive
+    deltas are clamped, so a client cannot manufacture planning Murk.
 
     With no builds selected, keeping is rules-only and NO optimizer runs (instant).
     With builds, one optimize pass runs per build. ``progress`` (if given) is called
@@ -1900,6 +1960,15 @@ def _rites_plan(
     loadout.parse(blob)
     equipped = set(loadout.relic_ga_hero_map.keys())
     favorites = read_favorite_handles(blob, items_end)
+    # Bookmark toggles staged in-app override the save's bookmarks — the
+    # Inventory page lets a user un-bookmark and trash in one session, so the
+    # protected-sell gate below must judge the LIVE bookmark state, exactly
+    # like /saves/export applies favorite_changes before its own gate.
+    for h, fav in (staged_favorites or {}).items():
+        if fav:
+            favorites.add(h)
+        else:
+            favorites.discard(h)
 
     sold_set = set(sold_handles or ())
     if sold_set:
@@ -1929,20 +1998,29 @@ def _rites_plan(
                 },
             )
 
-    # The plan's world state: staged sells are already gone (their slots freed,
-    # their content no longer owned, their refund value funding the walk).
-    owned = [o for o in owned_all if o.ga_handle not in sold_set]
-    pending_sold_refund = sum(
-        sell_value(o.effect_count, o.is_deep)
-        for o in owned_all if o.ga_handle in sold_set)
+    # The plan's world state, composed by the shared effective-state layer:
+    # staged sells are already gone (slots freed, content no longer owned,
+    # refund spendable), staged mints are already owned (occupying storage;
+    # re-rolled identical content dedups to a dud, so a staged keeper can
+    # never be double-minted; legality-validated like the export path), and
+    # the wallet is spent down by the staged batch delta (positive deltas
+    # clamped — planning Murk can never exceed what the save holds).
+    state = effective_slot_state(
+        owned_all, current_murk, cap, sorted(sold_set),
+        list(staged_mints or ()), staged_murk_delta, ds, get_items_json())
+    owned = state.owned
+    wallet = state.wallet
+    pending_sold_refund = state.pending_sold_refund
 
     if stop_mode == "all_murk":
         # Pure in-game storage cap. The writer's ghost add-capacity is an
         # export-time concern only — the in-game buy/sell cycle is never
         # constrained by it, so neither is the simulation.
-        storage_left = max(0, RELIC_STORAGE_CAP - len(owned))
+        storage_left = state.storage_left_ingame
     else:
-        storage_left = max(0, min(RELIC_STORAGE_CAP - len(owned), cap))
+        # Export-time capacity also caps a fixed/budget batch (each staged
+        # sell tombstones a ghost slot; each staged mint will consume one).
+        storage_left = min(state.storage_left_ingame, state.ghost_capacity)
 
     scorer = BuildScorer(ds)
     optimizer = VesselOptimizer(ds, scorer)
@@ -1951,22 +2029,23 @@ def _rites_plan(
     # proven fresh for this save — a build with no relevant candidates skips
     # its enlarged solve, and not even the owned-only one on a snapshot hit.
     # Freshness is judged against the EFFECTIVE
-    # inventory (staged sells excluded): a snapshot whose relevant subset
-    # contains a staged-sold relic correctly misses (owned-only re-solve —
-    # accepted cost when staged sells overlap a build's relevant relics).
+    # inventory (staged sells excluded, staged mints included): a snapshot
+    # whose relevant subset contains a staged-sold relic — or misses a staged
+    # mint a build could use — correctly misses (owned-only re-solve, the
+    # accepted cost when the staged diff overlaps a build's relevant relics).
     owned_used: dict[str, set] = _validated_seed_fps(
         build_ctxs, snapshot_seeds, owned, ds)
 
     keepers: list[RitesKeeper] = []
     generated = kept = duds = 0
-    murk_after = current_murk + pending_sold_refund
+    murk_after = wallet + pending_sold_refund
     murk_cost, murk_refunded = 0, 0
     limited_by: str | None = None
 
     if buckets:
         _emit("generating", 0, len(build_ctxs), "Rolling purchases…")
         r = bulk_acquire(
-            builds=build_ctxs, owned=owned, current_murk=current_murk,
+            builds=build_ctxs, owned=owned, current_murk=wallet,
             buckets=buckets, generator=get_relic_generator(), ds=ds,
             stop_mode=stop_mode, budget=budget,
             inclusion_rules=inclusion_rules, exclusion_rules=exclusion_rules,
@@ -1979,8 +2058,11 @@ def _rites_plan(
                 "matching", i, t, f"Matching build {i}/{t}: {name}", name)),
             # Deterministic per save-state: re-running without exporting can't
             # re-roll. Seeded from the RAW save (owned_all, save Murk) — staged
-            # sells are app-side state and must never perturb the roll stream
-            # (re-staging different sells is not a free re-roll).
+            # sells AND staged mints are app-side state and must never perturb
+            # the roll stream (re-staging a different diff is not a free
+            # re-roll; new rolls require export/re-import). A re-run with mints
+            # staged replays the same stream: staged content dedups to duds,
+            # so it honestly buys-and-resells at a spread loss instead.
             seed=_rites_roll_seed(slot_index, current_murk, owned_all),
             owned_used_fps=owned_used,
         )
@@ -2001,7 +2083,10 @@ def _rites_plan(
     return {
         "keepers": keepers,
         "generated": generated, "kept": kept, "duds": duds,
-        "murk_before": current_murk, "murk_after": murk_after,
+        # murk_before = the effective wallet (save Murk spent down by the
+        # staged mint delta), so the UI's "before -> after" reflects the live
+        # app state, not the stale on-disk value.
+        "murk_before": wallet, "murk_after": murk_after,
         "murk_cost": murk_cost, "murk_refunded": murk_refunded,
         # Mint-side net ONLY (rides /saves/export-add-relics). Staged-sell
         # refunds are NOT included — the sells credit themselves via
@@ -2009,7 +2094,10 @@ def _rites_plan(
         #   murk_after == murk_before + pending_sold_refund + murk_delta
         "murk_delta": murk_refunded - murk_cost,
         "limited_by": limited_by,
-        "add_capacity": cap, "storage_left": storage_left,
+        # Effective export capacity, not the raw save's: staged sells free a
+        # ghost slot each and already-staged mints have claimed theirs — this
+        # is how many MORE relics the next export can actually mint.
+        "add_capacity": state.ghost_capacity, "storage_left": storage_left,
         "pending_sold": len(sold_set),
         "pending_sold_refund": pending_sold_refund,
     }
@@ -2032,6 +2120,9 @@ async def rites_plan(
     inclusion_rules: str = Form("[]"),
     exclusion_rules: str = Form("[]"),
     sold_handles: str = Form("[]"),
+    staged_mints: str = Form("[]"),
+    staged_murk_delta: int = Form(0),
+    staged_favorites: str = Form("{}"),
 ) -> RitesPlanResponse:
     """Plan a bulk relic purchase against the uploaded save.
 
@@ -2041,6 +2132,11 @@ async def rites_plan(
     Pre-owned relics are never analyzed or sold. Writes NOTHING — the frontend stages
     this and applies it via /saves/export-add-relics (mints + murk_delta). Synchronous
     MVP; the SSE variant below streams progress for large batches.
+
+    ``sold_handles`` / ``staged_mints`` / ``staged_murk_delta`` carry the app's
+    staged-but-unexported diff so the plan runs against the LIVE Murk and
+    inventory state — staged spend persists until export and can't be
+    double-spent (see _rites_plan).
     """
     if stop_mode not in ("fixed", "budget", "all_murk"):
         raise HTTPException(
@@ -2053,7 +2149,9 @@ async def rites_plan(
     parsed_buckets = _resolve_buckets(buckets)
     incl = _parse_rules(inclusion_rules, "inclusion_rules")
     excl = _parse_rules(exclusion_rules, "exclusion_rules")
-    sold = _parse_sold_handles(sold_handles, stop_mode)
+    sold = _parse_sold_handles(sold_handles)
+    mints = _parse_staged_mints(staged_mints)
+    favs = _parse_staged_favorites(staged_favorites)
 
     file_bytes = await file.read()
     if not file_bytes:
@@ -2065,6 +2163,8 @@ async def rites_plan(
         _rites_plan, file_bytes, filename, slot_index, build_ctxs, parsed_buckets,
         stop_mode, budget, ds, executor, top_n, incl, excl,
         snapshot_seeds=seeds, sold_handles=sold,
+        staged_mints=mints, staged_murk_delta=staged_murk_delta,
+        staged_favorites=favs,
     )
     return RitesPlanResponse(**plan)
 
@@ -2086,6 +2186,9 @@ async def rites_plan_stream(
     inclusion_rules: str = Form("[]"),
     exclusion_rules: str = Form("[]"),
     sold_handles: str = Form("[]"),
+    staged_mints: str = Form("[]"),
+    staged_murk_delta: int = Form(0),
+    staged_favorites: str = Form("{}"),
 ) -> StreamingResponse:
     """Streaming (SSE) form of /rites/plan — emits progress while it runs.
 
@@ -2111,7 +2214,9 @@ async def rites_plan_stream(
     parsed_buckets = _resolve_buckets(buckets)
     incl = _parse_rules(inclusion_rules, "inclusion_rules")
     excl = _parse_rules(exclusion_rules, "exclusion_rules")
-    sold = _parse_sold_handles(sold_handles, stop_mode)
+    sold = _parse_sold_handles(sold_handles)
+    parsed_mints = _parse_staged_mints(staged_mints)
+    parsed_favs = _parse_staged_favorites(staged_favorites)
 
     file_bytes = await file.read()
     if not file_bytes:
@@ -2134,7 +2239,10 @@ async def rites_plan_stream(
                 holder["plan"] = _rites_plan(
                     file_bytes, filename, slot_index, build_ctxs, parsed_buckets,
                     stop_mode, budget, ds, executor, top_n, incl, excl,
-                    progress=_progress, snapshot_seeds=seeds, sold_handles=sold)
+                    progress=_progress, snapshot_seeds=seeds, sold_handles=sold,
+                    staged_mints=parsed_mints,
+                    staged_murk_delta=staged_murk_delta,
+                    staged_favorites=parsed_favs)
             except HTTPException as exc:
                 holder["error"] = exc.detail
             except Exception as exc:  # noqa: BLE001 - surfaced as an SSE error event
