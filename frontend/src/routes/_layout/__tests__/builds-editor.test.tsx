@@ -49,14 +49,18 @@ const MOCK_BUILD = {
     { weight: 10, effects: [], families: [] },
     { weight: -20, effects: [], families: [] },
   ],
-  required_effects: [],
-  required_families: [],
+  required_effects: [] as number[],
+  required_families: [] as string[],
   excluded_effects: [],
   excluded_families: [],
   include_deep: false,
   curse_max: 1,
   pinned_relics: [],
 }
+
+// Per-test build override (reset in beforeEach); the useLocalBuilds mock
+// reads it at render time.
+let mockBuild: typeof MOCK_BUILD = MOCK_BUILD
 
 // ---------------------------------------------------------------------------
 // Mocks (must be declared before imports under test)
@@ -115,7 +119,7 @@ vi.mock("@/hooks/useAuth", () => ({
 
 vi.mock("@/hooks/useLocalBuilds", () => ({
   useLocalBuilds: () => ({
-    getById: () => MOCK_BUILD,
+    getById: () => mockBuild,
     update: vi.fn(),
   }),
   // WeightGroup is a type-only import in builds.$buildId.tsx — no runtime value needed
@@ -158,6 +162,7 @@ beforeEach(() => {
   // Reset to empty defaults; individual tests set what they need
   mockFamilies = []
   mockEffects = []
+  mockBuild = { ...MOCK_BUILD, required_effects: [], required_families: [] }
 })
 
 afterEach(cleanup)
@@ -205,6 +210,43 @@ describe("Effect Browser – Groups section visibility", () => {
 
     renderEditor()
     expect(screen.queryByText(/^Groups/)).not.toBeInTheDocument()
+  })
+})
+
+describe("Required row", () => {
+  it("renders the pinned Required row with a fixed, non-editable 100 tier", () => {
+    mockEffects = [{ id: 1, name: "Poise +1" }]
+    renderEditor()
+
+    expect(screen.getByText("Required")).toBeInTheDocument()
+    // The fixed tier is a plain span (not an input) showing 100.
+    const tier = screen.getByTitle(/fixed \+100 per copy/i)
+    expect(tier.tagName).not.toBe("INPUT")
+    expect(tier).toHaveTextContent("100")
+    expect(
+      screen.getByText(/Drop effects here to require them/i),
+    ).toBeInTheDocument()
+  })
+
+  it("renders chips for the build's required effects and families", () => {
+    mockFamilies = [
+      { name: "Poise", member_names: ["Poise +1"], member_ids: [1] },
+    ]
+    mockEffects = [
+      { id: 1, name: "Poise +1" },
+      { id: 2, name: "Vigor" },
+    ]
+    mockBuild = {
+      ...MOCK_BUILD,
+      required_effects: [2],
+      required_families: ["Poise"],
+    }
+    renderEditor()
+
+    // Required chips render; because assigned entries are filtered out of the
+    // browser (zones are mutually exclusive), each appears exactly once.
+    expect(screen.getAllByText("Vigor")).toHaveLength(1)
+    expect(screen.getAllByText("Poise (group)")).toHaveLength(1)
   })
 })
 

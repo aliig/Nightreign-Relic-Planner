@@ -1041,6 +1041,8 @@ async def upload_save_stream(
                         snap
                         and snap.relics_hash == relics_signature(b_relics)
                         and snap.build_hash == build_signature(build_defs[b_id])
+                        and snap.optimizer_version == OPTIMIZER_VERSION
+                        and snap.game_data_version == game_data_version()
                     ))
         except Exception:
             skip_flags = [False] * total

@@ -4,7 +4,7 @@ import {
   useSuspenseQuery,
 } from "@tanstack/react-query"
 import { createFileRoute, Link, useParams } from "@tanstack/react-router"
-import { Suspense, useEffect, useMemo, useRef, useState } from "react"
+import { Fragment, Suspense, useEffect, useMemo, useRef, useState } from "react"
 import type { BuildChange, VesselResult } from "@/client"
 import {
   BuildsService,
@@ -17,6 +17,8 @@ import {
   ChangeBanner,
   cacheKey,
   enteredKeys,
+  MissingRequirementsSeparator,
+  NoCoveringResultsBanner,
   type OptimizeProgress,
   resultCache,
   runOptimizeStream,
@@ -98,6 +100,9 @@ function AuthOptimizeForm({ buildId }: { buildId: string }) {
   })
 
   const pinnedHandles = new Set<number>(selectedBuild?.pinned_relics ?? [])
+  const hasRequirements =
+    (selectedBuild?.required_effects?.length ?? 0) > 0 ||
+    (selectedBuild?.required_families?.length ?? 0) > 0
   const slotIndex = profiles.find((p) => p.id === profileId)?.slot_index ?? null
   const pending = usePendingSlot(slotIndex)
   const sig = stagedKey(pending)
@@ -281,42 +286,54 @@ function AuthOptimizeForm({ buildId }: { buildId: string }) {
             <StaleStagedBanner running={isPending} />
           )}
           <ChangeBanner change={change} />
+          {hasRequirements &&
+            results.every((r) => r.meets_requirements === false) && (
+              <NoCoveringResultsBanner />
+            )}
           <h2 className="text-lg font-medium">
             Top {results.length} vessel{results.length !== 1 ? "s" : ""}
           </h2>
           {results.map((vessel, index) => (
-            <VesselCard
-              key={`${vessel.vessel_id}-${vessel.total_score}`}
-              vessel={vessel}
-              defaultExpanded={index === 0}
-              highlighted={index === 0}
-              pinnedHandles={pinnedHandles}
-              effectMap={effectMap}
-              enteredFingerprints={
-                index === 0 ? enteredKeys(change) : undefined
-              }
-              inventorySource={{
-                build_id: buildId,
-                profile_id: profileId,
-                ...staged,
-              }}
-              loadoutTarget={(() => {
-                const p = profiles.find((pr) => pr.id === profileId)
-                if (!p || !selectedBuild?.character) return undefined
-                return {
-                  slotIndex: p.slot_index,
-                  character: selectedBuild.character,
-                  existing: (loadoutsData?.data ?? [])
-                    .filter((l) => l.character === selectedBuild.character)
-                    .map((l) => ({
-                      index: l.index,
-                      name: l.name,
-                      vessel_id: l.vessel_id,
-                      ga_handles: l.ga_handles ?? [],
-                    })),
+            <Fragment key={`${vessel.vessel_id}-${vessel.total_score}`}>
+              {hasRequirements &&
+                index > 0 &&
+                vessel.meets_requirements === false &&
+                results[index - 1].meets_requirements !== false && (
+                  <MissingRequirementsSeparator />
+                )}
+              <VesselCard
+                vessel={vessel}
+                defaultExpanded={index === 0}
+                highlighted={index === 0}
+                hasRequirements={hasRequirements}
+                pinnedHandles={pinnedHandles}
+                effectMap={effectMap}
+                enteredFingerprints={
+                  index === 0 ? enteredKeys(change) : undefined
                 }
-              })()}
-            />
+                inventorySource={{
+                  build_id: buildId,
+                  profile_id: profileId,
+                  ...staged,
+                }}
+                loadoutTarget={(() => {
+                  const p = profiles.find((pr) => pr.id === profileId)
+                  if (!p || !selectedBuild?.character) return undefined
+                  return {
+                    slotIndex: p.slot_index,
+                    character: selectedBuild.character,
+                    existing: (loadoutsData?.data ?? [])
+                      .filter((l) => l.character === selectedBuild.character)
+                      .map((l) => ({
+                        index: l.index,
+                        name: l.name,
+                        vessel_id: l.vessel_id,
+                        ga_handles: l.ga_handles ?? [],
+                      })),
+                  }
+                })()}
+              />
+            </Fragment>
           ))}
         </div>
       )}
@@ -375,6 +392,9 @@ function AnonOptimizeForm({ buildId }: { buildId: string }) {
 
   const build = getById(buildId)
   const pinnedHandles = new Set<number>(build?.pinned_relics ?? [])
+  const hasRequirements =
+    (build?.required_effects?.length ?? 0) > 0 ||
+    (build?.required_families?.length ?? 0) > 0
   const pending = usePendingSlot(profile?.slot_index ?? null)
   const sig = stagedKey(pending)
   const baseKey = cacheKey(
@@ -429,8 +449,8 @@ function AnonOptimizeForm({ buildId }: { buildId: string }) {
             name: build.name,
             character: build.character,
             groups: build.groups,
-            required_effects: [],
-            required_families: [],
+            required_effects: build.required_effects ?? [],
+            required_families: build.required_families ?? [],
             excluded_effects: build.excluded_effects,
             excluded_families: build.excluded_families,
             include_deep: build.include_deep,
@@ -593,48 +613,60 @@ function AnonOptimizeForm({ buildId }: { buildId: string }) {
             <StaleStagedBanner running={isPending} />
           )}
           <ChangeBanner change={change} />
+          {hasRequirements &&
+            results.every((r) => r.meets_requirements === false) && (
+              <NoCoveringResultsBanner />
+            )}
           <h2 className="text-lg font-medium">
             Top {results.length} vessel{results.length !== 1 ? "s" : ""}
           </h2>
           {results.map((vessel, index) => (
-            <VesselCard
-              key={`${vessel.vessel_id}-${vessel.total_score}`}
-              vessel={vessel}
-              defaultExpanded={index === 0}
-              highlighted={index === 0}
-              pinnedHandles={pinnedHandles}
-              effectMap={effectMap}
-              enteredFingerprints={
-                index === 0 ? enteredKeys(change) : undefined
-              }
-              inventorySource={
-                inlineBuild ? { build: inlineBuild, relics } : undefined
-              }
-              loadoutTarget={
-                profile?.slot_index != null && build?.character
-                  ? {
-                      slotIndex: Number(profile.slot_index),
-                      character: build.character,
-                      existing: (
-                        ((profile as any)?.presets ?? []) as Array<{
-                          index: number
-                          name: string
-                          character: string
-                          vessel_id: number
-                          ga_handles: number[]
-                        }>
-                      )
-                        .filter((p) => p.character === build.character)
-                        .map((p) => ({
-                          index: p.index,
-                          name: p.name,
-                          vessel_id: p.vessel_id,
-                          ga_handles: p.ga_handles ?? [],
-                        })),
-                    }
-                  : undefined
-              }
-            />
+            <Fragment key={`${vessel.vessel_id}-${vessel.total_score}`}>
+              {hasRequirements &&
+                index > 0 &&
+                vessel.meets_requirements === false &&
+                results[index - 1].meets_requirements !== false && (
+                  <MissingRequirementsSeparator />
+                )}
+              <VesselCard
+                vessel={vessel}
+                defaultExpanded={index === 0}
+                highlighted={index === 0}
+                hasRequirements={hasRequirements}
+                pinnedHandles={pinnedHandles}
+                effectMap={effectMap}
+                enteredFingerprints={
+                  index === 0 ? enteredKeys(change) : undefined
+                }
+                inventorySource={
+                  inlineBuild ? { build: inlineBuild, relics } : undefined
+                }
+                loadoutTarget={
+                  profile?.slot_index != null && build?.character
+                    ? {
+                        slotIndex: Number(profile.slot_index),
+                        character: build.character,
+                        existing: (
+                          ((profile as any)?.presets ?? []) as Array<{
+                            index: number
+                            name: string
+                            character: string
+                            vessel_id: number
+                            ga_handles: number[]
+                          }>
+                        )
+                          .filter((p) => p.character === build.character)
+                          .map((p) => ({
+                            index: p.index,
+                            name: p.name,
+                            vessel_id: p.vessel_id,
+                            ga_handles: p.ga_handles ?? [],
+                          })),
+                      }
+                    : undefined
+                }
+              />
+            </Fragment>
           ))}
         </div>
       )}

@@ -9,7 +9,11 @@ import {
   OptimizeService,
   type VesselResult,
 } from "@/client"
-import { VesselCard } from "@/components/OptimizeResults"
+import {
+  MissingRequirementsSeparator,
+  NoCoveringResultsBanner,
+  VesselCard,
+} from "@/components/OptimizeResults"
 
 type SlotAssignment = VesselResult["assignments"][number]
 type OwnedRelic = NonNullable<SlotAssignment["relic"]>
@@ -104,6 +108,44 @@ function mockStrike(result: VesselResult | null) {
     .spyOn(OptimizeService, "optimizeSlotAlternative")
     .mockResolvedValue(result as never)
 }
+
+describe("Requirement indicator", () => {
+  it("hides the check/X icon for builds with no Required entries", () => {
+    const { container } = render(<VesselCard vessel={makeVessel([ALPHA])} />)
+    expect(container.querySelector("svg.text-green-500")).toBeNull()
+    expect(container.querySelector("svg.text-destructive")).toBeNull()
+  })
+
+  it("shows a green check on covering results when the build has requirements", () => {
+    const { container } = render(
+      <VesselCard vessel={makeVessel([ALPHA])} hasRequirements />,
+    )
+    expect(container.querySelector("svg.text-green-500")).not.toBeNull()
+  })
+
+  it("shows a red X on non-covering results when the build has requirements", () => {
+    const vessel = {
+      ...makeVessel([ALPHA]),
+      meets_requirements: false,
+      missing_requirements: [100],
+    }
+    const { container } = render(<VesselCard vessel={vessel} hasRequirements />)
+    expect(container.querySelector("svg.text-destructive")).not.toBeNull()
+    expect(container.querySelector("svg.text-green-500")).toBeNull()
+  })
+})
+
+describe("Missing-requirements separator and banner", () => {
+  it("renders the separator copy", () => {
+    render(<MissingRequirementsSeparator />)
+    expect(screen.getByText(/missing required effect/i)).toBeInTheDocument()
+  })
+
+  it("renders the zero-covering banner copy", () => {
+    render(<NoCoveringResultsBanner />)
+    expect(screen.getByText(/closest matches/i)).toBeInTheDocument()
+  })
+})
 
 describe("VesselCard strike", () => {
   afterEach(() => {

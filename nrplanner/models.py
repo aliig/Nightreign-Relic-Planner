@@ -179,19 +179,12 @@ class BuildDefinition(BaseModel):
         return None
 
     def get_effective_requirements(self) -> tuple[list[int], list[str]]:
-        """Derive requirements from highest-weight group for missing-effect signaling.
+        """The build's explicit requirements (Required row) — nothing derived.
 
-        If explicit required_effects/required_families are set (legacy builds),
-        use those. Otherwise, derive from the highest positive-weight group.
+        Only the explicit required_effects/required_families count; weight
+        groups (including 100-pt ones) are never treated as requirements.
         """
-        if self.required_effects or self.required_families:
-            return self.required_effects, self.required_families
-        if not self.groups:
-            return [], []
-        best = max(self.groups, key=lambda g: g.weight)
-        if best.weight <= 0:
-            return [], []
-        return list(best.effects), list(best.families)
+        return self.required_effects, self.required_families
 
 
 # ---------------------------------------------------------------------------

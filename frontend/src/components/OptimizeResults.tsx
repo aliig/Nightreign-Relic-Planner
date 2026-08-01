@@ -1,4 +1,5 @@
 import {
+  AlertTriangle,
   BookMarked,
   CheckCircle2,
   ChevronDown,
@@ -477,6 +478,7 @@ export function VesselCard({
   enteredFingerprints,
   inventorySource,
   loadoutTarget,
+  hasRequirements = false,
 }: {
   vessel: VesselResult
   defaultExpanded?: boolean
@@ -487,6 +489,9 @@ export function VesselCard({
   /** When provided, enables the per-relic "strike" (X) controls. Omit to render
    *  a plain, read-only result card. */
   inventorySource?: InventorySource
+  /** True when the build has explicit Required entries — gates the per-card
+   *  covering check/X icon (hidden entirely for builds without any). */
+  hasRequirements?: boolean
   /** When provided, shows a "Save as loadout" action that writes this vessel's
    *  relics into the save as an in-game relic loadout preset. ``existing`` lists
    *  this character's current loadouts (for the overwrite option). */
@@ -650,11 +655,12 @@ export function VesselCard({
                 Reset
               </Button>
             )}
-            {workingVessel.meets_requirements ? (
-              <CheckCircle2 className="h-4 w-4 text-green-500" />
-            ) : (
-              <XCircle className="h-4 w-4 text-destructive" />
-            )}
+            {hasRequirements &&
+              (workingVessel.meets_requirements ? (
+                <CheckCircle2 className="h-4 w-4 text-green-500" />
+              ) : (
+                <XCircle className="h-4 w-4 text-destructive" />
+              ))}
             <Badge variant="secondary">{workingVessel.total_score} pts</Badge>
             {expanded ? (
               <ChevronUp className="h-4 w-4 text-muted-foreground" />
@@ -891,6 +897,33 @@ export function ChangeBanner({ change }: { change?: BuildChange | null }) {
           </TooltipContent>
         </Tooltip>
       )}
+    </div>
+  )
+}
+
+/** Separator inserted above the first result that misses required effects,
+ *  splitting the list into covering results and the flagged tail. */
+export function MissingRequirementsSeparator() {
+  return (
+    <div className="flex items-center gap-3 pt-2">
+      <div className="flex-1 h-px bg-destructive/40" />
+      <span className="text-xs text-destructive">
+        the following are missing required effect(s)
+      </span>
+      <div className="flex-1 h-px bg-destructive/40" />
+    </div>
+  )
+}
+
+/** Banner shown when not a single result covers the build's Required row. */
+export function NoCoveringResultsBanner() {
+  return (
+    <div className="flex items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-400">
+      <AlertTriangle className="h-4 w-4 shrink-0" />
+      <span>
+        No optimal results include the required relic properties — these are the
+        closest matches.
+      </span>
     </div>
   )
 }

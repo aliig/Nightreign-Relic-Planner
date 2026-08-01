@@ -561,65 +561,36 @@ class TestAfflictedEnemyStacking:
 # ---------------------------------------------------------------------------
 
 class TestGetEffectiveRequirements:
-    """Verify that requirements are derived from the highest-weight group."""
+    """Only explicit Required entries count — never derived from groups."""
 
-    def test_derives_from_highest_weight_group(self) -> None:
+    def test_highest_weight_group_is_not_a_requirement(self) -> None:
         build = BuildDefinition(
             id="t", name="T", character="Wylder",
             groups=[
-                WeightGroup(weight=50, effects=[1001, 1002], families=["Fam A"]),
+                WeightGroup(weight=100, effects=[1001, 1002], families=["Fam A"]),
                 WeightGroup(weight=25, effects=[2001]),
             ],
         )
         eff, fam = build.get_effective_requirements()
-        assert eff == [1001, 1002]
-        assert fam == ["Fam A"]
+        assert eff == []
+        assert fam == []
 
-    def test_explicit_required_takes_precedence(self) -> None:
+    def test_explicit_required_returned(self) -> None:
         build = BuildDefinition(
             id="t", name="T", character="Wylder",
             groups=[WeightGroup(weight=50, effects=[1001])],
             required_effects=[9999],
+            required_families=["Fam B"],
         )
         eff, fam = build.get_effective_requirements()
         assert eff == [9999]
-        assert fam == []
+        assert fam == ["Fam B"]
 
-    def test_no_groups_returns_empty(self) -> None:
+    def test_no_requirements_returns_empty(self) -> None:
         build = BuildDefinition(id="t", name="T", character="Wylder")
         eff, fam = build.get_effective_requirements()
         assert eff == []
         assert fam == []
-
-    def test_negative_weight_group_returns_empty(self) -> None:
-        build = BuildDefinition(
-            id="t", name="T", character="Wylder",
-            groups=[WeightGroup(weight=-20, effects=[1001])],
-        )
-        eff, fam = build.get_effective_requirements()
-        assert eff == []
-        assert fam == []
-
-    def test_zero_weight_group_returns_empty(self) -> None:
-        build = BuildDefinition(
-            id="t", name="T", character="Wylder",
-            groups=[WeightGroup(weight=0, effects=[1001])],
-        )
-        eff, fam = build.get_effective_requirements()
-        assert eff == []
-        assert fam == []
-
-    def test_multiple_groups_same_highest_weight(self) -> None:
-        """When multiple groups share the highest weight, first one wins."""
-        build = BuildDefinition(
-            id="t", name="T", character="Wylder",
-            groups=[
-                WeightGroup(weight=50, effects=[1001]),
-                WeightGroup(weight=50, effects=[2001]),
-            ],
-        )
-        eff, _ = build.get_effective_requirements()
-        assert eff == [1001]  # first group
 
 
 # ---------------------------------------------------------------------------
