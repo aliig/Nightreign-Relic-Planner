@@ -26,16 +26,24 @@ class RelicProfile:
     ``score_relic_in_context`` / ``place``.
     """
     __slots__ = ("relic", "ga_handle", "static_score", "dyn", "curse_ids",
-                 "place_ops", "limit_keys", "pos_bound", "net")
+                 "penalized_curse_ids", "place_ops", "limit_keys", "pos_bound",
+                 "net")
 
     def __init__(self, relic: OwnedRelic, static_score: int, dyn: tuple,
                  curse_ids: tuple, place_ops: tuple, limit_keys: tuple,
-                 pos_bound: int, net: int):
+                 pos_bound: int, net: int,
+                 penalized_curse_ids: tuple | None = None):
         self.relic = relic
         self.ga_handle = relic.ga_handle
         self.static_score = static_score
         self.dyn = dyn
         self.curse_ids = curse_ids
+        # Curses subject to the build-wide curse_max excess check. Excludes
+        # curses with an explicit user limit at negative weight — for those the
+        # limit IS the tolerance (see the sign fork in score_profile) and it
+        # replaces curse_max. place_profile still counts ALL curse_ids.
+        self.penalized_curse_ids = (
+            curse_ids if penalized_curse_ids is None else penalized_curse_ids)
         self.place_ops = place_ops
         self.limit_keys = limit_keys
         self.pos_bound = pos_bound
@@ -53,11 +61,15 @@ def score_profile(profile: RelicProfile, state: VesselState,
          lname, lfam) in profile.dyn:
         if lname is not None or lfam is not None:
             counts = state.limited_counts
-            if (lname is not None
-                    and counts.get(lname, 0) >= state.effect_limit_by_name[lname]):
-                continue
-            if (lfam is not None
-                    and counts.get(lfam, 0) >= state.family_limit_map[lfam]):
+            if ((lname is not None
+                    and counts.get(lname, 0) >= state.effect_limit_by_name[lname])
+                    or (lfam is not None
+                        and counts.get(lfam, 0) >= state.family_limit_map[lfam])):
+                # Sign fork: a limit on a desired effect is a score cap (extra
+                # copies are neutral); on an undesired one it is a tolerance —
+                # copies beyond it disqualify like excess curses.
+                if weight < 0:
+                    score += CURSE_EXCESS_PENALTY
                 continue
         if kind == K_STACK:
             score += weight
@@ -87,9 +99,9 @@ def score_profile(profile: RelicProfile, state: VesselState,
         else:  # K_EXCL_CAT — blocking penalty until the desired effect is placed
             if compat not in state.desired_compat_placed:
                 score += penalty
-    if profile.curse_ids:
+    if profile.penalized_curse_ids:
         counts = state.curse_counts
-        for c in profile.curse_ids:
+        for c in profile.penalized_curse_ids:
             if counts.get(c, 0) >= curse_max:
                 score += CURSE_EXCESS_PENALTY
     return score
@@ -622,6 +634,31 @@ class BuildScorer:
                 return True
         return False
 
+    def _curse_max_exempt(self, curse_id: int, build: BuildDefinition,
+                          state: VesselState) -> bool:
+        """True if this curse's excess handling is owned by a user limit.
+
+        A user limit on a negatively-weighted curse is a per-curse tolerance
+        that REPLACES the build-wide curse_max for that curse (the sign fork in
+        the scoring loops applies CURSE_EXCESS_PENALTY beyond the limit).
+        Mirrors compile_profile's ``penalized_curse_ids`` exclusion exactly:
+        excluded-category competitors keep global curse_max handling because
+        they never reach the limit branch in either path.
+        """
+        if not state.limited_names:
+            return False
+        if self._is_excl_category_effect_static(
+                curse_id, build, self.get_desired_compat_effects(build)):
+            return False
+        cat, weight = self._resolve_category_and_weight(curse_id, build)
+        if cat is None or cat == "excluded" or weight >= 0:
+            return False
+        name = self.data_source.get_effect_name(curse_id)
+        if name and name in state.effect_limit_by_name:
+            return True
+        family = self.data_source.get_effect_family(curse_id)
+        return bool(family and family in state.family_limit_map)
+
     def score_relic_in_context(self, relic: OwnedRelic, build: BuildDefinition,
                                 state: VesselState) -> int:
         """Score considering stacking state of already-assigned relics."""
@@ -642,7 +679,12 @@ class BuildScorer:
             cat, weight = self._resolve_category_and_weight(eff, build)
             if cat is not None and cat != "excluded":
                 if self._is_at_limit(eff, state):
-                    continue  # at user-defined limit, score 0 (neutral)
+                    # Sign fork: cap for desired effects (extra copies are
+                    # neutral), tolerance for undesired ones (excess
+                    # disqualifies like excess curses).
+                    if weight < 0:
+                        score += CURSE_EXCESS_PENALTY
+                    continue
                 score += self._effect_stacking_score(eff, weight, state)
         for curse in relic.curses:
             if curse in (EMPTY_EFFECT, 0):
@@ -655,13 +697,17 @@ class BuildScorer:
             cat, weight = self._resolve_category_and_weight(curse, build)
             if cat is not None and cat != "excluded":
                 if self._is_at_limit(curse, state):
-                    continue  # at user-defined limit, score 0 (neutral)
+                    if weight < 0:
+                        score += CURSE_EXCESS_PENALTY
+                    continue
                 score += self._effect_stacking_score(curse, weight, state)
             elif cat is None:
                 score += build.default_curse_weight
         for curse in relic.curses:
             if curse in (EMPTY_EFFECT, 0):
                 continue
+            if self._curse_max_exempt(curse, build, state):
+                continue  # explicit per-curse tolerance replaces curse_max
             if state.curse_counts.get(curse, 0) >= build.curse_max:
                 score += CURSE_EXCESS_PENALTY
         return score
@@ -694,6 +740,9 @@ class BuildScorer:
 
         static_score = 0
         dyn: list[tuple] = []
+        # Curses whose excess handling is owned by a user limit (negative
+        # weight + limit key) — exempt from the build-wide curse_max check.
+        tolerated_curses: set[int] = set()
 
         for eff, is_curse in (
             [(e, False) for e in relic.effects]
@@ -726,6 +775,9 @@ class BuildScorer:
                     family = ds.get_effect_family(eff)
                     if family and family in flm:
                         lfam = family
+                if is_curse and weight < 0 and (lname is not None
+                                                or lfam is not None):
+                    tolerated_curses.add(eff)
                 stype_code = _STYPE_CODE[ds.get_effect_stacking_type(eff)]
                 if stype_code == K_STACK and lname is None and lfam is None:
                     static_score += weight
@@ -742,6 +794,9 @@ class BuildScorer:
 
         curse_ids = tuple(
             c for c in relic.curses if c not in (EMPTY_EFFECT, 0))
+        penalized_curse_ids = (
+            tuple(c for c in curse_ids if c not in tolerated_curses)
+            if tolerated_curses else curse_ids)
 
         # place() metadata — mirrors VesselState.place per effect.
         place_ops: list[tuple] = []
@@ -792,6 +847,7 @@ class BuildScorer:
             limit_keys=limit_keys,
             pos_bound=self.positive_pre_score(relic, build),
             net=self.score_relic(relic, build),
+            penalized_curse_ids=penalized_curse_ids,
         )
         self._profile_memo[relic.ga_handle] = profile
         return profile
@@ -870,9 +926,13 @@ class BuildScorer:
                     continue
 
                 if has_state and cat is not None and cat != "excluded":
-                    # User-defined limit check (before stacking)
+                    # User-defined limit check (before stacking). Sign fork:
+                    # desired effects cap at 0, undesired ones are penalized
+                    # beyond their tolerance (mirrors score_relic_in_context).
                     if self._is_at_limit(eff, state):
-                        override_status = "limit_reached"
+                        override_status = (
+                            "over_limit_penalty" if weight < 0
+                            else "limit_reached")
                     else:
                         ctx_score = self._effect_stacking_score(
                             eff, weight, state)
@@ -883,6 +943,8 @@ class BuildScorer:
                 final_score = base_score
                 if override_status == "conflict_penalty":
                     final_score = ctx_score  # negative
+                elif override_status == "over_limit_penalty":
+                    final_score = CURSE_EXCESS_PENALTY
                 elif override_status is not None:
                     final_score = 0
                 breakdown.append({

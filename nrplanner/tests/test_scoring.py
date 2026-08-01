@@ -1058,3 +1058,148 @@ class TestDefaultCurseWeight:
         # Unmatched curse with weight 0 → still appended with cat=None
         assert len(bd) == 1
         assert bd[0]["category"] is None
+
+
+class TestUndesiredLimitTolerance:
+    """Sign-forked effect limits (OPTIMIZER_VERSION v3).
+
+    A user limit on a POSITIVELY-weighted effect stays a soft score cap (extra
+    copies are neutral).  On a NEGATIVELY-weighted effect the same limit is a
+    per-effect tolerance: copies within it score their weight, copies beyond it
+    add CURSE_EXCESS_PENALTY - and for curses the tolerance REPLACES the
+    build-wide curse_max.  Every assertion is made on both the legacy path
+    (score_relic_in_context / place) and the compiled path (score_profile /
+    place_profile).
+    """
+
+    @staticmethod
+    def _pick_stack_effect(ds: SourceDataHandler, all_effects: list[dict]) -> int:
+        """A plain stackable effect: no conflict/exclusivity/alias interference."""
+        for e in all_effects:
+            eid = e["id"]
+            name = ds.get_effect_name(eid)
+            if (name and not name.startswith("Effect ") and name != "Empty"
+                    and ds.get_effect_stacking_type(eid) == "stack"
+                    and ds.get_effect_conflict_id(eid) == -1
+                    and ds.get_effect_exclusivity_id(eid) == -1
+                    and ds.get_effect_text_id(eid) in (-1, eid)):
+                return eid
+        pytest.skip("no plain stackable effect in game data")
+
+    @staticmethod
+    def _build(eff_id: int, weight: int, limit: int, curse_max: int) -> BuildDefinition:
+        return BuildDefinition(
+            id="tol", name="tol", character="Wylder",
+            groups=[WeightGroup(weight=weight, effects=[eff_id])],
+            effect_limits={eff_id: limit},
+            curse_max=curse_max,
+        )
+
+    def _make_states(self, scorer, ds, build):
+        """Paired (legacy, compiled) states plus the build's limit maps."""
+        from nrplanner.optimizer import VesselOptimizer
+
+        optimizer = VesselOptimizer(ds, scorer)
+        elbn, flm = optimizer._prepare_limits(build)
+        legacy = VesselState(ds, effect_limit_by_name=elbn, family_limit_map=flm)
+        compiled = VesselState(ds, effect_limit_by_name=elbn, family_limit_map=flm)
+        return legacy, compiled, elbn, flm
+
+    def _assert_score(self, scorer, build, relic, legacy, compiled,
+                      elbn, flm, expected: int) -> None:
+        from nrplanner.scoring import score_profile
+        got_legacy = scorer.score_relic_in_context(relic, build, legacy)
+        prof = scorer.compile_profile(relic, build, elbn, flm)
+        got_compiled = score_profile(prof, compiled, build.curse_max)
+        assert got_legacy == expected, f"legacy={got_legacy} != {expected}"
+        assert got_compiled == expected, f"compiled={got_compiled} != {expected}"
+
+    def _place_both(self, scorer, build, relic, legacy, compiled, elbn, flm):
+        prof = scorer.compile_profile(relic, build, elbn, flm)
+        legacy.place(relic)
+        compiled.place_profile(prof)
+
+    def test_negative_limited_curse_within_tolerance_scores_weight(
+        self, scorer: BuildScorer, ds: SourceDataHandler, all_effects: list[dict]
+    ) -> None:
+        eff = self._pick_stack_effect(ds, all_effects)
+        build = self._build(eff, weight=-30, limit=1, curse_max=99)
+        relic = _make_relic([EMPTY, EMPTY, EMPTY], curses=[eff, EMPTY, EMPTY])
+        legacy, compiled, elbn, flm = self._make_states(scorer, ds, build)
+        self._assert_score(scorer, build, relic, legacy, compiled,
+                           elbn, flm, expected=-30)
+
+    def test_negative_limited_curse_beyond_tolerance_disqualifies(
+        self, scorer: BuildScorer, ds: SourceDataHandler, all_effects: list[dict]
+    ) -> None:
+        from nrplanner.models import CURSE_EXCESS_PENALTY
+        eff = self._pick_stack_effect(ds, all_effects)
+        # curse_max=99 proves the -200 comes from the limit, NOT from curse_max.
+        build = self._build(eff, weight=-30, limit=1, curse_max=99)
+        relic = _make_relic([EMPTY, EMPTY, EMPTY], curses=[eff, EMPTY, EMPTY])
+        legacy, compiled, elbn, flm = self._make_states(scorer, ds, build)
+        self._place_both(scorer, build, relic, legacy, compiled, elbn, flm)
+        self._assert_score(scorer, build, relic, legacy, compiled,
+                           elbn, flm, expected=CURSE_EXCESS_PENALTY)
+
+    def test_negative_limit_loosens_past_global_curse_max(
+        self, scorer: BuildScorer, ds: SourceDataHandler, all_effects: list[dict]
+    ) -> None:
+        from nrplanner.models import CURSE_EXCESS_PENALTY
+        eff = self._pick_stack_effect(ds, all_effects)
+        # curse_max=1 would veto the second copy; the explicit limit of 2
+        # replaces it for this curse, so the second copy scores its weight.
+        build = self._build(eff, weight=-30, limit=2, curse_max=1)
+        relic = _make_relic([EMPTY, EMPTY, EMPTY], curses=[eff, EMPTY, EMPTY])
+        legacy, compiled, elbn, flm = self._make_states(scorer, ds, build)
+        self._place_both(scorer, build, relic, legacy, compiled, elbn, flm)
+        self._assert_score(scorer, build, relic, legacy, compiled,
+                           elbn, flm, expected=-30)
+        # Third copy exceeds the tolerance -> disqualifying penalty.
+        self._place_both(scorer, build, relic, legacy, compiled, elbn, flm)
+        self._assert_score(scorer, build, relic, legacy, compiled,
+                           elbn, flm, expected=CURSE_EXCESS_PENALTY)
+
+    def test_positive_limited_effect_still_caps_neutrally(
+        self, scorer: BuildScorer, ds: SourceDataHandler, all_effects: list[dict]
+    ) -> None:
+        eff = self._pick_stack_effect(ds, all_effects)
+        build = self._build(eff, weight=50, limit=1, curse_max=99)
+        relic = _make_relic([eff, EMPTY, EMPTY])
+        legacy, compiled, elbn, flm = self._make_states(scorer, ds, build)
+        self._assert_score(scorer, build, relic, legacy, compiled,
+                           elbn, flm, expected=50)
+        self._place_both(scorer, build, relic, legacy, compiled, elbn, flm)
+        self._assert_score(scorer, build, relic, legacy, compiled,
+                           elbn, flm, expected=0)
+
+    def test_unlimited_curse_keeps_global_curse_max(
+        self, scorer: BuildScorer, ds: SourceDataHandler, all_effects: list[dict]
+    ) -> None:
+        from nrplanner.models import CURSE_EXCESS_PENALTY
+        eff = self._pick_stack_effect(ds, all_effects)
+        # Weighted negative but NO limit -> curse_max still owns excess.
+        build = BuildDefinition(
+            id="tol", name="tol", character="Wylder",
+            groups=[WeightGroup(weight=-30, effects=[eff])],
+            curse_max=1,
+        )
+        relic = _make_relic([EMPTY, EMPTY, EMPTY], curses=[eff, EMPTY, EMPTY])
+        legacy, compiled, elbn, flm = self._make_states(scorer, ds, build)
+        self._place_both(scorer, build, relic, legacy, compiled, elbn, flm)
+        self._assert_score(scorer, build, relic, legacy, compiled,
+                           elbn, flm, expected=-30 + CURSE_EXCESS_PENALTY)
+
+    def test_breakdown_shows_over_limit_penalty(
+        self, scorer: BuildScorer, ds: SourceDataHandler, all_effects: list[dict]
+    ) -> None:
+        from nrplanner.models import CURSE_EXCESS_PENALTY
+        eff = self._pick_stack_effect(ds, all_effects)
+        build = self._build(eff, weight=-30, limit=1, curse_max=99)
+        relic = _make_relic([EMPTY, EMPTY, EMPTY], curses=[eff, EMPTY, EMPTY])
+        legacy, compiled, elbn, flm = self._make_states(scorer, ds, build)
+        self._place_both(scorer, build, relic, legacy, compiled, elbn, flm)
+        bd = scorer.get_breakdown(relic, build, legacy)
+        row = next(b for b in bd if b["effect_id"] == eff)
+        assert row["override_status"] == "over_limit_penalty"
+        assert row["score"] == CURSE_EXCESS_PENALTY

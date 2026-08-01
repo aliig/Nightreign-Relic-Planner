@@ -27,7 +27,10 @@ DEFAULT_BACKTRACK_DEADLINE_SECS = 10.0
 # incomparable after an algorithm change (forces a fresh diff baseline).
 # v2: positive-sum candidate filter/bounds + dedup/unlock-aware ctx<=0 skip —
 #     the solver can now find optima that include net-negative relics.
-OPTIMIZER_VERSION = 2
+# v3: sign-forked effect/family limits — a limit on a negatively-weighted
+#     effect is a per-effect tolerance (excess disqualifies, and for curses it
+#     replaces the build-wide curse_max) instead of a score cap.
+OPTIMIZER_VERSION = 3
 
 # ---------------------------------------------------------------------------
 # Worker-process globals (set once per worker by init_optimizer_worker)

@@ -227,12 +227,17 @@ function LimitToggleButton({
   color,
   revealClass,
   unsetTitle = "Click to cap how many slots may use this — cycles 1 → 2 → 3 → off",
+  negative = false,
 }: {
   limit?: number
   onLimitChange: (limit: number | undefined) => void
   color?: string
   revealClass: string
   unsetTitle?: string
+  // Sign fork: on a negatively-weighted (avoided) effect the limit is a
+  // tolerance — copies beyond it disqualify the loadout, and for curses it
+  // overrides the build-wide Max curse stacks — not a score cap.
+  negative?: boolean
 }) {
   return (
     <button
@@ -252,8 +257,12 @@ function LimitToggleButton({
       style={limit !== undefined && color ? { borderColor: color } : undefined}
       title={
         limit !== undefined
-          ? `Max ${limit} across all slots (click to change, cycles 1→2→3→unlimited)`
-          : unsetTitle
+          ? negative
+            ? `Tolerate at most ${limit} — more disqualifies the loadout; overrides Max curse stacks for this curse (click to change, cycles 1→2→3→unlimited)`
+            : `Max ${limit} across all slots (click to change, cycles 1→2→3→unlimited)`
+          : negative
+            ? "Click to cap how many copies are tolerated — beyond the cap the loadout is disqualified; cycles 1 → 2 → 3 → off"
+            : unsetTitle
       }
     >
       {limit !== undefined ? `≤${limit}` : "#"}
@@ -269,6 +278,7 @@ function DraggableChip({
   onRemove,
   limit,
   onLimitChange,
+  limitNegative,
 }: {
   dragId: string
   name: string
@@ -277,6 +287,7 @@ function DraggableChip({
   onRemove: () => void
   limit?: number
   onLimitChange?: (limit: number | undefined) => void
+  limitNegative?: boolean
 }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: dragId,
@@ -303,6 +314,7 @@ function DraggableChip({
           onLimitChange={onLimitChange}
           color={color}
           revealClass="group-hover/chip:opacity-40"
+          negative={limitNegative}
         />
       )}
       <button
@@ -984,8 +996,9 @@ function BuildEditorUI({
             <div className="flex items-center gap-2">
               <Label htmlFor="curse-max">Max curse stacks</Label>
               <InfoHint label="What is max curse stacks?">
-                The most cursed relics a result may include. Each curse hurts;
-                this caps how many the optimizer will tolerate.
+                How many copies of the same curse a loadout may carry; extra
+                copies disqualify it. A ≤N limit on a negatively-weighted curse
+                chip overrides this for that curse.
               </InfoHint>
               <Input
                 id="curse-max"
@@ -1285,6 +1298,7 @@ function BuildEditorUI({
                                       else next[familyName] = newLimit
                                       onFamilyLimitsChange(next)
                                     }}
+                                    limitNegative={group.weight < 0}
                                   />
                                   {famTiers &&
                                     famTiers.length > 0 &&
@@ -1396,6 +1410,7 @@ function BuildEditorUI({
                                     else next[id] = newLimit
                                     onEffectLimitsChange(next)
                                   }}
+                                  limitNegative={group.weight < 0}
                                 />
                               )
                             })}

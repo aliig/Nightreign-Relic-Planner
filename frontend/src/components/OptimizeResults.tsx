@@ -338,7 +338,11 @@ export function SlotCard({
                     style={{ color: getBreakdownColor(b) }}
                   >
                     {b.name as string}
-                    {b.redundant ? " (redundant)" : ""}
+                    {b.redundant
+                      ? b.override_status === "over_limit_penalty"
+                        ? " (over limit)"
+                        : " (redundant)"
+                      : ""}
                   </span>
                   <span className="font-mono ml-2 shrink-0">
                     {(b.score as number) >= 0 ? "+" : ""}
@@ -358,7 +362,11 @@ export function SlotCard({
                   >
                     <span className="truncate text-destructive/80">
                       {b.name as string}
-                      {b.redundant ? " (redundant)" : ""}
+                      {b.redundant
+                        ? b.override_status === "over_limit_penalty"
+                          ? " (over limit)"
+                          : " (redundant)"
+                        : ""}
                     </span>
                     <span className="font-mono ml-2 shrink-0 text-destructive/80">
                       {(b.score as number) >= 0 ? "+" : ""}
