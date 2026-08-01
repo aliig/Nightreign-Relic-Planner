@@ -2195,23 +2195,28 @@ function LocalBuildEditorContent({ buildId }: { buildId: string }) {
 
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  const buildLocalSavePatch = () => ({
-    name: nameRef.current,
-    character: characterRef.current,
-    groups: groupsRef.current,
-    required_effects: requiredEffectsRef.current,
-    required_families: requiredFamiliesRef.current,
-    excluded_effects: excludedEffectsRef.current,
-    excluded_families: excludedFamiliesRef.current,
-    excluded_stacking_categories: excludedStackingCategoriesRef.current,
-    include_deep: includeDeepRef.current,
-    curse_max: curseMaxRef.current,
-    default_curse_weight: defaultCurseWeightRef.current,
-    pinned_relics: pinnedRelicsRef.current,
-    effect_limits: effectLimitsRef.current,
-    family_limits: familyLimitsRef.current,
-    family_weight_floors: familyWeightFloorsRef.current,
-  })
+  // Reads only refs, so the identity is stable — scheduleAutoSave can list it
+  // as a dependency without being recreated every render.
+  const buildLocalSavePatch = useCallback(
+    () => ({
+      name: nameRef.current,
+      character: characterRef.current,
+      groups: groupsRef.current,
+      required_effects: requiredEffectsRef.current,
+      required_families: requiredFamiliesRef.current,
+      excluded_effects: excludedEffectsRef.current,
+      excluded_families: excludedFamiliesRef.current,
+      excluded_stacking_categories: excludedStackingCategoriesRef.current,
+      include_deep: includeDeepRef.current,
+      curse_max: curseMaxRef.current,
+      default_curse_weight: defaultCurseWeightRef.current,
+      pinned_relics: pinnedRelicsRef.current,
+      effect_limits: effectLimitsRef.current,
+      family_limits: familyLimitsRef.current,
+      family_weight_floors: familyWeightFloorsRef.current,
+    }),
+    [],
+  )
 
   // Store flush function in ref so cleanup always calls latest version
   const flushSaveRef = useRef(() => {

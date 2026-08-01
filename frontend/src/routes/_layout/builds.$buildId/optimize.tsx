@@ -4,7 +4,15 @@ import {
   useSuspenseQuery,
 } from "@tanstack/react-query"
 import { createFileRoute, Link, useParams } from "@tanstack/react-router"
-import { Fragment, Suspense, useEffect, useMemo, useRef, useState } from "react"
+import {
+  Fragment,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react"
 import type { BuildChange, VesselResult } from "@/client"
 import {
   BuildsService,
@@ -164,7 +172,7 @@ function AuthOptimizeForm({ buildId }: { buildId: string }) {
     setChange(null)
   }, [baseKey])
 
-  const handleOptimize = async () => {
+  const handleOptimize = useCallback(async () => {
     setIsPending(true)
     setProgress(null)
     setChange(null)
@@ -187,7 +195,7 @@ function AuthOptimizeForm({ buildId }: { buildId: string }) {
       setProgress(null)
       setHasRun(true)
     }
-  }
+  }, [buildId, profileId, staged, sig, baseKey, queryClient, showErrorToast])
 
   // Auto-optimize the VIEWED build: single-profile users on first view (as
   // before), plus whenever the staged diff makes the shown results stale —
@@ -211,7 +219,7 @@ function AuthOptimizeForm({ buildId }: { buildId: string }) {
     isPending,
     profileId,
     profiles.length,
-  ]) // eslint-disable-line react-hooks/exhaustive-deps
+  ])
 
   return (
     <div className="space-y-6">
@@ -467,7 +475,7 @@ function AnonOptimizeForm({ buildId }: { buildId: string }) {
     setHasRun(entry !== undefined)
   }, [baseKey])
 
-  const handleOptimize = async () => {
+  const handleOptimize = useCallback(async () => {
     if (!build || !profile || !inlineBuild) return
 
     setIsPending(true)
@@ -489,7 +497,7 @@ function AnonOptimizeForm({ buildId }: { buildId: string }) {
       setProgress(null)
       setHasRun(true)
     }
-  }
+  }, [build, profile, inlineBuild, relics, sig, baseKey, showErrorToast])
 
   // Auto-optimize: single-profile users on first view (as before), plus
   // whenever the staged diff makes the shown results stale (see auth form).
@@ -509,7 +517,7 @@ function AnonOptimizeForm({ buildId }: { buildId: string }) {
     fresh,
     isPending,
     profile,
-  ]) // eslint-disable-line react-hooks/exhaustive-deps
+  ])
 
   if (allProfiles.length === 0) {
     return (
