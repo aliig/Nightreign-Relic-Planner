@@ -48,6 +48,7 @@ import useCustomToast from "@/hooks/useCustomToast"
 import { toInlineBuild, useLocalBuilds } from "@/hooks/useLocalBuilds"
 import { getAnonUploadMeta, useSaveStatus } from "@/hooks/useSaveStatus"
 import { stagedFields, stagedKey, usePendingSlot } from "@/lib/pendingChanges"
+import { relicContentKey } from "@/lib/savedLoadoutMatch"
 
 /** Amber note shown while displayed results predate the current staged diff.
  *  The auto re-run usually replaces them within moments; the banner also covers
@@ -106,6 +107,31 @@ function AuthOptimizeForm({ buildId }: { buildId: string }) {
     enabled: !!profileId,
     staleTime: 5 * 60 * 1000,
   })
+
+  // Resolves saved-loadout ga_handles to relic contents so the "Saved" badge
+  // can also match content-equivalent arrangements (swapped same-color slots /
+  // duplicate copies). Handle→content is fixed within one save, so the RAW
+  // relic rows are the correct join source (same as the Loadouts page).
+  const { data: profileRelicsData } = useQuery({
+    queryKey: ["relics", profileId],
+    queryFn: () => SavesService.getProfileRelics({ profileId }),
+    enabled: !!profileId,
+    staleTime: 5 * 60 * 1000,
+  })
+  const relicContentByHandle = useMemo(() => {
+    const m = new Map<number, string>()
+    for (const r of profileRelicsData?.data ?? []) {
+      m.set(
+        Number(r.ga_handle),
+        relicContentKey({
+          real_id: r.real_id,
+          effects: [r.effect_1, r.effect_2, r.effect_3],
+          curses: [r.curse_1, r.curse_2, r.curse_3],
+        }),
+      )
+    }
+    return m
+  }, [profileRelicsData])
 
   const pinnedHandles = new Set<number>(selectedBuild?.pinned_relics ?? [])
   const hasRequirements =
@@ -338,6 +364,7 @@ function AuthOptimizeForm({ buildId }: { buildId: string }) {
                         vessel_id: l.vessel_id,
                         ga_handles: l.ga_handles ?? [],
                       })),
+                    relicContentByHandle,
                   }
                 })()}
               />
@@ -448,6 +475,15 @@ function AnonOptimizeForm({ buildId }: { buildId: string }) {
       })),
     ]
   }, [profile, sig])
+
+  // Handle→content join for the "Saved" badge's content-equivalent tier.
+  // Built from the effective inventory above: staged-sold relics drop out
+  // (loadouts holding them become unverifiable — never content-matched).
+  const relicContentByHandle = useMemo(() => {
+    const m = new Map<number, string>()
+    for (const r of relics) m.set(Number(r.ga_handle), relicContentKey(r))
+    return m
+  }, [relics])
 
   const inlineBuild = useMemo(
     () => (build ? toInlineBuild(build) : null),
@@ -655,6 +691,7 @@ function AnonOptimizeForm({ buildId }: { buildId: string }) {
                             vessel_id: p.vessel_id,
                             ga_handles: p.ga_handles ?? [],
                           })),
+                        relicContentByHandle,
                       }
                     : undefined
                 }
