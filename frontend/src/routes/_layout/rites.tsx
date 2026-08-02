@@ -34,10 +34,13 @@ import { isLoggedIn } from "@/hooks/useAuth"
 import useCustomToast from "@/hooks/useCustomToast"
 import { toInlineBuild, useLocalBuilds } from "@/hooks/useLocalBuilds"
 import {
-  addMints,
+  clearRitesBatch,
   effectiveMurks,
+  type MintSpec,
   murkAdjustment,
-  stagedFields,
+  type RitesBatchSpec,
+  readSlot,
+  replaceRitesBatch,
   usePendingSlot,
 } from "@/lib/pendingChanges"
 import { getOriginalBackupFile } from "@/lib/saveBackup"
@@ -145,7 +148,7 @@ type PlanResponse = {
   generated: number
   kept: number
   duds: number
-  murk_before: number // effective wallet: save Murk + staged mint delta
+  murk_before: number // wallet the plan ran from: raw save Murk (the staged batch never rides — a run replaces it)
   murk_after: number
   murk_cost: number
   murk_refunded: number
@@ -404,6 +407,43 @@ function sellValueLocal(effects: number[], isDeep: boolean): number {
   return base * (isDeep ? 2 : 1)
 }
 
+// --- Keeper <-> staged-mint matching ----------------------------------------
+
+/** Content fingerprint shared by plan keepers and staged mints (the roll
+ * stream is deterministic per save state, so identical content across a
+ * re-plan IS the same roll). */
+function contentFp(r: {
+  real_id: number
+  effects: number[]
+  curses: number[]
+}): string {
+  return JSON.stringify([r.real_id, ...r.effects, ...r.curses])
+}
+
+/**
+ * Claim staged mints for keeper rows by content — a multiset match, so
+ * duplicate content (possible with no build filter) claims one mint per copy,
+ * in row order. Returns keeper index -> the mint representing it.
+ */
+function matchKeepersToMints(
+  keepers: PlanKeeper[],
+  mints: MintSpec[],
+): Map<number, MintSpec> {
+  const pool = new Map<string, MintSpec[]>()
+  for (const m of mints) {
+    const fp = contentFp(m)
+    const arr = pool.get(fp)
+    if (arr) arr.push(m)
+    else pool.set(fp, [m])
+  }
+  const out = new Map<number, MintSpec>()
+  keepers.forEach((k, i) => {
+    const m = pool.get(contentFp(k))?.shift()
+    if (m) out.set(i, m)
+  })
+  return out
+}
+
 // --- Find Keepers progress stepper ------------------------------------------
 
 // Mirrors the SSE progress events from /saves/rites/plan/stream.
@@ -535,9 +575,10 @@ function RitesTool({
 }) {
   const { showErrorToast, showSuccessToast } = useCustomToast()
   // Staged diff for this slot. Murk is emulated LIVE against it: the wallet
-  // shown, budgeted, and planned with is the save's Murk plus the staged
-  // adjustment (rites spend + staged-sell refunds), so staged spending
-  // persists across refreshes and re-runs until export.
+  // SHOWN is the save's Murk plus the staged adjustment (the committed rites
+  // batch + staged-sell refunds). A new plan run, however, REPLACES the batch
+  // — same save state, same roll stream — so it plans from the raw save Murk
+  // plus staged-sell refunds only.
   const pending = usePendingSlot(slotIndex)
   const pendingSells = pending.sells
   const staged = murkAdjustment(pending)
@@ -556,7 +597,17 @@ function RitesTool({
   const [exclusion, setExclusion] = useState<Rule[]>([])
   const [busy, setBusy] = useState(false)
   const [plan, setPlan] = useState<PlanResponse | null>(null)
-  const [selected, setSelected] = useState<Set<number>>(new Set())
+  // Which keeper rows are kept, derived from the staged batch (content-matched
+  // mints) — the batch is the single source of truth, so Changes-panel undos
+  // and other tabs stay in sync with the checkboxes automatically.
+  const keeperMints = useMemo(
+    () =>
+      plan
+        ? matchKeepersToMints(plan.keepers, pending.mints)
+        : new Map<number, MintSpec>(),
+    [plan, pending.mints],
+  )
+  const selected = useMemo(() => new Set(keeperMints.keys()), [keeperMints])
   const [selectedBuilds, setSelectedBuilds] = useState<Set<string>>(new Set())
   const [progress, setProgress] = useState<ProgressEvt | null>(null)
   // How many builds the in-flight run was started with (selection can change
@@ -576,8 +627,16 @@ function RitesTool({
     (n, b) => n + (qty[b.key] ?? 0) * b.cost,
     0,
   )
+  // Wallet a NEW plan run starts from: raw save Murk + staged-sell refunds
+  // only. The committed rites batch is EXCLUDED — a run replaces the batch
+  // (same save state = same roll stream), un-buying its rolls first, so its
+  // spend must not double-count against affordability here.
+  const planMurks =
+    murks == null
+      ? null
+      : Math.max(0, Math.min(murks + staged - pending.murkDelta, 0xffffffff))
   const overspend =
-    stopMode === "fixed" && effMurks != null && fixedCost > effMurks
+    stopMode === "fixed" && planMurks != null && fixedCost > planMurks
 
   async function findKeepers() {
     const file = getSaveFile() ?? (await getOriginalBackupFile())
@@ -613,19 +672,15 @@ function RitesTool({
     form.append("stop_mode", stopMode)
     form.append("top_n", String(topN))
     if (stopMode === "budget") form.append("budget", String(budget))
-    // The staged diff rides along so the plan runs against the LIVE app
-    // state in every mode: sells are already gone (freed storage, refunds
-    // spendable), staged mints are already owned (no double-mint), the
-    // batch's net Murk delta spends down the wallet (no double-spend), and
-    // staged bookmark toggles drive the protected-sell gate (un-bookmark +
-    // trash in one session must not 422).
+    // Staged sells and bookmark toggles ride along so the plan runs against
+    // the LIVE app state: sold relics are already gone (freed storage,
+    // refunds spendable) and staged bookmarks drive the protected-sell gate
+    // (un-bookmark + trash in one session must not 422). The staged rites
+    // batch does NOT ride: this run REPLACES it — the roll stream is
+    // deterministic per save state, so a re-run re-views the same rolls, and
+    // passing the batch along would double-buy them.
     if (pendingSells.length)
       form.append("sold_handles", JSON.stringify(pendingSells))
-    const stagedMints = stagedFields(pending).staged_mints
-    if (stagedMints.length)
-      form.append("staged_mints", JSON.stringify(stagedMints))
-    if (pending.murkDelta !== 0)
-      form.append("staged_murk_delta", String(pending.murkDelta))
     if (Object.keys(pending.favorites).length)
       form.append("staged_favorites", JSON.stringify(pending.favorites))
     const inc = inclusion.filter(ruleHasCondition).map(serializeRule)
@@ -683,7 +738,15 @@ function RitesTool({
       if (!result) throw new Error("No plan was returned.")
       setPlan(result)
       setPlanStop(stopMode)
-      setSelected(new Set(result.keepers.map((_, i) => i)))
+      // The roll IS the purchase: the batch commits the moment it's revealed,
+      // mirroring the game, where a shop roll can't be previewed and declined.
+      // All keepers start kept (the walk the plan settled); unchecking one
+      // sells it back. A re-run replaces the batch — same save state, same
+      // roll stream — so exploring parameters never stacks losses.
+      commitSelection(result, new Set(result.keepers.map((_, i) => i)))
+      showSuccessToast(
+        `Batch committed: bought ${result.generated} relic(s), kept ${result.kept} — see the Changes panel.`,
+      )
     } catch (err) {
       if ((err as Error)?.name !== "AbortError")
         showErrorToast(
@@ -700,25 +763,25 @@ function RitesTool({
     abortRef.current?.abort()
   }
 
-  function stageKeepers() {
-    if (!plan) return
-    const keep = plan.keepers.filter((_, i) => selected.has(i))
-    if (!keep.length) {
-      showErrorToast("Select at least one keeper to add.")
-      return
-    }
-    // The plan's murk_delta assumes ALL keepers are kept. A deselected keeper is
-    // instead sold, so refund its sell value on top (faithful to buy-then-sell).
-    // Staged-sell refunds are NOT in murk_delta — those sells credit themselves
-    // through the export's sell step.
-    const dropped = plan.keepers.filter((_, i) => !selected.has(i))
-    const extraRefund = dropped.reduce(
-      (n, k) => n + sellValueLocal(k.effects, k.is_deep),
-      0,
-    )
-    addMints(
-      slotIndex,
-      keep.map((k) => ({
+  /**
+   * (Re-)commit the staged batch from a keeper selection: selected keepers
+   * are kept (minted), the rest are sold back — their sell value lands on top
+   * of the plan's murk_delta, which assumes ALL keepers kept (faithful
+   * buy-then-sell; staged-sell refunds of owned relics are NOT in the delta,
+   * those credit themselves through the export's sell step). Surviving mints
+   * keep their id/handle so staged loadout ops keep referencing them.
+   */
+  function commitSelection(p: PlanResponse, sel: Set<number>) {
+    const prev = matchKeepersToMints(p.keepers, readSlot(slotIndex).mints)
+    const specs: RitesBatchSpec[] = []
+    let soldBack = 0
+    p.keepers.forEach((k, i) => {
+      if (!sel.has(i)) {
+        soldBack += sellValueLocal(k.effects, k.is_deep)
+        return
+      }
+      const kept = prev.get(i)
+      specs.push({
         real_id: k.real_id,
         item_id: k.item_id,
         effects: k.effects,
@@ -730,14 +793,27 @@ function RitesTool({
         // Odds are exact (relic_lots.json, derived from regulation.bin — see RE doc).
         oddsSource: "exact",
         builds: k.builds,
-      })),
-      plan.murk_delta + extraRefund,
+        ...(kept ? { id: kept.id, handle: kept.handle } : {}),
+      })
+    })
+    const droppedOps = replaceRitesBatch(
+      slotIndex,
+      specs,
+      p.murk_delta + soldBack,
     )
-    showSuccessToast(
-      `Staged ${keep.length} keeper(s). Review and export from the Changes panel.`,
-    )
+    if (droppedOps.length)
+      showErrorToast(
+        `Removed staged loadout change(s) that used a sold keeper: ${droppedOps.join(", ")}`,
+      )
+  }
+
+  function cancelBatch() {
+    const droppedOps = clearRitesBatch(slotIndex)
+    if (droppedOps.length)
+      showErrorToast(
+        `Removed staged loadout change(s) that used this batch: ${droppedOps.join(", ")}`,
+      )
     setPlan(null)
-    setSelected(new Set())
   }
 
   return (
@@ -1061,8 +1137,11 @@ function RitesTool({
             <p className="text-sm text-muted-foreground">
               No keepers — none of the rolled relics earned a spot in a selected
               build's top loadouts (at the chosen match depth) or matched an
-              "always keep" rule. Try a larger batch, a wider match depth, or a
-              rule.
+              "always keep" rule. Every purchase was sold back, and the net Murk
+              loss above is committed to your Changes — buying is binding,
+              exactly as in-game. Export and re-upload the edited save to roll a
+              fresh stream, or try a wider match depth or a rule (re-running
+              re-views these same rolls; it never re-rolls).
             </p>
           ) : (
             // Same presentation as the Inventory table (RelicNameCell +
@@ -1074,13 +1153,14 @@ function RitesTool({
                     <Checkbox
                       checked={selected.size === plan.keepers.length}
                       onCheckedChange={() =>
-                        setSelected((s) =>
-                          s.size === plan.keepers.length
+                        commitSelection(
+                          plan,
+                          selected.size === plan.keepers.length
                             ? new Set()
                             : new Set(plan.keepers.map((_, i) => i)),
                         )
                       }
-                      aria-label="Select all keepers"
+                      aria-label="Keep or sell all keepers"
                     />
                   </TableHead>
                   <TableHead>Relic</TableHead>
@@ -1108,14 +1188,12 @@ function RitesTool({
                       <TableCell>
                         <Checkbox
                           checked={selected.has(i)}
-                          onCheckedChange={() =>
-                            setSelected((s) => {
-                              const n = new Set(s)
-                              n.has(i) ? n.delete(i) : n.add(i)
-                              return n
-                            })
-                          }
-                          aria-label={`Select ${k.name}`}
+                          onCheckedChange={() => {
+                            const n = new Set(selected)
+                            n.has(i) ? n.delete(i) : n.add(i)
+                            commitSelection(plan, n)
+                          }}
+                          aria-label={`Keep ${k.name}`}
                         />
                       </TableCell>
                       <TableCell className="min-w-[180px]">
@@ -1193,13 +1271,14 @@ function RitesTool({
             </Table>
           )}
 
-          <div className="flex flex-wrap items-center justify-end gap-2">
-            <Button
-              onClick={stageKeepers}
-              disabled={selected.size === 0}
-              className="gap-1.5"
-            >
-              Add {selected.size} keeper(s) to Changes
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-xs text-muted-foreground">
+              This batch is committed to your Changes — unchecking a keeper
+              sells it back for its refund. Export, then re-upload the edited
+              save to roll a fresh stream.
+            </p>
+            <Button variant="outline" onClick={cancelBatch} className="gap-1.5">
+              Cancel batch
             </Button>
           </div>
         </div>

@@ -269,8 +269,10 @@ export async function exportPendingChanges(
     // Mints second: the net Murk delta (purchase cost − dud refunds) rides
     // along. The server reports the real handles it assigned (ordered per
     // spec) so staged loadouts can reference the freshly minted relics.
+    // An all-dud batch (no mints, negative delta) still exports: the buy/sell
+    // spread was spent the moment the batch was rolled (1:1 fidelity).
     let mintHandleMap = new Map<number, number>()
-    if (slot.mints.length) {
+    if (slot.mints.length || slot.murkDelta !== 0) {
       const r = await postAddRelicsExport(
         current,
         filename,

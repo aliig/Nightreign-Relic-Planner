@@ -247,6 +247,62 @@ def test_export_add_relics_returns_assigned_handles(client: TestClient) -> None:
 
 @skip_no_fixture
 @pytest.mark.usefixtures("override_game_data")
+def test_export_add_relics_pure_murk_loss(client: TestClient) -> None:
+    """An all-dud rites batch exports as a pure spend: empty specs + a negative
+    murk_delta mint nothing but still debit the wallet (rolling is buying —
+    the buy/sell spread must reach the save, or previewing a bad roll would be
+    free save-scumming)."""
+    profiles = _parse_profiles(client)
+    prof = next(p for p in profiles if p["relics"])
+    if prof["murks"] == 0:
+        pytest.skip("fixture wallet is empty")
+    loss = -min(1_000, prof["murks"])
+
+    with FIXTURE_PATH.open("rb") as f:
+        resp = client.post(
+            "/api/v1/saves/export-add-relics",
+            files={"file": ("NR0000.sl2", f, "application/octet-stream")},
+            data={
+                "slot_index": str(prof["slot_index"]),
+                "specs": "[]",
+                "murk_delta": str(loss),
+            },
+        )
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["x-relics-added"] == "0"
+    assert json.loads(resp.headers["x-added-handles"]) == []
+    assert resp.headers["x-murks-total"] == str(prof["murks"] + loss)
+
+    edited = client.post(
+        "/api/v1/saves/upload",
+        files={
+            "file": ("NR0000_loss.sl2", resp.content, "application/octet-stream")
+        },
+    )
+    assert edited.status_code == 200, edited.text
+    eprof = next(
+        p for p in edited.json()["profiles"]
+        if p["slot_index"] == prof["slot_index"]
+    )
+    assert eprof["murks"] == prof["murks"] + loss
+    assert eprof["relic_count"] == prof["relic_count"]
+
+
+@skip_no_fixture
+@pytest.mark.usefixtures("override_game_data")
+def test_export_add_relics_rejects_empty_export(client: TestClient) -> None:
+    """Empty specs WITHOUT a delta is still a 422 — there is nothing to write."""
+    with FIXTURE_PATH.open("rb") as f:
+        resp = client.post(
+            "/api/v1/saves/export-add-relics",
+            files={"file": ("NR0000.sl2", f, "application/octet-stream")},
+            data={"slot_index": "0", "specs": "[]"},
+        )
+    assert resp.status_code == 422
+
+
+@skip_no_fixture
+@pytest.mark.usefixtures("override_game_data")
 def test_export_chain_loadout_references_minted_relic(client: TestClient) -> None:
     """The full staged-journey export chain (sell → mint → loadout): a loadout
     op whose ga_handles carry the real handle from X-Added-Handles validates

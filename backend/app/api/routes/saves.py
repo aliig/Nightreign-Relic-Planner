@@ -1501,58 +1501,69 @@ def _export_added_save(
     blob = _decrypt_slot_blob(file_bytes, filename, slot_index)
 
     raw_relics, _ = parse_relics(blob)
-    donor = next((r for r in raw_relics if r.size == _RELIC_RECORD_SIZE), None)
-    if donor is None:
-        raise HTTPException(
-            status_code=422,
-            detail="This save has no existing relic to use as a record template. "
-                   "Acquire at least one relic in-game first.",
-        )
-    template = blob[donor.offset:donor.offset + _RELIC_RECORD_SIZE]
-
-    checker = RelicChecker([], ds)
-    safe_ids = set(ds.get_safe_relic_ids())
-
-    records = []
-    for i, spec in enumerate(specs):
-        if spec.real_id not in safe_ids:
-            raise HTTPException(
-                status_code=422,
-                detail=f"Relic #{i} (id {spec.real_id}) is not a mintable relic.",
-            )
-        effects = (list(spec.effects) + [EMPTY_EFFECT] * 3)[:3]
-        curses = (list(spec.curses) + [EMPTY_EFFECT] * 3)[:3]
-        reason = checker.check_invalidity(spec.real_id, effects + curses)
-        if reason != InvalidReason.NONE:
-            raise HTTPException(
-                status_code=422,
-                detail=f"Relic #{i} is not a legal relic ({reason.name}).",
-            )
-        records.append(build_relic_record(spec.real_id, effects, curses, template))
-
     # Structural capacity AND the in-game 1950 storage cap — minting must never
     # push the save past what the game itself would hold (1:1 fidelity).
     cap = min(add_capacity(blob), max(0, RELIC_STORAGE_CAP - len(raw_relics)))
-    if len(records) > cap:
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "error": "add_capacity",
-                "message": f"This save can accept only {cap} more relic(s) at once "
-                           "(reusable inventory records + mintable free slots, "
-                           "within the 1950 relic storage cap). Add fewer at a time.",
-                "capacity": cap,
-                "requested": len(records),
-            },
-        )
 
-    try:
-        new_blob, add_result = add_relics(blob, records)
-    except AddCapacityError as exc:  # pragma: no cover - guarded by cap check above
-        raise HTTPException(
-            status_code=422,
-            detail={"error": "add_capacity", "message": str(exc), "capacity": cap},
-        ) from exc
+    if specs:
+        donor = next(
+            (r for r in raw_relics if r.size == _RELIC_RECORD_SIZE), None)
+        if donor is None:
+            raise HTTPException(
+                status_code=422,
+                detail="This save has no existing relic to use as a record template. "
+                       "Acquire at least one relic in-game first.",
+            )
+        template = blob[donor.offset:donor.offset + _RELIC_RECORD_SIZE]
+
+        checker = RelicChecker([], ds)
+        safe_ids = set(ds.get_safe_relic_ids())
+
+        records = []
+        for i, spec in enumerate(specs):
+            if spec.real_id not in safe_ids:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Relic #{i} (id {spec.real_id}) is not a mintable relic.",
+                )
+            effects = (list(spec.effects) + [EMPTY_EFFECT] * 3)[:3]
+            curses = (list(spec.curses) + [EMPTY_EFFECT] * 3)[:3]
+            reason = checker.check_invalidity(spec.real_id, effects + curses)
+            if reason != InvalidReason.NONE:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Relic #{i} is not a legal relic ({reason.name}).",
+                )
+            records.append(
+                build_relic_record(spec.real_id, effects, curses, template))
+
+        if len(records) > cap:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error": "add_capacity",
+                    "message": f"This save can accept only {cap} more relic(s) at once "
+                               "(reusable inventory records + mintable free slots, "
+                               "within the 1950 relic storage cap). Add fewer at a time.",
+                    "capacity": cap,
+                    "requested": len(records),
+                },
+            )
+
+        try:
+            new_blob, add_result = add_relics(blob, records)
+        except AddCapacityError as exc:  # pragma: no cover - guarded by cap check above
+            raise HTTPException(
+                status_code=422,
+                detail={"error": "add_capacity", "message": str(exc),
+                        "capacity": cap},
+            ) from exc
+        added_handles = list(add_result.added_handles)
+    else:
+        # Pure Murk settlement: an all-dud rites batch mints nothing, but the
+        # buy/sell spread it lost is still a real spend (1:1 fidelity — the
+        # in-game walk would have cost it).
+        new_blob, added_handles = blob, []
 
     # Apply the net purchase Murk delta (negative = spent, positive = refund) so the
     # buy/sell economy is faithful on export. Fidelity: never lets Murk go negative.
@@ -1562,11 +1573,11 @@ def _export_added_save(
 
     new_save = repack_sl2(file_bytes, {slot_index: new_blob})
     summary = {
-        "added": len(add_result.added_handles),
+        "added": len(added_handles),
         # Real ga_handles assigned by ghost resurrection, ordered 1:1 with the
         # input specs — the client substitutes these for the synthetic handles
         # its staged loadouts reference.
-        "added_handles": list(add_result.added_handles),
+        "added_handles": added_handles,
         "capacity": cap,
         "murks_after": murks_after,
     }
@@ -1597,8 +1608,10 @@ async def export_add_relics(
             status_code=422, detail=f"Invalid specs payload: {exc}"
         ) from exc
 
-    if not parsed:
-        raise HTTPException(status_code=422, detail="No relics to add.")
+    # Zero specs is valid WITH a Murk delta: an all-dud rites batch exports as
+    # a pure spend (rolling is buying; the spread loss must reach the save).
+    if not parsed and not murk_delta:
+        raise HTTPException(status_code=422, detail="Nothing to export.")
 
     file_bytes = await file.read()
     if not file_bytes:

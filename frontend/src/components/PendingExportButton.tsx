@@ -24,6 +24,7 @@ import useCustomToast from "@/hooks/useCustomToast"
 import { exportPendingChanges, PendingExportError } from "@/lib/exportPending"
 import {
   clearAll,
+  clearRitesBatch,
   mintReferences,
   type PendingLoadoutOp,
   readAll,
@@ -79,6 +80,8 @@ export function PendingExportButton() {
     slot: number
     mintIds: string[]
     refNames: string[]
+    /** True when canceling the whole rites batch (mints + committed loss). */
+    batch?: boolean
   } | null>(null)
 
   function undoMints(slot: number, mintIds: string[]) {
@@ -99,6 +102,26 @@ export function PendingExportButton() {
       return
     }
     setMintConfirm({ slot, mintIds, refNames: [...refNames] })
+  }
+
+  // Cancel the whole rites batch: every kept mint AND the committed Murk loss
+  // (a batch with zero mints is still a real committed loss — the all-dud case).
+  function undoBatch(slot: number) {
+    const s = readAll()[slot]
+    if (!s) return
+    const refNames = new Set<string>()
+    for (const m of s.mints) {
+      for (const op of mintReferences(s, m.handle)) {
+        if (op.kind === "add") refNames.add(`Add loadout "${op.name}"`)
+        else if (op.kind === "overwrite")
+          refNames.add(`Replace "${op.targetName || "loadout"}"`)
+      }
+    }
+    if (refNames.size === 0) {
+      clearRitesBatch(slot)
+      return
+    }
+    setMintConfirm({ slot, mintIds: [], batch: true, refNames: [...refNames] })
   }
 
   // Flatten the whole diff into a per-slot change log with undo for each entry.
@@ -157,13 +180,10 @@ export function PendingExportButton() {
         id: `murk-${slot}`,
         label:
           s.murkDelta < 0
-            ? `Spend ${formatMurks(-s.murkDelta)} Murk on purchases`
+            ? `Spend ${formatMurks(-s.murkDelta)} Murk on purchases` +
+              (s.mints.length === 0 ? " (all sold back)" : "")
             : `Net +${formatMurks(s.murkDelta)} Murk from purchases`,
-        undo: () =>
-          undoMints(
-            slot,
-            s.mints.map((m) => m.id),
-          ),
+        undo: () => undoBatch(slot),
       })
     }
     count += entries.length
@@ -394,8 +414,10 @@ export function PendingExportButton() {
               variant="destructive"
               onClick={() => {
                 if (mintConfirm) {
-                  for (const id of mintConfirm.mintIds)
-                    removeMint(mintConfirm.slot, id)
+                  if (mintConfirm.batch) clearRitesBatch(mintConfirm.slot)
+                  else
+                    for (const id of mintConfirm.mintIds)
+                      removeMint(mintConfirm.slot, id)
                 }
                 setMintConfirm(null)
               }}

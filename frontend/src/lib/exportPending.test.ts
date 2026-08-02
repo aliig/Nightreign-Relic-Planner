@@ -133,6 +133,37 @@ describe("exportPendingChanges", () => {
     expect(summary.minted).toBe(2)
   })
 
+  it("exports an all-dud batch: pure Murk loss, zero mints", async () => {
+    // A rites batch whose every purchase was sold back still spent its
+    // buy/sell spread — the export must carry it (rolling is buying).
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(res({ "x-relics-added": "0" }))
+    vi.stubGlobal("fetch", fetchMock)
+
+    const pending: Record<number, SlotPending> = {
+      0: {
+        sells: [],
+        favorites: {},
+        loadoutOps: [],
+        mints: [],
+        murkDelta: -4_150,
+        meta: {},
+      },
+    }
+    const summary = await exportPendingChanges(
+      new File([new Uint8Array([0])], "s.sl2"),
+      pending,
+    )
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/v1/saves/export-add-relics")
+    const form = fetchMock.mock.calls[0][1].body as FormData
+    expect(form.get("specs")).toBe("[]")
+    expect(form.get("murk_delta")).toBe("-4150")
+    expect(summary.minted).toBe(0)
+  })
+
   it("substitutes assigned real handles for synthetic mint handles in loadouts", async () => {
     const fetchMock = vi
       .fn()

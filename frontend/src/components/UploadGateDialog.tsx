@@ -26,6 +26,12 @@ function summaryLine(row: SlotSummary): string {
           ? ` (${row.murkDelta < 0 ? "−" : "+"}${formatMurks(Math.abs(row.murkDelta))} Murk)`
           : ""),
     )
+  // An all-dud rites batch: no relics kept, but the buy/sell spread is a real
+  // staged Murk spend the discard would drop.
+  else if (row.murkDelta)
+    parts.push(
+      `${row.murkDelta < 0 ? "−" : "+"}${formatMurks(Math.abs(row.murkDelta))} Murk from purchases (all sold back)`,
+    )
   if (row.favorites)
     parts.push(
       `${row.favorites} bookmark change${row.favorites !== 1 ? "s" : ""}`,
