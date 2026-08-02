@@ -151,7 +151,7 @@ type PlanResponse = {
   murk_refunded: number
   murk_delta: number // mint-side net (refunds − cost); staged-sell refunds excluded
   limited_by: string | null
-  add_capacity: number // max relics one export can mint (ghost slots, pre-sells)
+  add_capacity: number // max relics one export can mint (ghost + mintable free slots, pre-sells)
   storage_left: number // 1950 − effective owned (staged diff applied); fixed/budget also capped by ghost capacity
   pending_sold: number // staged sells the plan honored (any mode)
   pending_sold_refund: number // their total sell value (funded the run)

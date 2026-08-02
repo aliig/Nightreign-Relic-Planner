@@ -1493,8 +1493,9 @@ def _export_added_save(
 
     Each spec is re-validated as a legal relic, packed into an 80-byte ItemState
     record templated from one of the save's OWN relics (so durability/unknown/
-    trailing bytes are provably correct), added via ghost resurrection, and the
-    slot re-encrypted. Returns (new_save_bytes, summary). Raises HTTPException on
+    trailing bytes are provably correct), added via ghost resurrection — then
+    virgin-tail minting beyond the ghost supply — and the slot re-encrypted.
+    Returns (new_save_bytes, summary). Raises HTTPException on
     validation/capacity errors. The embedded Steam ID is left unchanged.
     """
     blob = _decrypt_slot_blob(file_bytes, filename, slot_index)
@@ -1529,14 +1530,17 @@ def _export_added_save(
             )
         records.append(build_relic_record(spec.real_id, effects, curses, template))
 
-    cap = add_capacity(blob)
+    # Structural capacity AND the in-game 1950 storage cap — minting must never
+    # push the save past what the game itself would hold (1:1 fidelity).
+    cap = min(add_capacity(blob), max(0, RELIC_STORAGE_CAP - len(raw_relics)))
     if len(records) > cap:
         raise HTTPException(
             status_code=422,
             detail={
                 "error": "add_capacity",
                 "message": f"This save can accept only {cap} more relic(s) at once "
-                           "(limited by reusable inventory records). Add fewer at a time.",
+                           "(reusable inventory records + mintable free slots, "
+                           "within the 1950 relic storage cap). Add fewer at a time.",
                 "capacity": cap,
                 "requested": len(records),
             },

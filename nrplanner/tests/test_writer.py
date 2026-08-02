@@ -224,8 +224,11 @@ class TestRoundTrip:
         record = sold_blob[relics[0].offset:relics[0].offset + 80]
         new_blob, res = add_relics(sold_blob, [record] * cap)
         assert res.entry_count_after == res.entry_count_before + cap
-        with pytest.raises(AddCapacityError):
-            add_relics(new_blob, [record])
+        # Capacity is per-pass: the tail-shift budget renews each export, so a
+        # follow-up pass keeps minting from whatever virgin run remains.
+        _, res2 = add_relics(new_blob, [record])
+        assert res2.ghosts_available == 0
+        assert len(res2.minted_handles) == 1
 
     def test_other_entries_unchanged(self, raw_save, userdata, items_json, ds):
         """Repacking entry 0 must leave the other BND4 entries byte-identical."""
@@ -347,12 +350,17 @@ class TestAddRelics:
             assert r.ga_handle in after_by_handle
         assert _read_entry_count(rt_blob) == count_before + 1
 
-    def test_add_beyond_ghost_capacity_raises(self, userdata):
+    def test_add_beyond_ghost_capacity_mints(self, userdata):
+        """Beyond the ghost supply adds no longer fail — the excess is minted
+        into the arena's virgin tail (mechanism 2)."""
         ghosts = _ghost_relics(userdata)
         relics, _ = parse_relics(userdata)
         record = userdata[relics[0].offset:relics[0].offset + 80]
-        with pytest.raises(AddCapacityError):
-            add_relics(userdata, [record] * (len(ghosts) + 1))
+        new_blob, res = add_relics(userdata, [record] * (len(ghosts) + 1))
+        assert len(res.minted_handles) == 1
+        assert res.tail_shift == 72
+        after, _ = parse_relics(new_blob)
+        assert len(after) == len(relics) + len(ghosts) + 1
 
     def test_add_rejects_malformed_records(self, userdata):
         relics, _ = parse_relics(userdata)
@@ -409,3 +417,132 @@ class TestAddRelics:
         assert added.item_id == relic.item_id
         assert (added.effect_1, added.effect_2, added.effect_3) == relic.effects
         assert (added.sec_effect1, added.sec_effect2, added.sec_effect3) == relic.curses
+
+
+def _virgin_tail_count(blob: bytes) -> int:
+    from nrplanner.writer import _virgin_tail_slots
+
+    items, _ = _parse_items(blob, start_offset=0x14, slot_count=5120)
+    return len(_virgin_tail_slots(blob, items))
+
+
+def _free_entry_rows(blob: bytes) -> int:
+    from nrplanner.save import _ITEM_ENTRY_SIZE, _ITEM_ENTRY_SLOT_COUNT
+
+    _, items_end = _parse_items(blob, start_offset=0x14, slot_count=5120)
+    entries_start = items_end + 0x94 + 0x5B8 + 4
+    return sum(
+        1 for i in range(_ITEM_ENTRY_SLOT_COUNT)
+        if struct.unpack_from("<I", blob, entries_start + i * _ITEM_ENTRY_SIZE)[0] == 0
+    )
+
+
+@requires_fixture
+class TestMintRelics:
+    """Virgin-tail minting: adds beyond the ghost supply grow the arena in
+    place, shifting the items_end-relative tail exactly like the game's own
+    acquisition write."""
+
+    def test_mint_full_roundtrip_preserves_everything(self, raw_save, userdata, ds):
+        from nrplanner.constants import ITEM_TYPE_RELIC
+
+        ghosts = _ghost_relics(userdata)
+        n_mint = 3
+        n = len(ghosts) + n_mint
+
+        before_relics, items_end_before = parse_relics(userdata)
+        source = next(r for r in before_relics if r.size == 80)
+        record = userdata[source.offset:source.offset + 80]
+
+        murks_before = _read_murks(userdata)
+        count_before = _read_entry_count(userdata)
+        favs_before = read_favorite_handles(userdata, items_end_before)
+        virgin_before = _virgin_tail_count(userdata)
+        old_items, _ = _parse_items(userdata, start_offset=0x14, slot_count=5120)
+        old_handles = {it.gaitem_handle for it in old_items if it.gaitem_handle}
+        loadout_before = LoadoutHandler(ds)
+        loadout_before.parse(userdata)
+
+        new_blob, result = add_relics(userdata, [record] * n)
+
+        assert len(new_blob) == len(userdata)
+        assert result.tail_shift == n_mint * 72
+        assert len(result.minted_handles) == n_mint
+        assert result.added_handles[:len(ghosts)] == [g.gaitem_handle for g in ghosts]
+        assert result.added_handles[len(ghosts):] == result.minted_handles
+        # Fresh handles: relic-typed, unique, unseen anywhere in the old arena.
+        assert len(set(result.minted_handles)) == n_mint
+        for h in result.minted_handles:
+            assert (h & 0xF0000000) == ITEM_TYPE_RELIC
+            assert h not in old_handles
+
+        # Minted records occupy the arena's former virgin tail, tiling exactly.
+        _, items_end_after_direct = _parse_items(new_blob, start_offset=0x14,
+                                                 slot_count=5120)
+        assert items_end_after_direct == items_end_before + n_mint * 72
+        assert _virgin_tail_count(new_blob) == virgin_before - n_mint
+
+        # Survives a full repack/re-decrypt.
+        repacked = repack_sl2(raw_save, {0: new_blob})
+        rt = _decrypt_blob(repacked)
+        after_relics, items_end_after = parse_relics(rt)
+        after_by_handle = {r.ga_handle: r for r in after_relics}
+
+        assert len(after_relics) == len(before_relics) + n
+        for h in result.added_handles:
+            added = after_by_handle[h]
+            assert (added.item_id, added.effect_1, added.effect_2, added.effect_3,
+                    added.sec_effect1, added.sec_effect2, added.sec_effect3) == (
+                source.item_id, source.effect_1, source.effect_2, source.effect_3,
+                source.sec_effect1, source.sec_effect2, source.sec_effect3)
+        for r in before_relics:
+            assert r.ga_handle in after_by_handle
+
+        # Every tail structure survives the shift at its items_end-relative spot.
+        assert _read_murks(rt) == murks_before
+        assert _read_entry_count(rt) == count_before + n
+        assert read_favorite_handles(rt, items_end_after) == favs_before
+        loadout_after = LoadoutHandler(ds)
+        loadout_after.parse(rt)
+        assert (loadout_after.parser.base_offset
+                == loadout_before.parser.base_offset + n_mint * 72)
+        assert loadout_after.relic_ga_hero_map == loadout_before.relic_ga_hero_map
+
+        # MD5 trailer valid on the round-tripped blob.
+        end = len(rt) - 28
+        assert rt[end:end + 16] == hashlib.md5(
+            rt[4:end], usedforsecurity=False).digest()
+
+    def test_mint_capacity_composition(self, userdata):
+        from nrplanner.writer import _MAX_TAIL_SHIFT, _MINT_GROWTH
+
+        ghosts = len(_ghost_relics(userdata))
+        mintable = min(_virgin_tail_count(userdata), _MAX_TAIL_SHIFT // _MINT_GROWTH)
+        assert add_capacity(userdata) == min(ghosts + mintable, _free_entry_rows(userdata))
+
+    def test_mint_then_mint_again(self, userdata):
+        """A minted blob is a valid base for another mint pass."""
+        ghosts = _ghost_relics(userdata)
+        relics, _ = parse_relics(userdata)
+        record = userdata[relics[0].offset:relics[0].offset + 80]
+
+        first, res1 = add_relics(userdata, [record] * (len(ghosts) + 2))
+        assert len(res1.minted_handles) == 2
+        second, res2 = add_relics(first, [record] * 2)  # no ghosts left -> pure mint
+        assert len(res2.minted_handles) == 2
+        assert set(res2.minted_handles).isdisjoint(res1.minted_handles)
+
+        after, _ = parse_relics(second)
+        assert len(after) == len(relics) + len(ghosts) + 4
+
+    def test_corrupt_virgin_slot_shrinks_mint_capacity(self, userdata):
+        """A byte off the canonical 00000000/FFFFFFFF empty-slot sentinel
+        disqualifies that record and everything before it — minting only
+        trusts verified sentinel slots."""
+        items, _ = _parse_items(userdata, start_offset=0x14, slot_count=5120)
+        assert items[-1].gaitem_handle == 0 and items[-1].size == 8
+        virgin_before = _virgin_tail_count(userdata)
+        assert virgin_before > 0
+        poisoned = bytearray(userdata)
+        poisoned[items[-1].offset + 4] = 0x7F  # breaks the item_id sentinel
+        assert _virgin_tail_count(bytes(poisoned)) == 0

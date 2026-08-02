@@ -316,9 +316,10 @@ class RitesPlanResponse(SQLModel):
     # /saves/export. murk_after == murk_before + pending_sold_refund + murk_delta.
     murk_delta: int
     limited_by: str | None = None   # "murk" | "storage" | "gen_max" | None
-    add_capacity: int               # effective ghost capacity: raw slots +
-                                    # staged sells − staged mints (how many MORE
-                                    # relics the next export can mint)
+    add_capacity: int               # effective add capacity: ghost slots +
+                                    # mintable virgin-tail slots + staged sells −
+                                    # staged mints (how many MORE relics the
+                                    # next export can mint)
     storage_left: int               # all_murk: 1950 − effective owned (staged diff
                                     # applied); fixed/budget: also capped by ghost
                                     # add-capacity ± the staged diff
