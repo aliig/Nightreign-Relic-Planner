@@ -60,6 +60,13 @@ import {
   replaceTargets,
   usePendingSlot,
 } from "@/lib/pendingChanges"
+import {
+  findSavedLoadoutMatch,
+  type RelicContent,
+  relicContentKey as relicKey,
+} from "@/lib/savedLoadoutMatch"
+
+export { relicKey }
 
 // --- Types ---
 
@@ -104,14 +111,6 @@ export function cacheKey(
 }
 
 // --- Change highlighting (save-diff) ---
-
-export function relicKey(r: {
-  real_id?: number
-  effects?: number[] | null
-  curses?: number[] | null
-}): string {
-  return `${r.real_id ?? ""}:${(r.effects ?? []).join(",")}:${(r.curses ?? []).join(",")}`
-}
 
 /** Content keys of relics that entered the best arrangement (for "NEW" badges).
  *  Only meaningful for a save-driven change — a build edit re-baselines and is
@@ -510,6 +509,10 @@ export function VesselCard({
       vessel_id: number
       ga_handles: number[]
     }[]
+    /** ga_handle → relicContentKey for the profile's relics. Enables the
+     *  content-equivalent tier of the "Saved" badge (same relics rearranged
+     *  across same-color slots, or interchangeable duplicate copies). */
+    relicContentByHandle?: Map<number, string>
   }
 }) {
   const { showErrorToast } = useCustomToast()
@@ -532,21 +535,19 @@ export function VesselCard({
   const isModified = workingVessel !== vessel
   const canStrike = inventorySource !== undefined
 
-  // Does this exact setup (same vessel + same non-empty relics) already exist as
-  // a saved in-game loadout? Matched as a set so slot order doesn't matter.
+  // Does this setup (same vessel + same non-empty relics) already exist as a
+  // saved in-game loadout? Exact = same ga_handles (slot order ignored);
+  // equivalent = same relic contents rearranged (see savedLoadoutMatch.ts).
   const savedMatch = useMemo(() => {
-    const existing = loadoutTarget?.existing
-    if (!existing?.length) return undefined
-    const mine = new Set(
-      workingVessel.assignments
-        .map((a) => (a.relic as { ga_handle?: number } | null)?.ga_handle ?? 0)
-        .filter((h) => h !== 0),
+    const assigned = workingVessel.assignments
+      .map((a) => a.relic as (RelicContent & { ga_handle?: number }) | null)
+      .filter((r): r is RelicContent & { ga_handle?: number } => r !== null)
+    return findSavedLoadoutMatch(
+      workingVessel.vessel_id,
+      assigned,
+      loadoutTarget?.existing,
+      loadoutTarget?.relicContentByHandle,
     )
-    return existing.find((e) => {
-      if (e.vessel_id !== workingVessel.vessel_id) return false
-      const theirs = (e.ga_handles ?? []).filter((h) => h !== 0)
-      return theirs.length === mine.size && theirs.every((h) => mine.has(h))
-    })
   }, [loadoutTarget, workingVessel])
 
   const handleStrike = async (slotIndex: number) => {
@@ -625,10 +626,15 @@ export function VesselCard({
               <Badge
                 variant="secondary"
                 className="text-[10px] px-1.5 py-0 gap-1"
-                title={`Already saved in-game as "${savedMatch.name || "(unnamed)"}"`}
+                title={
+                  savedMatch.equivalent
+                    ? `Same relics as your saved in-game loadout "${savedMatch.loadout.name || "(unnamed)"}" — arranged differently across interchangeable slots, which doesn't change the result`
+                    : `Already saved in-game as "${savedMatch.loadout.name || "(unnamed)"}"`
+                }
               >
                 <BookMarked className="h-3 w-3" />
-                Saved{savedMatch.name ? `: ${savedMatch.name}` : ""}
+                {savedMatch.equivalent ? "Saved ≈" : "Saved"}
+                {savedMatch.loadout.name ? `: ${savedMatch.loadout.name}` : ""}
               </Badge>
             )}
           </div>
