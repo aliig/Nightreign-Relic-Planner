@@ -1161,6 +1161,32 @@ class TestUndesiredLimitTolerance:
         self._assert_score(scorer, build, relic, legacy, compiled,
                            elbn, flm, expected=-30 + CURSE_EXCESS_PENALTY)
 
+    def test_required_effect_limit_caps_extra_copies(
+        self, scorer: BuildScorer, ds: SourceDataHandler, all_effects: list[dict]
+    ) -> None:
+        """A cap on a Required-row effect is a score cap, never a veto.
+
+        The editor lets a Required chip carry a ≤N limit (e.g. "Wraith Calling
+        Bell in possession" required but pointless twice).  Required resolves
+        to a positive fixed weight, so the limit takes the score-cap fork:
+        copy #1 still scores REQUIRED_WEIGHT — keeping the hard requirement
+        satisfiable — and extras score 0 instead of stacking more reward.
+        """
+        from nrplanner.models import REQUIRED_WEIGHT
+        eff = self._pick_stack_effect(ds, all_effects)
+        build = BuildDefinition(
+            id="req-cap", name="req-cap", character="Wylder",
+            required_effects=[eff],
+            effect_limits={eff: 1},
+        )
+        relic = _make_relic([eff, EMPTY, EMPTY])
+        legacy, compiled, elbn, flm = self._make_states(scorer, ds, build)
+        self._assert_score(scorer, build, relic, legacy, compiled,
+                           elbn, flm, expected=REQUIRED_WEIGHT)
+        self._place_both(scorer, build, relic, legacy, compiled, elbn, flm)
+        self._assert_score(scorer, build, relic, legacy, compiled,
+                           elbn, flm, expected=0)
+
     def test_breakdown_shows_over_limit_penalty(
         self, scorer: BuildScorer, ds: SourceDataHandler, all_effects: list[dict]
     ) -> None:

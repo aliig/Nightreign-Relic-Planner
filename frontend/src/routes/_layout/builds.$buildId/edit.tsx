@@ -309,6 +309,7 @@ function DraggableChip({
   limit,
   onLimitChange,
   limitNegative,
+  limitUnsetTitle,
 }: {
   dragId: string
   name: string
@@ -318,6 +319,7 @@ function DraggableChip({
   limit?: number
   onLimitChange?: (limit: number | undefined) => void
   limitNegative?: boolean
+  limitUnsetTitle?: string
 }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: dragId,
@@ -345,6 +347,7 @@ function DraggableChip({
           color={color}
           revealClass="group-hover/chip:opacity-40"
           negative={limitNegative}
+          {...(limitUnsetTitle ? { unsetTitle: limitUnsetTitle } : {})}
         />
       )}
       <button
@@ -896,8 +899,10 @@ function BuildEditorUI({
       const newRequired = requiredEffects.filter((id) => id !== effectId)
       const newExcluded = excludedEffects.filter((id) => id !== effectId)
 
-      // Required and Excluded chips have no limit UI — drop any stale cap so
-      // it can't silently keep applying while invisible.
+      // Excluded chips have no limit UI (and an excluded effect is never
+      // scored, so a cap is meaningless) — drop any stale cap so it can't
+      // silently keep applying while invisible. Required chips DO carry the
+      // limit UI, so their cap survives the move.
       const dropLimit = () => {
         if (effectId in effectLimits) {
           const next = { ...effectLimits }
@@ -910,7 +915,6 @@ function BuildEditorUI({
         onGroupsChange(newGroups)
         onRequiredEffectsChange([...newRequired, effectId])
         onExcludedEffectsChange(newExcluded)
-        dropLimit()
       } else if (targetZone === "zone:excluded") {
         onGroupsChange(newGroups)
         onRequiredEffectsChange(newRequired)
@@ -950,6 +954,9 @@ function BuildEditorUI({
       const newRequired = requiredFamilies.filter((n) => n !== familyName)
       const newExcluded = excludedFamilies.filter((n) => n !== familyName)
 
+      // Excluded families are never scored, so a cap there is meaningless —
+      // drop it rather than let it apply invisibly. Required family chips keep
+      // their cap (they carry the limit UI).
       const dropLimit = () => {
         if (familyName in familyLimits) {
           const next = { ...familyLimits }
@@ -973,7 +980,6 @@ function BuildEditorUI({
         onGroupsChange(newGroups)
         onRequiredFamiliesChange([...newRequired, familyName])
         onExcludedFamiliesChange(newExcluded)
-        dropLimit()
         dropFloor()
       } else if (targetZone === "zone:excluded") {
         onGroupsChange(newGroups)
@@ -1356,7 +1362,7 @@ function BuildEditorUI({
               <div className="flex items-start gap-2">
                 <span
                   className="mt-2 w-14 text-xs text-center text-muted-foreground/70 bg-transparent border border-border/40 rounded px-1 py-0.5 shrink-0 select-none cursor-default"
-                  title="Required effects always score a fixed +100 per copy"
+                  title="Required effects score a fixed +100 per copy — set a ≤N cap on a chip to stop extra copies from scoring"
                 >
                   {REQUIRED_WEIGHT}
                 </span>
@@ -1388,6 +1394,14 @@ function BuildEditorUI({
                               requiredFamilies.filter((n) => n !== familyName),
                             )
                           }
+                          limit={familyLimits[familyName]}
+                          onLimitChange={(newLimit) => {
+                            const next = { ...familyLimits }
+                            if (newLimit === undefined) delete next[familyName]
+                            else next[familyName] = newLimit
+                            onFamilyLimitsChange(next)
+                          }}
+                          limitUnsetTitle="Click to cap how many slots score this family — one member is still guaranteed; cycles 1 → 2 → 3 → off"
                         />
                       ))}
                       {requiredEffects.map((id) => {
@@ -1411,6 +1425,18 @@ function BuildEditorUI({
                                 requiredEffects.filter((x) => x !== id),
                               )
                             }
+                            // Required weight is a fixed +100, never negative,
+                            // so the cap is always the score-cap fork: the
+                            // requirement still guarantees one copy, the cap
+                            // just stops extra copies from earning more.
+                            limit={effectLimits[id]}
+                            onLimitChange={(newLimit) => {
+                              const next = { ...effectLimits }
+                              if (newLimit === undefined) delete next[id]
+                              else next[id] = newLimit
+                              onEffectLimitsChange(next)
+                            }}
+                            limitUnsetTitle="Click to cap how many copies score — one is still guaranteed; cycles 1 → 2 → 3 → off"
                           />
                         )
                       })}

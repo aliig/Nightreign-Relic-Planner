@@ -255,6 +255,24 @@ describe("Required row", () => {
     expect(screen.getAllByText("Vigor")).toHaveLength(1)
     expect(screen.getAllByText("Poise (group)")).toHaveLength(1)
   })
+
+  it("lets a required effect carry a ≤N cap", () => {
+    // No families: the browser's family rows are the only other limit toggles,
+    // so the single "#" on screen must be the required chip's.
+    mockFamilies = []
+    mockEffects = [{ id: 2, name: "Vigor" }]
+    mockBuild = { ...MOCK_BUILD, required_effects: [2] }
+    renderEditor()
+
+    fireEvent.click(screen.getByText("#"))
+    expect(screen.getByText("≤1")).toBeInTheDocument()
+    // The chip stays in the Required row — capping is not a zone change.
+    expect(screen.getAllByText("Vigor")).toHaveLength(1)
+    fireEvent.click(screen.getByText("≤1"))
+    fireEvent.click(screen.getByText("≤2"))
+    fireEvent.click(screen.getByText("≤3"))
+    expect(screen.getByText("#")).toBeInTheDocument()
+  })
 })
 
 describe("Effect Browser – family limit toggle", () => {
