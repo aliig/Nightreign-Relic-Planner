@@ -11,26 +11,45 @@ Binary facts decoded from a real save (see ``vessel.py`` for the read parser):
   Preset record = 80 bytes:
     +0   u8    header (0x01 = active record)
     +1   u16   hero_type   (1-based: Wylder=1 .. Undertaker=10)
-    +3   u8    counter     (global display ordinal; physically-LAST record == 0)
+    +3   u8    counter     (recency rank: 0 == NEWEST, higher == older)
     +4   36B   name        (UTF-16-LE, up to 18 chars, NUL right-padded)
     +40  4B    padding
     +44  u32   vessel_id
     +48  6xu32 relic ga_handles (0 = empty slot)
     +72  u64   timestamp   (Windows FILETIME: 100ns ticks since 1601-01-01 UTC)
 
+  ``counter`` is a recency rank over the ACTIVE records only (a dense permutation
+  of 0..N-1, 0 == newest).  It is NOT tied to physical position: reusing a
+  mid-array hole puts the newest record (counter 0) in the middle of the array.
+
   Section 3 is a FIXED-SIZE array of MAX_PRESETS (100) 80-byte slots. Active
-  records (header 0x01) fill the front; the remaining slots are empty (header
-  0x00, vessel_id 0xFFFFFFFF, else zero). The array never grows or shrinks, so
-  every write op below is length-preserving WITHOUT moving any downstream bytes:
-    * add:    write the new record into the first empty slot in place, and bump
-      every existing record's display counter by 1 (newest == counter 0). This is
-      byte-for-byte what the game does (verified against a real 95->96 in-game add).
-    * delete: compact the active prefix up one slot and zero the freed slot.
+  records (header 0x01) are NOT necessarily contiguous — a delete leaves a hole.
+  The array never grows or shrinks, so every write op below is length-preserving
+  WITHOUT moving any downstream bytes:
+    * add:    write the new record into the first non-active slot in place (a
+      tombstoned hole is reused before the untouched tail), and bump every
+      existing record's counter by 1 (the new record is newest, counter 0).
+    * delete: tombstone the record IN PLACE (header -> 0x00, hero_type -> 0,
+      vessel_id -> 0xFFFFFFFF, relics + timestamp -> 0; name and counter bytes
+      are left stale), and decrement the counter of every record OLDER than it
+      (counter > the deleted record's).  Nothing is compacted.
     * rename/overwrite: rewrite a record's 80 bytes in place.
+  Both are byte-for-byte what the game does, decoded from a real save pair
+  (NR0000_pre.sl2 -> NR0000_post.sl2: two in-game deletes + one in-game add;
+  see nrplanner/tests/test_vessel_game_parity.py, which replays it).
   An earlier belief that add had to grow the region (shifting downstream sections
   + a mid-blob reclaim) was a misread of the first empty slot's 0xFFFFFFFF marker
   as a section separator; that shift produced "Save data is corrupted" in-game.
   The region is pre-allocated — never grow it.
+
+  A hero's ``cur_preset_idx`` (Section-1 block +1) is an index into the PHYSICAL
+  100-slot array, NOT a position among the active records.  Proof from the save
+  pair: heroes carry indices 62/76/89 while only 53 records are active, and the
+  two in-game deletes left every other hero's pointer untouched.  This is why
+  deletes must never compact — moving a record to another physical slot silently
+  repoints whichever heroes had presets after it equipped (the reported
+  "equipped loadouts shuffled after export" bug).  Dangling pointers (into an
+  empty or tombstoned slot) are normal and the game tolerates them.
 
 Equipped vessels (Sections 1-2) are reset purely in place (zeroing relic fields).
 """
@@ -261,20 +280,37 @@ def _slot_headers(blob, section3_start: int) -> list[int]:
             for i in range(MAX_PRESETS)]
 
 
-def _set_cur_preset_idx(blob, region_start: int, hero_type: int, idx: int) -> bool:
-    """Point a hero's cur_preset_idx (Section-1 block +1) at preset index ``idx``.
+def _set_cur_preset_idx(blob, region_start: int, hero_type: int, slot: int) -> bool:
+    """Point a hero's cur_preset_idx (Section-1 block +1) at PHYSICAL slot ``slot``.
 
     Scans the 10 fixed hero blocks for the one whose first byte == hero_type.
     Returns True if set. Mirrors what the game does when you save a new loadout:
-    the recipient hero's currently-equipped preset becomes the new one.
+    the recipient hero's currently-equipped preset becomes the new one (verified
+    on the save pair — the in-game add landed in physical slot 5 and Executor's
+    pointer went 62 -> 5).
     """
     cur = region_start
     for _ in range(_HERO_SLOTS):
         if blob[cur] == hero_type:
-            blob[cur + _OFF_CUR_PRESET_IDX] = idx & 0xFF
+            blob[cur + _OFF_CUR_PRESET_IDX] = slot & 0xFF
             return True
         cur += _HERO_BLOCK
     return False
+
+
+def _tombstone_record(data, base: int) -> None:
+    """Mark the 80-byte record at ``base`` deleted, exactly as the game does.
+
+    Clears header, hero_type, vessel_id (-> the 0xFFFFFFFF delete marker), the
+    six relic handles and the timestamp; the name and counter bytes are left
+    STALE on purpose — the real in-game delete leaves them untouched, and every
+    reader classifies a slot by its header byte.
+    """
+    data[base + _OFF_HEADER] = 0x00
+    struct.pack_into("<H", data, base + _OFF_HERO, 0)
+    struct.pack_into("<I", data, base + _OFF_VESSEL, _EMPTY_VESSEL_ID)
+    data[base + _OFF_RELICS:base + _OFF_RELICS + _N_RELICS * 4] = b"\x00" * (_N_RELICS * 4)
+    struct.pack_into("<Q", data, base + _OFF_TIMESTAMP, 0)
 
 
 # ---------------------------------------------------------------------------
@@ -415,14 +451,16 @@ def overwrite_preset(blob, index: int, *, vessel_id: int, ga_handles,
 def add_preset(blob, *, hero_type: int, name: str, vessel_id: int, ga_handles,
                timestamp: int | None = None, update_current: bool = False
                ) -> tuple[bytes, AddPresetResult]:
-    """Add a new relic loadout preset, writing into the first empty slot IN PLACE.
+    """Add a new relic loadout preset, writing into the first free slot IN PLACE.
 
-    Section 3 is a fixed-size array of MAX_PRESETS (100) 80-byte slots: active
-    records (header 0x01) fill the front, empty slots (header 0x00) follow. Adding
-    a loadout means writing the 80-byte record into the first empty slot and
-    bumping every existing record's display counter by 1 (the new record is the
-    newest, counter 0). Nothing moves and the blob length is unchanged — this is
-    byte-for-byte what the game does (verified against a real in-game 95->96 add).
+    Section 3 is a fixed-size array of MAX_PRESETS (100) 80-byte slots. Adding a
+    loadout means writing the 80-byte record into the first slot whose header is
+    not 0x01 — a tombstoned hole left by an earlier delete is reused before the
+    untouched tail — and bumping every existing record's counter by 1 (the new
+    record is the newest, counter 0). Nothing moves and the blob length is
+    unchanged — this is byte-for-byte what the game does (verified against a real
+    in-game 95->96 add, and again on the save pair, where the game's own add
+    landed in the hole its delete had just made).
 
     By default the hero's currently-equipped preset (cur_preset_idx) is left
     alone — adding a loadout should not change what's equipped. Pass
@@ -461,12 +499,11 @@ def add_preset(blob, *, hero_type: int, name: str, vessel_id: int, ga_handles,
                            timestamp=timestamp)
     data[ins_off:ins_off + PRESET_SIZE] = record
 
-    # The new preset's global index = active records physically before it (== n
-    # in the contiguous case). The game repoints the recipient hero here.
-    new_index = sum(1 for i in active if i < insertion)
+    # cur_preset_idx is a PHYSICAL slot index, so the hero is repointed at the
+    # slot we just wrote — never at the record's position among the actives.
     made_current = False
     if update_current:
-        made_current = _set_cur_preset_idx(data, region_start, hero_type, new_index)
+        made_current = _set_cur_preset_idx(data, region_start, hero_type, insertion)
 
     out = bytes(data)
     _assert_len(out, blob, "add_preset")
@@ -476,41 +513,39 @@ def add_preset(blob, *, hero_type: int, name: str, vessel_id: int, ga_handles,
 
 
 def delete_preset(blob, index: int) -> tuple[bytes, DeletePresetResult]:
-    """Delete the preset at ``index`` (active-in-physical-order) by compacting the
-    array in place.
+    """Delete the preset at ``index`` (active-in-physical-order) by tombstoning it
+    IN PLACE, exactly as the game does.
 
-    Shifts every slot after ``index`` up by one 80-byte record within the fixed
-    100-slot array and zeros the freed trailing slot, then re-stamps the survivors'
-    counters. This touches ONLY the preset array region ``[section3_start,
-    chain_end)`` — nothing after it moves. (Shifting the downstream sections
-    corrupts the save: the game relies on their byte positions; an earlier version
-    that padded bytes before the trailer produced "Save data is corrupted"
-    in-game.) A pre-existing game-made tombstone outside the shifted range is left
-    as-is; that's harmless because the game (and our reader) classify slots by the
-    header byte, not by position.
+    The record's own slot is cleared (see ``_tombstone_record``) and every record
+    OLDER than it (counter > its counter) has its counter decremented, keeping the
+    active counters a dense 0..M-1 recency ranking. Every surviving record stays in
+    its own physical slot.
+
+    NEVER compact: a hero's cur_preset_idx is a physical slot index, so shifting
+    survivors up a slot silently repoints whichever heroes had a later preset
+    equipped — that is what made equipped loadouts show another character's preset
+    after an export. Only the preset array region is touched; nothing outside it
+    moves (shifting downstream sections corrupts the save: an earlier version that
+    padded bytes before the trailer produced "Save data is corrupted" in-game).
     """
     data = bytearray(blob)
     cursor = _locate_region(data)
     _, section3_start = _walk_vessels(data, cursor)
-    presets, chain_end = _walk_presets(data, section3_start)
+    presets, _ = _walk_presets(data, section3_start)
     if not 0 <= index < len(presets):
         raise PresetIndexError(f"preset index {index} out of range (0..{len(presets)-1})")
 
     target = presets[index]
     n = len(presets)
 
-    # In-place compaction within the chain only.
-    after = bytes(data[target.base + PRESET_SIZE:chain_end])
-    data[target.base:target.base + len(after)] = after
-    data[chain_end - PRESET_SIZE:chain_end] = b"\x00" * PRESET_SIZE
+    _tombstone_record(data, target.base)
 
-    # Re-stamp counters so the chain stays a valid 0..M-1 permutation with the
-    # physically-last record == 0 (the terminator).
-    survivors, _ = _walk_presets(data, section3_start)
-    m = len(survivors)
-    for i, s in enumerate(survivors):
-        data[s.base + _OFF_COUNTER] = (m - 1 - i) & 0xFF
+    # Close the rank gap: everything older than the deleted record moves up one.
+    for p in presets:
+        if p.base != target.base and p.counter > target.counter:
+            data[p.base + _OFF_COUNTER] = (p.counter - 1) & 0xFF
 
     out = bytes(data)
     _assert_len(out, blob, "delete_preset")
-    return out, DeletePresetResult(name=target.name, presets_before=n, presets_after=m)
+    return out, DeletePresetResult(name=target.name, presets_before=n,
+                                   presets_after=n - 1)

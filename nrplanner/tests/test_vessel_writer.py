@@ -44,12 +44,16 @@ def blob(raw_sl2: bytes) -> bytes:
 # --- helpers ---------------------------------------------------------------
 
 def _counters_valid(presets) -> bool:
-    """A well-formed chain: counters are a permutation of 0..N-1 and the
-    physically-last record carries counter 0 (the parser terminator)."""
+    """A well-formed array: the active records' counters are a dense recency
+    ranking — a permutation of 0..N-1, 0 == newest.
+
+    The rank is deliberately NOT tied to physical position: a record written into
+    a reused hole is the newest (counter 0) while sitting mid-array, which is what
+    a real game save looks like after delete-then-add.
+    """
     if not presets:
         return True
-    counters = [p.counter for p in presets]
-    return sorted(counters) == list(range(len(presets))) and presets[-1].counter == 0
+    return sorted(p.counter for p in presets) == list(range(len(presets)))
 
 
 def _checksum_valid(b: bytes) -> bool:
@@ -130,17 +134,18 @@ HANDLES = [0xC0800010, 0xC0800011, 0xC0800012, 0xC0800013, 0xC0800014, 0xC080001
 
 
 def test_add_into_freed_slot_is_in_place(blob):
-    """Delete frees an 80-byte zero slot; add writes into it, shifting nothing.
+    """Delete tombstones a slot; add reuses that hole, shifting nothing.
 
     The whole delete+add round-trip must touch only the chain region — bytes
     after the original chain_end must be byte-identical (shifting them corrupts
     the save in-game)."""
     _, orig_end = _chain_bounds(blob)
-    freed, _ = vw.delete_preset(blob, 5)           # frees a zero slot at end of chain
+    freed, _ = vw.delete_preset(blob, 5)           # tombstones physical slot 5
     out, res = vw.add_preset(freed, hero_type=1, name="NEW LOADOUT",
                              vessel_id=1002, ga_handles=HANDLES)
     assert len(out) == len(blob)
     assert res.presets_after == 59
+    assert res.slot_index == 5                     # the hole is reused, not the tail
     # nothing past the original chain end moved across the whole round-trip
     assert out[orig_end:] == blob[orig_end:]
     after = vw.parse_presets(out)
@@ -148,7 +153,8 @@ def test_add_into_freed_slot_is_in_place(blob):
     assert _counters_valid(after)
     new = [p for p in after if p.name == "NEW LOADOUT"]
     assert len(new) == 1
-    assert new[0].counter == 0  # newest preset is the terminator (counter 0)
+    assert new[0].counter == 0   # newest, even though it sits mid-array
+    assert new[0].index == 5     # reused hole == same position among the actives
     assert new[0].vessel_id == 1002 and new[0].relics == HANDLES
 
 
@@ -181,31 +187,46 @@ def test_add_into_empty_slot_no_delete(blob):
         assert b.counter == a.counter + 1
 
 
+def _cur_idx(b, hero):
+    """A hero's cur_preset_idx byte (Section-1 block +1)."""
+    cur = vw._locate_region(b)
+    for _ in range(vw._HERO_SLOTS):
+        if b[cur] == hero:
+            return b[cur + vw._OFF_CUR_PRESET_IDX]
+        cur += vw._HERO_BLOCK
+    return None
+
+
 def test_add_update_current_repoints_hero(blob):
     """update_current=True points the recipient hero's cur_preset_idx at the new
     preset (matches the game); default leaves it untouched."""
-    region = vw._locate_region(blob)
-
-    def cur_idx(b, hero):
-        cur = region
-        for _ in range(vw._HERO_SLOTS):
-            if b[cur] == hero:
-                return b[cur + 1]
-            cur += vw._HERO_BLOCK
-        return None
-
     n = len(vw.parse_presets(blob))
-    before_idx = cur_idx(blob, 1)
+    before_idx = _cur_idx(blob, 1)
 
     out_default, res_d = vw.add_preset(blob, hero_type=1, name="a",
                                        vessel_id=1002, ga_handles=HANDLES)
     assert res_d.made_current is False
-    assert cur_idx(out_default, 1) == before_idx          # untouched by default
+    assert _cur_idx(out_default, 1) == before_idx          # untouched by default
 
     out_cur, res_c = vw.add_preset(blob, hero_type=1, name="b", vessel_id=1002,
                                    ga_handles=HANDLES, update_current=True)
     assert res_c.made_current is True
-    assert cur_idx(out_cur, 1) == n                        # new preset's index
+    assert _cur_idx(out_cur, 1) == n                        # first free slot
+
+
+def test_add_update_current_uses_physical_slot(blob):
+    """cur_preset_idx is a PHYSICAL slot index, so an add that reuses a mid-array
+    hole must repoint the hero at that hole — not at the new record's position
+    among the active records (they differ once a hole exists later in the array)."""
+    holed, _ = vw.delete_preset(blob, 40)      # tombstone physical slot 40
+    out, res = vw.add_preset(holed, hero_type=1, name="hole", vessel_id=1002,
+                             ga_handles=HANDLES, update_current=True)
+    assert res.slot_index == 40
+    assert _cur_idx(out, 1) == 40
+    # the pointed-at physical slot really is the new record
+    _, s3 = vw._walk_vessels(out, vw._locate_region(out))
+    landed = [p for p in vw.parse_presets(out) if p.base == s3 + 40 * vw.PRESET_SIZE]
+    assert len(landed) == 1 and landed[0].name == "hole"
 
 
 def test_add_refuses_only_when_full(blob):
@@ -219,6 +240,55 @@ def test_add_refuses_only_when_full(blob):
     with pytest.raises(vw.PresetCapacityError):
         vw.add_preset(b, hero_type=1, name="overflow", vessel_id=1002,
                       ga_handles=HANDLES)
+
+
+def test_delete_leaves_survivors_in_their_physical_slots(blob):
+    """REGRESSION: delete must tombstone in place, never compact.
+
+    cur_preset_idx is a physical slot index, so moving survivors up one slot
+    repoints every hero whose equipped preset sat after the deleted one — that is
+    the "equipped loadout shows another character's preset" bug. Every survivor
+    must keep its exact 80 bytes at its exact offset, and every hero pointer must
+    be untouched.
+    """
+    before = vw.parse_presets(blob)
+    s3, _ = _chain_bounds(blob)
+    out, _ = vw.delete_preset(blob, 10)
+    gone = before[10]
+
+    assert out[:s3] == blob[:s3]                    # every hero pointer untouched
+    for p in before:
+        if p.base == gone.base:
+            continue
+        # identity fields stay put byte-for-byte; only the counter may shift rank
+        assert out[p.base] == 0x01
+        assert out[p.base + vw._OFF_NAME:p.base + vw._OFF_TIMESTAMP + 8] == \
+            blob[p.base + vw._OFF_NAME:p.base + vw._OFF_TIMESTAMP + 8]
+
+    # the deleted slot carries the game's tombstone marks, name/counter left stale
+    assert out[gone.base + vw._OFF_HEADER] == 0x00
+    assert struct.unpack_from("<H", out, gone.base + vw._OFF_HERO)[0] == 0
+    assert struct.unpack_from("<I", out, gone.base + vw._OFF_VESSEL)[0] == 0xFFFFFFFF
+    assert struct.unpack_from("<6I", out, gone.base + vw._OFF_RELICS) == (0,) * 6
+    assert struct.unpack_from("<Q", out, gone.base + vw._OFF_TIMESTAMP)[0] == 0
+    assert out[gone.base + vw._OFF_COUNTER] == blob[gone.base + vw._OFF_COUNTER]
+    assert out[gone.base + vw._OFF_NAME:gone.base + vw._OFF_NAME + vw._NAME_BYTES] == \
+        blob[gone.base + vw._OFF_NAME:gone.base + vw._OFF_NAME + vw._NAME_BYTES]
+
+
+def test_delete_closes_the_counter_rank_gap(blob):
+    """Only records OLDER than the deleted one (counter > its counter) shift rank;
+    newer records keep theirs. Matches the game byte-for-byte."""
+    before = vw.parse_presets(blob)
+    gone = before[10]
+    out, _ = vw.delete_preset(blob, 10)
+    after = {p.base: p for p in vw.parse_presets(out)}
+    assert _counters_valid(list(after.values()))
+    for p in before:
+        if p.base == gone.base:
+            continue
+        expected = p.counter - 1 if p.counter > gone.counter else p.counter
+        assert after[p.base].counter == expected
 
 
 def test_delete_preset(blob):
@@ -242,26 +312,38 @@ def test_delete_preset(blob):
         (p.name, p.vessel_id, tuple(p.relics)) for p in before].count(sig) - 1
 
 
-def test_delete_last_preset_keeps_terminator(blob):
+def test_delete_last_preset_keeps_ranking_dense(blob):
     before = vw.parse_presets(blob)
     out, _ = vw.delete_preset(blob, len(before) - 1)
     after = vw.parse_presets(out)
     assert len(after) == len(before) - 1
-    assert _counters_valid(after)  # new physically-last must carry counter 0
+    assert _counters_valid(after)
 
 
 # --- non-contiguous array: in-game delete leaves a mid-array tombstone ------
 
 def _tombstone_slot(blob, phys_slot: int) -> bytes:
-    """Replicate an in-game delete on the real fixture: zero the record at physical
-    slot ``phys_slot`` and set its vessel_id to the 0xFFFFFFFF delete marker,
-    WITHOUT compacting (the game leaves a header-0 hole between active records)."""
+    """Replicate an in-game delete on the real fixture, WITHOUT going through
+    delete_preset (so reader tests keep an independent oracle).
+
+    Clears header/hero/vessel_id/relics/timestamp at ``phys_slot``, leaves the
+    name and counter bytes stale, and closes the recency-rank gap — byte-for-byte
+    what the game does (decoded from NR0000_pre -> NR0000_post). No compacting:
+    the game leaves a header-0 hole between active records.
+    """
     region = vw._locate_region(blob)
     _, s3 = vw._walk_vessels(blob, region)
     data = bytearray(blob)
     base = s3 + phys_slot * vw.PRESET_SIZE
-    data[base:base + vw.PRESET_SIZE] = b"\x00" * vw.PRESET_SIZE
+    dead_counter = data[base + vw._OFF_COUNTER]
+    data[base + vw._OFF_HEADER] = 0x00
+    struct.pack_into("<H", data, base + vw._OFF_HERO, 0)
     struct.pack_into("<I", data, base + vw._OFF_VESSEL, 0xFFFFFFFF)
+    data[base + vw._OFF_RELICS:base + vw._OFF_RELICS + 24] = b"\x00" * 24
+    struct.pack_into("<Q", data, base + vw._OFF_TIMESTAMP, 0)
+    for p in vw.parse_presets(data):
+        if p.counter > dead_counter:
+            data[p.base + vw._OFF_COUNTER] = p.counter - 1
     return bytes(data)
 
 
@@ -305,7 +387,7 @@ def test_delete_after_tombstone_stays_wellformed(blob):
     assert res.presets_after == n - 1
     assert out[:s3] == blob[:s3]
     assert out[array_end:] == blob[array_end:]
-    assert _counters_valid(vw.parse_presets(out))   # re-stamp closes the counter gap
+    assert _counters_valid(vw.parse_presets(out))   # rank stays dense across holes
 
 
 def test_reset_all_clears_array_with_tombstone(blob):
