@@ -1,4 +1,4 @@
-import { AlertTriangle, Download, Trash2 } from "lucide-react"
+import { AlertTriangle, Trash2 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -44,39 +44,35 @@ function summaryLine(row: SlotSummary): string {
 }
 
 /**
- * Interception dialog shown when a new save upload would discard staged edits
- * that were never applied in-game (the new file doesn't contain them). The
- * user either exports the OLD save first (so the work isn't lost), knowingly
- * discards everything, or cancels the upload.
+ * Confirmation shown when a new save upload would discard staged edits. Edits
+ * are keyed to the save they were made against, so a replacement file can't
+ * inherit them — the only choices are to knowingly discard, or cancel and
+ * export from the Changes panel first.
  */
 export function UploadGateDialog({
   open,
   summaries,
   hasMints,
-  busy,
-  onExportFirst,
   onDiscard,
   onCancel,
 }: {
   open: boolean
   summaries: SlotSummary[]
   hasMints: boolean
-  busy: boolean
-  onExportFirst: () => void
   onDiscard: () => void
   onCancel: () => void
 }) {
   return (
-    <Dialog open={open} onOpenChange={(v) => !v && !busy && onCancel()}>
+    <Dialog open={open} onOpenChange={(v) => !v && onCancel()}>
       <DialogContent>
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <AlertTriangle className="h-5 w-5 text-amber-500" />
-            Unsaved staged changes
+            Uploading will discard your staged changes
           </DialogTitle>
           <DialogDescription>
-            You have staged edits that were never applied to the save you're
-            uploading. Uploading it discards them.
+            These edits belong to the save that's currently loaded and can't
+            carry over to a different file. Are you sure?
           </DialogDescription>
         </DialogHeader>
 
@@ -89,38 +85,23 @@ export function UploadGateDialog({
           ))}
         </ul>
 
-        {hasMints && (
-          <p className="text-xs text-muted-foreground">
-            Purchased relics can't carry over — their rolls belong to the save
-            they were purchased from. You can re-run Relic Rites against the new
-            save after uploading.
-          </p>
-        )}
+        <p className="text-xs text-muted-foreground">
+          To keep them, cancel and export your changes from the Changes panel
+          first.
+          {hasMints &&
+            " Purchased relics can't carry over either way — their rolls belong to the save they were purchased from — but you can re-run Relic Rites against the new save after uploading."}
+        </p>
 
         <DialogFooter className="flex-col gap-2 sm:flex-col">
           <Button
-            onClick={onExportFirst}
-            disabled={busy}
-            className="w-full gap-1.5"
-          >
-            <Download className="h-4 w-4" />
-            {busy ? "Exporting…" : "Export my staged changes first"}
-          </Button>
-          <Button
             variant="destructive"
             onClick={onDiscard}
-            disabled={busy}
             className="w-full gap-1.5"
           >
             <Trash2 className="h-4 w-4" />
-            Discard them and upload
+            Discard changes and upload
           </Button>
-          <Button
-            variant="ghost"
-            onClick={onCancel}
-            disabled={busy}
-            className="w-full"
-          >
+          <Button variant="ghost" onClick={onCancel} className="w-full">
             Cancel upload
           </Button>
         </DialogFooter>

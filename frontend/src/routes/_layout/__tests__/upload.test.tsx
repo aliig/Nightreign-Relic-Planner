@@ -255,7 +255,7 @@ describe("UploadPage — success state with uploadResult", () => {
   })
 })
 
-describe("UploadPage — divergence gate", () => {
+describe("UploadPage — discard confirmation", () => {
   // Start each case from a clean store and leave it clean for other tests
   // (the store is module-level state shared across tests in this file).
   beforeEach(() => clearAll())
@@ -270,14 +270,12 @@ describe("UploadPage — divergence gate", () => {
     })
     expect(mockMutate).toHaveBeenCalled()
     expect(
-      screen.queryByText(/unsaved staged changes/i),
+      screen.queryByText(/will discard your staged changes/i),
     ).not.toBeInTheDocument()
   })
 
-  it("gates instead of silently clearing when staged edits would be lost", async () => {
-    // Seed an edit against the "previous" save (slot 0). In this test env the
-    // inspect call fails (SavesService.inspectSave is unmocked), which the
-    // gate treats as divergent — the safe direction.
+  it("warns instead of silently clearing when staged edits would be lost", async () => {
+    // Seed an edit against the currently loaded save (slot 0).
     toggleSell(0, 123, { name: "Old relic" })
     expect(Object.keys(readAll())).toHaveLength(1)
 
@@ -290,20 +288,20 @@ describe("UploadPage — divergence gate", () => {
 
     // The gate intercepts: nothing cleared, no upload started.
     expect(
-      await screen.findByText(/unsaved staged changes/i),
+      await screen.findByText(/will discard your staged changes/i),
     ).toBeInTheDocument()
     expect(Object.keys(readAll())).toHaveLength(1)
     expect(mockMutate).not.toHaveBeenCalled()
 
-    // Explicitly discarding proceeds: diff cleared, upload starts.
+    // Confirming proceeds: diff cleared, upload starts.
     fireEvent.click(
-      screen.getByRole("button", { name: /discard them and upload/i }),
+      screen.getByRole("button", { name: /discard changes and upload/i }),
     )
     expect(Object.keys(readAll())).toHaveLength(0)
     expect(mockMutate).toHaveBeenCalled()
   })
 
-  it("cancelling the gate keeps the staged edits and skips the upload", async () => {
+  it("cancelling keeps the staged edits and skips the upload", async () => {
     toggleSell(0, 123, { name: "Old relic" })
 
     renderUpload()
@@ -314,7 +312,7 @@ describe("UploadPage — divergence gate", () => {
     })
 
     expect(
-      await screen.findByText(/unsaved staged changes/i),
+      await screen.findByText(/will discard your staged changes/i),
     ).toBeInTheDocument()
     fireEvent.click(screen.getByRole("button", { name: /cancel upload/i }))
     expect(Object.keys(readAll())).toHaveLength(1)

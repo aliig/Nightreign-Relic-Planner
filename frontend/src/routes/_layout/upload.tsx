@@ -26,7 +26,6 @@ import {
   rawScoreTooltip,
   relicSummary,
 } from "@/lib/buildChange"
-import { exportPendingChanges, PendingExportError } from "@/lib/exportPending"
 import { startUpload, useOptimizeJob } from "@/lib/optimizeJobs"
 import { computeOverallPct, optimizingLabel } from "@/lib/optimizeProgress"
 import {
@@ -35,13 +34,8 @@ import {
   type SlotSummary,
   summarizePending,
 } from "@/lib/pendingChanges"
-import { getOriginalBackupFile, storeOriginalBackup } from "@/lib/saveBackup"
-import { getSaveFile, rememberSaveFile } from "@/lib/saveFile"
-import {
-  classifyPending,
-  fetchCurrentInventories,
-  inspectNewSave,
-} from "@/lib/uploadGate"
+import { storeOriginalBackup } from "@/lib/saveBackup"
+import { rememberSaveFile } from "@/lib/saveFile"
 import { formatRelativeTime, handleError } from "@/utils"
 
 export const Route = createFileRoute("/_layout/upload")({
@@ -197,14 +191,14 @@ function UploadPage() {
     onError: handleError.bind(showErrorToast),
   })
 
-  // Divergence gate: a pending upload paused on un-exported staged changes
-  // the new file does not contain (see lib/uploadGate).
+  // Confirmation gate: a pending upload paused on staged changes it would
+  // discard. Staged edits are keyed by slot against the currently loaded save,
+  // so a replacement file can never inherit them.
   const [gate, setGate] = useState<{
     file: File
     summaries: SlotSummary[]
     hasMints: boolean
   } | null>(null)
-  const [gateBusy, setGateBusy] = useState(false)
 
   /** The unconditional upload path: replace the working file, drop the (now
    *  resolved) staged diff, back up the original, and start the upload. */
@@ -230,79 +224,21 @@ function UploadPage() {
   }
 
   /**
-   * Route the picked file through the divergence gate. With staged edits
-   * present, the new file is inspected (parse-only) first: edits it already
-   * contains clear silently (the user exported + played — the diff did its
-   * job); edits it lacks pause the upload behind an export-or-discard dialog.
-   * Any inspection failure gates too — never silently wipe staged work.
+   * Route the picked file through the confirmation gate: with staged edits
+   * present, warn before the upload wipes them; otherwise upload straight away.
    */
-  async function routeThroughGate(file: File) {
+  function routeThroughGate(file: File) {
     const pending = readAll()
-    const stagedSlots = Object.keys(pending).map(Number)
-    if (stagedSlots.length === 0) {
+    if (Object.keys(pending).length === 0) {
       proceedUpload(file)
       return
     }
     const summaries = summarizePending(pending)
-    try {
-      const [oldBySlot, newBySlot] = await Promise.all([
-        fetchCurrentInventories(stagedSlots),
-        inspectNewSave(file),
-      ])
-      const { committed, divergent } = classifyPending(
-        pending,
-        oldBySlot,
-        newBySlot,
-      )
-      if (divergent.length === 0) {
-        showSuccessToast(
-          `Detected your exported changes in this save — staged edits for slot ${committed.join(", ")} marked as applied.`,
-        )
-        proceedUpload(file)
-        return
-      }
-      setGate({
-        file,
-        summaries: summaries.filter((r) => divergent.includes(r.slot)),
-        hasMints: summaries.some(
-          (r) => divergent.includes(r.slot) && r.mints > 0,
-        ),
-      })
-    } catch {
-      // Couldn't inspect (offline, malformed, PS4 quirk…) — assume divergent.
-      setGate({
-        file,
-        summaries,
-        hasMints: summaries.some((r) => r.mints > 0),
-      })
-    }
-  }
-
-  /** Export the staged changes onto the PREVIOUS save before it's replaced. */
-  async function gateExportFirst() {
-    const oldFile = getSaveFile() ?? (await getOriginalBackupFile())
-    if (!oldFile) {
-      showErrorToast(
-        "Couldn't find the previous save file to export — use the Changes panel to re-select it, then try again.",
-      )
-      return
-    }
-    setGateBusy(true)
-    try {
-      const r = await exportPendingChanges(oldFile, readAll())
-      setGate(null)
-      showSuccessToast(
-        `Exported ${r.filename} with your staged changes. Import it in-game, then upload your save again when you're done playing.`,
-      )
-    } catch (err) {
-      showErrorToast(
-        err instanceof PendingExportError || err instanceof Error
-          ? err.message
-          : "Export failed",
-      )
-    } finally {
-      setGateBusy(false)
-    }
+    setGate({
+      file,
+      summaries,
+      hasMints: summaries.some((r) => r.mints > 0),
+    })
   }
 
   function handleFile(file: File) {
@@ -311,7 +247,7 @@ function UploadPage() {
       showErrorToast("Please upload a .sl2 (PC) or memory.dat (PS4) file.")
       return
     }
-    void routeThroughGate(file)
+    routeThroughGate(file)
   }
 
   function onDrop(e: React.DragEvent) {
@@ -345,8 +281,6 @@ function UploadPage() {
         open={gate !== null}
         summaries={gate?.summaries ?? []}
         hasMints={gate?.hasMints ?? false}
-        busy={gateBusy}
-        onExportFirst={() => void gateExportFirst()}
         onDiscard={() => {
           const file = gate?.file
           setGate(null)
