@@ -703,24 +703,6 @@ class UploadResponse(SQLModel):
     affected_builds: list[BuildChange] = Field(default_factory=list)
 
 
-class InspectSlot(SQLModel):
-    """One character slot's relic contents, content-triples only."""
-    slot_index: int
-    name: str
-    relics: list[AddRelicSpec]
-
-
-class InspectResponse(SQLModel):
-    """Parse-only view of a save file (POST /saves/inspect persists NOTHING).
-
-    Powers the upload divergence gate: the client counts content fingerprints
-    per slot to decide whether its staged edits are already reflected in the
-    save being uploaded (committed) or absent from it (divergent).
-    """
-    platform: str
-    slots: list[InspectSlot]
-
-
 # ---------------------------------------------------------------------------
 # Auth / Generic
 # ---------------------------------------------------------------------------

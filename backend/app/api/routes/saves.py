@@ -34,8 +34,6 @@ from app.core.game_data import (
 from app.models import (
     AddRelicSpec,
     Build,
-    InspectResponse,
-    InspectSlot,
     LoadoutOp,
     LoadoutsPublic,
     OptimizationSnapshot,
@@ -795,54 +793,6 @@ from nrplanner.constants import CHARACTER_NAMES
 _CHAR_NAME_TO_HERO_TYPE: dict[str, int] = {
     name: idx for idx, name in enumerate(CHARACTER_NAMES, start=1)
 }
-
-
-@router.post("/inspect", response_model=InspectResponse)
-async def inspect_save(
-    file: UploadFile,
-    ds: GameDataDep,
-) -> InspectResponse:
-    """Parse a save file and return per-slot relic contents. Writes NOTHING.
-
-    Stateless and auth-free (like the export endpoints).  The upload
-    divergence gate calls this BEFORE committing to an upload: the client
-    compares content-fingerprint counts against its staged edits to decide
-    whether they were already applied in-game (committed → clear silently)
-    or are absent from this save (divergent → warn before discarding).
-    """
-    if file.filename is None or Path(file.filename).suffix.lower() not in _ALLOWED_EXTENSIONS:
-        raise HTTPException(
-            status_code=400,
-            detail="Upload a .sl2 (PC) or memory.dat (PS4) file.",
-        )
-    file_bytes = await file.read()
-    max_bytes = settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024
-    if len(file_bytes) > max_bytes:
-        raise HTTPException(
-            status_code=413,
-            detail=f"File too large (max {settings.MAX_UPLOAD_SIZE_MB} MB).",
-        )
-    platform, _owner_steam_id, profiles = await run_in_threadpool(
-        _parse_save_to_profiles, file_bytes, file.filename, ds, get_items_json()
-    )
-    return InspectResponse(
-        platform=platform,
-        slots=[
-            InspectSlot(
-                slot_index=p.slot_index,
-                name=p.name,
-                relics=[
-                    AddRelicSpec(
-                        real_id=r.real_id,
-                        effects=[r.effect_1, r.effect_2, r.effect_3],
-                        curses=[r.curse_1, r.curse_2, r.curse_3],
-                    )
-                    for r in p.relics
-                ],
-            )
-            for p in profiles
-        ],
-    )
 
 
 @router.post("/upload/stream")
