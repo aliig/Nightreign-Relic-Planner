@@ -261,6 +261,8 @@ def relic_ref_from_owned(r: OwnedRelic) -> RelicRef:
         color=r.color,
         effects=list(r.effects),
         curses=list(r.curses),
+        tier=r.tier,
+        is_deep=r.is_deep,
     )
 
 
@@ -310,14 +312,30 @@ def _entered_refs(result: VesselResult, wanted: Counter) -> list[RelicRef]:
     return out
 
 
-def _left_refs(layout: dict, wanted: Counter) -> list[RelicRef]:
+def _left_refs(
+    layout: dict, wanted: Counter, spare: Optional[Counter] = None
+) -> list[RelicRef]:
+    """Refs for the relics that dropped out of ``layout``.
+
+    ``spare`` (when given) is the multiset of currently-owned copies NOT used by
+    the new layout — i.e. what a dropped copy could still be sitting in the save
+    as.  Consuming it per copy keeps the duplicate case honest: if the old layout
+    used two copies and only one is still owned, one ref is ``still_owned=True``
+    and the other False.  Left None when the caller passed no inventory.
+    """
     remaining = Counter(wanted)
+    unclaimed = Counter(spare) if spare is not None else None
     out: list[RelicRef] = []
     for r in layout.get("relics", []):
         fp = relic_fingerprint(r["real_id"], r["effects"], r["curses"])
         if remaining.get(fp, 0) > 0:
             remaining[fp] -= 1
-            out.append(RelicRef(**r))
+            ref = RelicRef(**r)
+            if unclaimed is not None:
+                ref.still_owned = unclaimed[fp] > 0
+                if ref.still_owned:
+                    unclaimed[fp] -= 1
+            out.append(ref)
     return out
 
 
@@ -326,18 +344,27 @@ def diff_results(
     new_results: Sequence[VesselResult],
     *,
     epsilon: int = DEFAULT_EPSILON,
+    owned: Optional[Iterable[OwnedRelic]] = None,
 ) -> BuildChange:
     """Diff a stored snapshot's layouts against a fresh optimization.
 
     Compares the single best (highest-scoring) arrangement on each side and
     returns a BuildChange with status/scores/entered/left/reliable filled.
     Callers set build_id / slot_index / cause afterwards.
+
+    ``owned`` is the inventory the new results were computed from.  Passing it
+    marks every departed relic ``still_owned`` — the difference between "you no
+    longer have this" and "your best setup stopped using it", which the layout
+    diff alone cannot tell apart and which callers must not guess at.
     """
     new_best = max(new_results, key=lambda r: r.total_score, default=None)
     old_best = (
         max(old_layouts, key=lambda layout: layout["total_score"])
         if old_layouts
         else None
+    )
+    owned_fps = (
+        Counter(fingerprint_owned(r) for r in owned) if owned is not None else None
     )
 
     # First time we've ever optimized this build+slot — there is no prior
@@ -352,12 +379,13 @@ def diff_results(
 
     best_before = old_best["total_score"]
 
-    # New inventory can no longer fill the vessel at all.
+    # New inventory can no longer fill the vessel at all — nothing is in use, so
+    # every owned copy is spare.
     if new_best is None:
         return BuildChange(
             status="degraded",
             best_before=best_before,
-            left=_left_refs(old_best, _layout_relic_fps(old_best)),
+            left=_left_refs(old_best, _layout_relic_fps(old_best), owned_fps),
         )
 
     best_after = new_best.total_score
@@ -389,6 +417,9 @@ def diff_results(
         best_after=best_after,
         delta=delta,
         entered=_entered_refs(new_best, entered_fps),
-        left=_left_refs(old_best, left_fps),
+        left=_left_refs(
+            old_best, left_fps,
+            None if owned_fps is None else owned_fps - new_fps,
+        ),
         reliable=reliable,
     )

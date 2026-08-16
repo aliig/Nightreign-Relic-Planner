@@ -319,7 +319,7 @@ function AuthOptimizeForm({ buildId }: { buildId: string }) {
           {resultsSig !== null && resultsSig !== sig && (
             <StaleStagedBanner running={isPending} />
           )}
-          <ChangeBanner change={change} />
+          <ChangeBanner change={change} effectMap={effectMap} />
           {hasRequirements &&
             results.every((r) => r.meets_requirements === false) && (
               <NoCoveringResultsBanner />
@@ -641,7 +641,7 @@ function AnonOptimizeForm({ buildId }: { buildId: string }) {
           {resultsSig !== null && resultsSig !== sig && (
             <StaleStagedBanner running={isPending} />
           )}
-          <ChangeBanner change={change} />
+          <ChangeBanner change={change} effectMap={effectMap} />
           {hasRequirements &&
             results.every((r) => r.meets_requirements === false) && (
               <NoCoveringResultsBanner />

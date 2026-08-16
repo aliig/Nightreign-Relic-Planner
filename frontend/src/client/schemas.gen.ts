@@ -2072,12 +2072,40 @@ export const RelicRefSchema = {
             },
             type: 'array',
             title: 'Curses'
+        },
+        tier: {
+            type: 'string',
+            title: 'Tier',
+            default: ''
+        },
+        is_deep: {
+            type: 'boolean',
+            title: 'Is Deep',
+            default: false
+        },
+        still_owned: {
+            anyOf: [
+                {
+                    type: 'boolean'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Still Owned'
         }
     },
     type: 'object',
     required: ['real_id'],
     title: 'RelicRef',
-    description: 'Lightweight relic identity for change display (no ga_handle — unstable).'
+    description: `Lightweight relic identity for change display (no ga_handle — unstable).
+
+\`\`tier\`\`/\`\`is_deep\`\` are display metadata so a change list can describe a
+relic the way the inventory does, without a second lookup.  \`\`still_owned\`\`
+answers the question the name alone cannot: a relic that dropped out of a
+build's best layout may or may not still be in the save, and those two are
+very different pieces of news.  It stays None where nothing checked (older
+snapshots, and the persisted layouts, which are inventory-agnostic).`
 } as const;
 
 export const RelicsPublicSchema = {

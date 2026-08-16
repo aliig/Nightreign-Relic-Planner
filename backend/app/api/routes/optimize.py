@@ -340,7 +340,9 @@ def _apply_snapshot(
         build_def, [(fingerprint_owned(r), r.ga_handle) for r in owned_relics], ds
     )
 
-    change = diff_results(snap.top_layouts if snap else None, results)
+    change = diff_results(
+        snap.top_layouts if snap else None, results, owned=owned_relics
+    )
     change.build_id = str(ctx.build_id)
     change.build_name = ctx.build_name
     change.slot_index = ctx.slot_index

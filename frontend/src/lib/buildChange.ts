@@ -11,13 +11,25 @@ import type { BuildChange, RelicRef } from "@/client"
 
 export type ChangeTone = "up" | "down" | "neutral" | "warn"
 
+/** Which of the four things that can happen to a relic this group describes. */
+export type ChangeRelicKind = "entered" | "benched" | "gone" | "pin"
+
+export interface ChangeRelicGroup {
+  kind: ChangeRelicKind
+  /** Row label, e.g. "Now uses" / "No longer in your save". */
+  label: string
+  relics: RelicRef[]
+}
+
 export interface ChangeDescription {
   tone: ChangeTone
   icon: LucideIcon
   /** Short, plain-language verdict, e.g. "23% stronger" / "rearranged, same strength". */
   headline: string
-  /** Which relics moved in/out of the best setup — capped to 2 names + an "extra" count. */
-  relics?: { verb: string; names: string[]; extra: number }
+  /** Which relics moved, split by what actually happened to them. */
+  groups: ChangeRelicGroup[]
+  /** One-line clarification of the verdict, when it would otherwise mislead. */
+  note?: string
   /** Raw optimizer score (internal unit) — for a hover tooltip only, never shown inline. */
   rawScore?: { before: number; after: number; delta: number }
   /** False when the delta came from a truncated (non-exhaustive) search. */
@@ -60,25 +72,44 @@ function percentLabel(
   return `${Math.abs(pct)}%`
 }
 
-function relicDetail(
-  verb: string,
+/** Append a group, skipping it when no relic falls into it. */
+function addGroup(
+  groups: ChangeRelicGroup[],
+  kind: ChangeRelicKind,
+  label: string,
   refs: RelicRef[] | undefined,
-): ChangeDescription["relics"] {
-  const names = (refs ?? [])
-    .map((r) => r.name)
-    .filter((n): n is string => !!n && n.length > 0)
-  if (names.length === 0) return undefined
-  return {
-    verb,
-    names: names.slice(0, 2),
-    extra: Math.max(0, names.length - 2),
+): void {
+  const relics = refs ?? []
+  if (relics.length > 0) groups.push({ kind, label, relics })
+}
+
+/**
+ * Split the relics that left the best layout by whether they left the *save*.
+ *
+ * `change.left` is a diff of two arrangements, not of two inventories: a relic
+ * drops out of it whenever the best setup shifts around it, even though it is
+ * still sitting in the save. The backend answers which is which per relic
+ * (`still_owned`); where it didn't (older snapshots), we say the weaker,
+ * true thing — "no longer used" — rather than claiming a loss we never checked.
+ */
+function splitLeft(refs: RelicRef[] | undefined): {
+  gone: RelicRef[]
+  benched: RelicRef[]
+} {
+  const gone: RelicRef[] = []
+  const benched: RelicRef[] = []
+  for (const r of refs ?? []) {
+    if (r.still_owned === false) gone.push(r)
+    else benched.push(r)
   }
+  return { gone, benched }
 }
 
 /**
  * Turn a BuildChange into human, relic-aware presentation — a plain verdict, a
- * relative % vs the last save, and which relics moved — replacing the opaque
- * "+91 pts". Raw points are exposed only via `rawScore` (for a tooltip).
+ * relative % vs the last save, and what happened to each relic that moved —
+ * replacing the opaque "+91 pts". Raw points are exposed only via `rawScore`
+ * (for a tooltip).
  *
  * Returns null for changes not worth surfacing (unchanged / first-ever optimize).
  * Callers apply their own policy on `change.cause` — e.g. the post-upload list
@@ -98,10 +129,12 @@ export function describeBuildChange(
       ? { before, after, delta: change.delta ?? after - before }
       : undefined
 
+  const { gone, benched } = splitLeft(change.left)
   let tone: ChangeTone
   let icon: LucideIcon
   let headline: string
-  let relics: ChangeDescription["relics"]
+  let note: string | undefined
+  const groups: ChangeRelicGroup[] = []
 
   if (status === "improved") {
     tone = "up"
@@ -109,23 +142,36 @@ export function describeBuildChange(
     const pct = percentLabel(before, after)
     // No usable baseline % means the build went from ~nothing to something.
     headline = pct ? `${pct} stronger` : "newly viable"
-    relics = relicDetail("now uses", change.entered)
+    addGroup(groups, "entered", "Now uses", change.entered)
+    // A relic that left the save is news even on an improvement; one merely
+    // displaced by something better is not.
+    addGroup(groups, "gone", "No longer in your save", gone)
   } else if (status === "degraded") {
     tone = "down"
     icon = TrendingDown
     const pct = percentLabel(before, after)
     headline = pct ? `${pct} weaker` : "weaker"
-    relics = relicDetail("lost", change.left)
+    // The relics that actually left the save are the news; ones merely dropped
+    // from the layout follow, and only with a note saying so — a permanent relic
+    // reported as "lost" is exactly the confusion this replaces.
+    addGroup(groups, "gone", "No longer in your save", gone)
+    addGroup(groups, "benched", "No longer used", benched)
+    addGroup(groups, "entered", "Now uses", change.entered)
+    if (gone.length === 0 && benched.length > 0) {
+      note = "still in your save — the best setup just moved on from them"
+    }
   } else if (status === "reordered") {
     tone = "neutral"
     icon = ArrowLeftRight
     headline = "rearranged, same strength"
-    relics = relicDetail("swaps in", change.entered)
+    addGroup(groups, "gone", "No longer in your save", gone)
+    addGroup(groups, "entered", "Swaps in", change.entered)
+    addGroup(groups, "benched", "Swaps out", benched)
   } else if (status === "broken_pin") {
     tone = "warn"
     icon = AlertTriangle
     headline = "a pinned relic left your save"
-    relics = relicDetail("pin lost", change.pinned_removed)
+    addGroup(groups, "pin", "Pin lost", change.pinned_removed)
   } else {
     // potentially_affected — cheap relic-diff flag, no precise layout computed yet.
     tone = "neutral"
@@ -140,7 +186,8 @@ export function describeBuildChange(
     tone,
     icon,
     headline,
-    relics,
+    groups,
+    note,
     rawScore,
     reliable: change.reliable !== false,
     textClass: TONE_TEXT[tone],
@@ -148,11 +195,20 @@ export function describeBuildChange(
   }
 }
 
-/** "Crimson Whetblade, Stalwart Horn +1 more" — for tooltips/aria and compact rows. */
-export function relicSummary(relics: ChangeDescription["relics"]): string {
-  if (!relics) return ""
-  const joined = relics.names.join(", ")
-  return relics.extra > 0 ? `${joined} +${relics.extra} more` : joined
+/** "Crimson Whetblade, Stalwart Horn" — for tooltips/aria and compact rows. */
+export function relicNames(relics: RelicRef[] | undefined): string {
+  return (relics ?? [])
+    .map((r) => r.name)
+    .filter((n): n is string => !!n && n.length > 0)
+    .join(", ")
+}
+
+/** One-line text form of a whole change, for `title`/aria on compact surfaces. */
+export function changeSummaryText(d: ChangeDescription): string {
+  const parts = d.groups.map(
+    (g) => `${g.label.toLowerCase()}: ${relicNames(g.relics)}`,
+  )
+  return [d.headline, ...parts].join(" — ")
 }
 
 /** "387 → 478 pts" — raw optimizer score for a hover tooltip. */

@@ -1,10 +1,11 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router"
 import { AlertCircle, Info, Upload, User2 } from "lucide-react"
-import { useRef, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 
 import type { BuildChange } from "@/client"
 import { SavesService } from "@/client"
+import { ChangeRelicGroups } from "@/components/ChangeRelics"
 import { OriginalBackupCard } from "@/components/OriginalBackupCard"
 import { UploadGateDialog } from "@/components/UploadGateDialog"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -19,14 +20,18 @@ import {
 import { Progress } from "@/components/ui/progress"
 import { isLoggedIn } from "@/hooks/useAuth"
 import useCustomToast from "@/hooks/useCustomToast"
+import { useEffectMap } from "@/hooks/useEffectMap"
 import { storeAnonUploadMeta, useSaveStatus } from "@/hooks/useSaveStatus"
 import {
   type ChangeDescription,
   describeBuildChange,
   rawScoreTooltip,
-  relicSummary,
 } from "@/lib/buildChange"
-import { startUpload, useOptimizeJob } from "@/lib/optimizeJobs"
+import {
+  type StreamUploadResult,
+  startUpload,
+  useOptimizeJob,
+} from "@/lib/optimizeJobs"
 import { computeOverallPct, optimizingLabel } from "@/lib/optimizeProgress"
 import {
   clearAll,
@@ -87,6 +92,7 @@ function SaveStatusBanner() {
 }
 
 function ChangesSummary({ changes }: { changes: BuildChange[] }) {
+  const effectMap = useEffectMap()
   const rows = changes
     .map((change) => ({ change, d: describeBuildChange(change) }))
     .filter(
@@ -128,11 +134,14 @@ function ChangesSummary({ changes }: { changes: BuildChange[] }) {
                     <span className="text-xs opacity-70">(approximate)</span>
                   )}
                 </div>
-                {d.relics && (
-                  <span className="pl-0.5 text-xs text-muted-foreground">
-                    {d.relics.verb} {relicSummary(d.relics)}
-                  </span>
-                )}
+                <div className="pl-0.5">
+                  <ChangeRelicGroups groups={d.groups} effectMap={effectMap} />
+                  {d.note && (
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      {d.note}
+                    </p>
+                  )}
+                </div>
               </li>
             )
           })}
@@ -155,8 +164,20 @@ function UploadPage() {
   const job = useOptimizeJob()
   const streamActive = job?.status === "parsing" || job?.status === "optimizing"
   const streamProgress = job?.progress ?? null
-  const streamResult = job?.status === "done" ? (job.result ?? null) : null
   const streamError = job?.status === "error" ? (job.error ?? null) : null
+
+  // The navbar tracker auto-clears a finished job a few seconds after it lands
+  // (OptimizeTrackerButton), and dismissing it from the Sheet clears it outright
+  // — either would yank this page's results away mid-read. So latch the result
+  // here on completion: the job store owns the *live* stream, this page owns
+  // what it last showed. Cleared when a new upload starts.
+  const [streamResult, setStreamResult] = useState<StreamUploadResult | null>(
+    null,
+  )
+  const doneResult = job?.status === "done" ? (job.result ?? null) : null
+  useEffect(() => {
+    if (doneResult) setStreamResult(doneResult)
+  }, [doneResult])
 
   // Legacy mutation state (anonymous)
   const [uploadResult, setUploadResult] = useState<Awaited<
@@ -203,6 +224,10 @@ function UploadPage() {
   /** The unconditional upload path: replace the working file, drop the (now
    *  resolved) staged diff, back up the original, and start the upload. */
   function proceedUpload(file: File) {
+    // Drop the previous upload's latched results — they describe the save this
+    // one replaces.
+    setStreamResult(null)
+    setUploadResult(null)
     // Keep the original file in-session so the inventory page can export an
     // edited copy without re-uploading (raw saves are never persisted).
     rememberSaveFile(file)

@@ -274,12 +274,23 @@ ChangeStatus = Literal[
 
 
 class RelicRef(BaseModel):
-    """Lightweight relic identity for change display (no ga_handle — unstable)."""
+    """Lightweight relic identity for change display (no ga_handle — unstable).
+
+    ``tier``/``is_deep`` are display metadata so a change list can describe a
+    relic the way the inventory does, without a second lookup.  ``still_owned``
+    answers the question the name alone cannot: a relic that dropped out of a
+    build's best layout may or may not still be in the save, and those two are
+    very different pieces of news.  It stays None where nothing checked (older
+    snapshots, and the persisted layouts, which are inventory-agnostic).
+    """
     real_id: int
     name: str = ""
     color: str = ""
     effects: list[int] = Field(default_factory=list)
     curses: list[int] = Field(default_factory=list)
+    tier: str = ""
+    is_deep: bool = False
+    still_owned: Optional[bool] = None
 
 
 class BuildChange(BaseModel):

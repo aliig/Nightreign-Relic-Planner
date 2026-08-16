@@ -21,6 +21,7 @@ import {
   type SlotAlternativeRequest,
   type VesselResult,
 } from "@/client"
+import { ChangeRelicGroups } from "@/components/ChangeRelics"
 import { COLOR_HEX, RelicNameCell } from "@/components/RelicDisplay"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -48,11 +49,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import useCustomToast from "@/hooks/useCustomToast"
-import {
-  describeBuildChange,
-  rawScoreTooltip,
-  relicSummary,
-} from "@/lib/buildChange"
+import { describeBuildChange, rawScoreTooltip } from "@/lib/buildChange"
 import {
   addLoadoutOp,
   queueReplaceLoadout,
@@ -891,7 +888,13 @@ function SaveLoadoutDialog({
 
 // --- Save-diff banner (shown above results after a re-optimize) ---
 
-export function ChangeBanner({ change }: { change?: BuildChange | null }) {
+export function ChangeBanner({
+  change,
+  effectMap,
+}: {
+  change?: BuildChange | null
+  effectMap: Map<number, string>
+}) {
   // Only narrate changes a newer save caused. Build edits (cause "build_edit" /
   // "mixed") and run-to-run search noise (cause null) re-baseline silently.
   if (!change || change.cause !== "relics") return null
@@ -900,29 +903,30 @@ export function ChangeBanner({ change }: { change?: BuildChange | null }) {
   const Icon = d.icon
 
   return (
-    <div
-      className={`flex items-center gap-2 rounded-md border px-3 py-2 text-sm ${d.boxClass}`}
-      title={rawScoreTooltip(d.rawScore)}
-    >
-      <Icon className="h-4 w-4 shrink-0" />
-      <span>
-        Since your last save: {d.headline}
-        {d.relics ? ` — ${d.relics.verb} ${relicSummary(d.relics)}` : ""}.
-      </span>
-      {d.reliable === false && (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <span className="cursor-help text-xs underline decoration-dotted underline-offset-2 opacity-70">
-              (approximate)
-            </span>
-          </TooltipTrigger>
-          <TooltipContent className="max-w-[16rem]">
-            The optimizer hit its time limit, so this is the best layout it
-            found — not a proven optimum. The numbers may shift slightly on a
-            full re-run.
-          </TooltipContent>
-        </Tooltip>
-      )}
+    <div className={`rounded-md border px-3 py-2 text-sm ${d.boxClass}`}>
+      <div
+        className="flex items-center gap-2"
+        title={rawScoreTooltip(d.rawScore)}
+      >
+        <Icon className="h-4 w-4 shrink-0" />
+        <span>Since your last save: {d.headline}</span>
+        {d.reliable === false && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="cursor-help text-xs underline decoration-dotted underline-offset-2 opacity-70">
+                (approximate)
+              </span>
+            </TooltipTrigger>
+            <TooltipContent className="max-w-[16rem]">
+              The optimizer hit its time limit, so this is the best layout it
+              found — not a proven optimum. The numbers may shift slightly on a
+              full re-run.
+            </TooltipContent>
+          </Tooltip>
+        )}
+      </div>
+      <ChangeRelicGroups groups={d.groups} effectMap={effectMap} max={4} />
+      {d.note && <p className="mt-1 text-xs opacity-80">{d.note}</p>}
     </div>
   )
 }

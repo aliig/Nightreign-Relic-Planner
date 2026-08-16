@@ -1,6 +1,7 @@
 import { AlertTriangle, CheckCircle2, Loader2 } from "lucide-react"
 import { useEffect, useState } from "react"
 
+import { ChangeRelicGroups } from "@/components/ChangeRelics"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Progress } from "@/components/ui/progress"
@@ -12,7 +13,8 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet"
-import { describeBuildChange, relicSummary } from "@/lib/buildChange"
+import { useEffectMap } from "@/hooks/useEffectMap"
+import { describeBuildChange } from "@/lib/buildChange"
 import {
   type BuildJobInfo,
   dismissJob,
@@ -21,32 +23,40 @@ import {
 import { computeOverallPct, optimizingLabel } from "@/lib/optimizeProgress"
 
 /** One row in the Sheet: a build with its live status (and final change, if done). */
-function BuildRow({ info }: { info: BuildJobInfo }) {
+function BuildRow({
+  info,
+  effectMap,
+}: {
+  info: BuildJobInfo
+  effectMap: Map<number, string>
+}) {
   const d = info.status === "done" ? describeBuildChange(info.change) : null
   return (
-    <li className="flex items-center justify-between gap-2 rounded-md border px-2.5 py-1.5 text-sm">
-      <div className="flex min-w-0 items-center gap-2">
+    <li className="flex items-start justify-between gap-2 rounded-md border px-2.5 py-1.5 text-sm">
+      <div className="flex min-w-0 items-start gap-2">
         {info.status === "optimizing" && (
-          <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-primary" />
+          <Loader2 className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin text-primary" />
         )}
         {info.status === "done" && (
-          <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-green-600 dark:text-green-500" />
+          <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-green-600 dark:text-green-500" />
         )}
         {info.status === "error" && (
-          <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-destructive" />
+          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-destructive" />
         )}
         <div className="min-w-0">
           <div className="truncate">{info.name ?? "Build"}</div>
           {d && (
-            <div className={`text-xs ${d.textClass}`}>
-              {d.headline}
-              {d.relics && (
-                <span className="text-muted-foreground">
-                  {" "}
-                  · {d.relics.verb} {relicSummary(d.relics)}
-                </span>
+            <>
+              <div className={`text-xs ${d.textClass}`}>{d.headline}</div>
+              <ChangeRelicGroups
+                groups={d.groups}
+                effectMap={effectMap}
+                max={2}
+              />
+              {d.note && (
+                <p className="mt-0.5 text-xs text-muted-foreground">{d.note}</p>
               )}
-            </div>
+            </>
           )}
           {info.status === "error" && (
             <div className="text-xs text-destructive">Optimization failed</div>
@@ -69,6 +79,7 @@ const AUTO_CLEAR_MS = 5000
 
 export function OptimizeTrackerButton() {
   const job = useOptimizeJob()
+  const effectMap = useEffectMap()
   const [open, setOpen] = useState(false)
 
   // Auto-clear a finished job after a few seconds — but pause while the Sheet is
@@ -150,7 +161,7 @@ export function OptimizeTrackerButton() {
             {builds.length > 0 && (
               <ul className="space-y-1">
                 {builds.map(([id, info]) => (
-                  <BuildRow key={id} info={info} />
+                  <BuildRow key={id} info={info} effectMap={effectMap} />
                 ))}
               </ul>
             )}

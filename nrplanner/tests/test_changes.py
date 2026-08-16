@@ -258,3 +258,56 @@ class TestDiffResults:
         change = diff_results(old, [_vessel([_relic(2, [10, 20])], 70, truncated=True)])
         assert change.status == "improved"
         assert change.reliable is False
+
+    def test_left_refs_carry_display_metadata(self):
+        gone = _relic(1, [10], name="Stalwart Horn", color="Blue")
+        gone = gone.model_copy(update={"tier": "Grand", "is_deep": True})
+        old = serialize_top_layouts([_vessel([gone], 70)])
+        change = diff_results(old, [_vessel([_relic(2, [10])], 50)])
+        ref = next(r for r in change.left if r.real_id == 1)
+        assert (ref.name, ref.color, ref.tier, ref.is_deep) == (
+            "Stalwart Horn", "Blue", "Grand", True)
+
+
+class TestStillOwned:
+    """`left` is a layout diff, not an inventory diff — a departed relic may or
+    may not still be in the save, and only `owned` can tell the two apart."""
+
+    def test_unknown_without_inventory(self):
+        old = serialize_top_layouts([_vessel([_relic(1, [10])], 70)])
+        change = diff_results(old, [_vessel([_relic(2, [10])], 50)])
+        assert [r.still_owned for r in change.left] == [None]
+
+    def test_still_owned_when_relic_remains_in_save(self):
+        benched, used = _relic(1, [10]), _relic(2, [10])
+        old = serialize_top_layouts([_vessel([benched], 70)])
+        change = diff_results(old, [_vessel([used], 50)], owned=[benched, used])
+        assert [(r.real_id, r.still_owned) for r in change.left] == [(1, True)]
+
+    def test_not_owned_when_relic_left_the_save(self):
+        sold, used = _relic(1, [10]), _relic(2, [10])
+        old = serialize_top_layouts([_vessel([sold], 70)])
+        change = diff_results(old, [_vessel([used], 50)], owned=[used])
+        assert [(r.real_id, r.still_owned) for r in change.left] == [(1, False)]
+
+    def test_duplicate_copies_accounted_per_copy(self):
+        # Owned two identical copies, used both; one was sold and the other is
+        # merely benched, so exactly one ref may claim to still be in the save.
+        dupe = _relic(1, [10])
+        old = serialize_top_layouts([_vessel([dupe, dupe], 70)])
+        change = diff_results(old, [_vessel([_relic(2, [10])], 50)], owned=[dupe])
+        assert sorted(r.still_owned for r in change.left) == [False, True]
+
+    def test_copy_still_in_use_is_not_double_counted(self):
+        # One copy stayed in the layout; the other has no spare to claim.
+        dupe = _relic(1, [10])
+        old = serialize_top_layouts([_vessel([dupe, dupe], 70)])
+        change = diff_results(old, [_vessel([dupe], 50)], owned=[dupe])
+        assert [r.still_owned for r in change.left] == [False]
+
+    def test_unfillable_vessel_marks_survivors(self):
+        kept, sold = _relic(1, [10]), _relic(2, [10])
+        old = serialize_top_layouts([_vessel([kept, sold], 70)])
+        change = diff_results(old, [], owned=[kept])
+        assert {(r.real_id, r.still_owned) for r in change.left} == {
+            (1, True), (2, False)}

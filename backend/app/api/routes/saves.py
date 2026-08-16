@@ -706,7 +706,9 @@ def _apply_snapshot_for_stream(
         build_def, [(fingerprint_owned(r), r.ga_handle) for r in owned_relics], ds
     )
 
-    change = diff_results(snap.top_layouts if snap else None, results)
+    change = diff_results(
+        snap.top_layouts if snap else None, results, owned=owned_relics
+    )
     change.build_id = str(build.id)
     change.build_name = build.name
     change.slot_index = slot_index

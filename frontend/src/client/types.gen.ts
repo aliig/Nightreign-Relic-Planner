@@ -486,6 +486,13 @@ export type RelicPublic = {
 
 /**
  * Lightweight relic identity for change display (no ga_handle — unstable).
+ *
+ * ``tier``/``is_deep`` are display metadata so a change list can describe a
+ * relic the way the inventory does, without a second lookup.  ``still_owned``
+ * answers the question the name alone cannot: a relic that dropped out of a
+ * build's best layout may or may not still be in the save, and those two are
+ * very different pieces of news.  It stays None where nothing checked (older
+ * snapshots, and the persisted layouts, which are inventory-agnostic).
  */
 export type RelicRef = {
     real_id: number;
@@ -493,6 +500,9 @@ export type RelicRef = {
     color?: string;
     effects?: Array<(number)>;
     curses?: Array<(number)>;
+    tier?: string;
+    is_deep?: boolean;
+    still_owned?: (boolean | null);
 };
 
 export type RelicsPublic = {

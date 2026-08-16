@@ -34,6 +34,7 @@ import {
   type FeaturedBuildPublic,
   OptimizeService,
 } from "@/client"
+import { ChangeRelicGroups } from "@/components/ChangeRelics"
 import { EmptyState } from "@/components/Common/EmptyState"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -71,15 +72,16 @@ import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
 import useAuth, { isLoggedIn } from "@/hooks/useAuth"
 import useCustomToast from "@/hooks/useCustomToast"
+import { useEffectMap } from "@/hooks/useEffectMap"
 import {
   DEFAULT_GROUPS,
   type LocalBuild,
   useLocalBuilds,
 } from "@/hooks/useLocalBuilds"
 import {
+  changeSummaryText,
   describeBuildChange,
   rawScoreTooltip,
-  relicSummary,
 } from "@/lib/buildChange"
 import { CHARACTER_NAMES } from "@/lib/constants"
 import { useBuildOptimizeStatus } from "@/lib/optimizeJobs"
@@ -268,7 +270,7 @@ function BuildCard({
               return (
                 <span
                   className={`shrink-0 inline-flex items-center gap-0.5 text-xs font-medium ${d.textClass}`}
-                  title={rawScoreTooltip(d.rawScore) ?? d.headline}
+                  title={changeSummaryText(d)}
                 >
                   <Icon className="h-3 w-3" />
                   {d.headline}
@@ -602,11 +604,13 @@ function ChangeRow({
   buildId,
   name,
   change,
+  effectMap,
   onDismiss,
 }: {
   buildId: string
   name: string
   change: BuildChange
+  effectMap: Map<number, string>
   onDismiss: (buildId: string) => void
 }) {
   const d = describeBuildChange(change)
@@ -632,10 +636,9 @@ function ChangeRow({
             <span className="text-xs opacity-70">(approximate)</span>
           )}
         </div>
-        {d.relics && (
-          <p className="truncate text-xs text-muted-foreground">
-            {d.relics.verb} {relicSummary(d.relics)}
-          </p>
+        <ChangeRelicGroups groups={d.groups} effectMap={effectMap} />
+        {d.note && (
+          <p className="mt-0.5 text-xs text-muted-foreground">{d.note}</p>
         )}
       </div>
       <Button
@@ -660,6 +663,7 @@ function ChangesSinceLastSave({
   buildName: (buildId: string) => string
   onDismiss: (buildId: string) => void
 }) {
+  const effectMap = useEffectMap()
   // Unread, relic-caused changes worth surfacing, deduped per build. Build edits
   // re-baseline silently; only an uploaded save populates this list.
   const seen = new Set<string>()
@@ -697,6 +701,7 @@ function ChangesSinceLastSave({
             buildId={r.buildId}
             name={buildName(r.buildId)}
             change={r.change}
+            effectMap={effectMap}
             onDismiss={onDismiss}
           />
         ))}
