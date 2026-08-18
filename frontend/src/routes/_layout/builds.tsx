@@ -12,6 +12,7 @@ import {
   useRouterState,
 } from "@tanstack/react-router"
 import {
+  BookMarked,
   Copy,
   Layers,
   Loader2,
@@ -23,7 +24,7 @@ import {
   X,
   Zap,
 } from "lucide-react"
-import { Suspense, useState } from "react"
+import { Suspense, useMemo, useState } from "react"
 import { useForm } from "react-hook-form"
 import { z } from "zod"
 
@@ -32,7 +33,9 @@ import {
   type BuildSnapshotSummary,
   BuildsService,
   type FeaturedBuildPublic,
+  type LoadoutRank,
   OptimizeService,
+  SavesService,
 } from "@/client"
 import { ChangeRelicGroups } from "@/components/ChangeRelics"
 import { EmptyState } from "@/components/Common/EmptyState"
@@ -85,6 +88,12 @@ import {
 } from "@/lib/buildChange"
 import { CHARACTER_NAMES } from "@/lib/constants"
 import { useBuildOptimizeStatus } from "@/lib/optimizeJobs"
+import {
+  effectiveLoadouts,
+  stagedFields,
+  stagedKey,
+  usePendingSlot,
+} from "@/lib/pendingChanges"
 import { handleError } from "@/utils"
 
 export const Route = createFileRoute("/_layout/builds")({
@@ -196,6 +205,41 @@ interface BuildCardData {
   is_featured?: boolean
 }
 
+/**
+ * "What I actually have saved in-game IS this build's suggestion #N."
+ *
+ * Rank 1 means the loadout sitting in the save is still the optimizer's top
+ * pick; a lower rank means the optimizer has since found better arrangements
+ * (usually because newer relics arrived) and the in-game setup has drifted.
+ * Rendered only on a match: "never saved this build" and "fell out of the top
+ * N" are both silence, since neither is news worth a badge.
+ */
+function SavedLoadoutBadge({ rank }: { rank: LoadoutRank }) {
+  const inSync = rank.rank === 1
+  const label = rank.loadout_name || "(unnamed)"
+  return (
+    <span
+      className={`mt-1.5 inline-flex max-w-full items-center gap-1 text-[11px] font-medium ${
+        inSync
+          ? "text-green-600 dark:text-green-500"
+          : "text-amber-600 dark:text-amber-500"
+      }`}
+      title={
+        inSync
+          ? `Your in-game loadout "${label}" is this build's top suggestion.`
+          : `Your in-game loadout "${label}" is now only suggestion #${rank.rank} of ${rank.total} for this build — re-optimize and save the top result to catch up.`
+      }
+    >
+      <BookMarked className="h-3 w-3 shrink-0" />
+      <span className="truncate">
+        {inSync
+          ? `In sync · ${label}`
+          : `${label} · #${rank.rank} of ${rank.total}`}
+      </span>
+    </span>
+  )
+}
+
 function BuildCard({
   build,
   onDelete,
@@ -205,6 +249,7 @@ function BuildCard({
   onToggleFeatured,
   isDeleting,
   summary,
+  loadoutRank,
 }: {
   build: BuildCardData
   onDelete: (id: string) => void
@@ -214,6 +259,9 @@ function BuildCard({
   onToggleFeatured?: (id: string) => void
   isDeleting?: boolean
   summary?: BuildSnapshotSummary
+  /** Set when one of the character's in-game loadouts reproduces one of this
+   *  build's optimizer results. Absent = nothing to say (see the badge). */
+  loadoutRank?: LoadoutRank
 }) {
   const [draftName, setDraftName] = useState(build.name)
   const [deleteOpen, setDeleteOpen] = useState(false)
@@ -377,6 +425,7 @@ function BuildCard({
               </span>
             </div>
           )}
+          {loadoutRank && <SavedLoadoutBadge rank={loadoutRank} />}
         </div>
 
         {/* Footer: character + date */}
@@ -710,6 +759,61 @@ function ChangesSinceLastSave({
   )
 }
 
+/**
+ * Per-build "your in-game loadout is result #N", keyed by build id.
+ *
+ * Matched against the LIVE preset list (staged loadout edits composed in), so
+ * a setup saved from the optimizer but not yet exported counts as saved — it
+ * is what the user's save will hold. Ranks come from each build's cached
+ * optimize, so `snapshotSig` (the summaries' computed_at set) is part of the
+ * key: a re-optimize moves the results and must move the badge with them.
+ */
+function useLoadoutRanks(snapshotSig: string): Map<string, LoadoutRank> {
+  const { data: profilesData } = useQuery({
+    queryKey: ["profiles"],
+    queryFn: () => SavesService.listProfiles(),
+    staleTime: 5 * 60 * 1000,
+  })
+  // The builds list has no profile picker; the optimize page defaults to the
+  // first profile too, so the badge describes the same save the user optimizes
+  // against by default.
+  const profile = profilesData?.data?.[0]
+  const { data: loadoutsData } = useQuery({
+    queryKey: ["loadouts", profile?.id],
+    queryFn: () => SavesService.getProfileLoadouts({ profileId: profile!.id }),
+    enabled: !!profile,
+    staleTime: 5 * 60 * 1000,
+  })
+
+  const pending = usePendingSlot(profile?.slot_index ?? null)
+  const sig = stagedKey(pending)
+  const loadouts = useMemo(
+    () => effectiveLoadouts(loadoutsData?.data ?? [], pending),
+    [loadoutsData, pending],
+  )
+  const loadoutsSig = JSON.stringify(loadouts)
+
+  const { data } = useQuery({
+    queryKey: ["loadout-ranks", profile?.id, sig, loadoutsSig, snapshotSig],
+    queryFn: () =>
+      OptimizeService.listLoadoutRanks({
+        requestBody: {
+          profile_id: profile!.id,
+          ...stagedFields(pending),
+          loadouts,
+        },
+      }),
+    enabled: !!profile && loadouts.length > 0,
+    staleTime: 5 * 60 * 1000,
+  })
+
+  return useMemo(() => {
+    const m = new Map<string, LoadoutRank>()
+    for (const r of data ?? []) m.set(r.build_id, r)
+    return m
+  }, [data])
+}
+
 function AuthBuildList() {
   const { data } = useSuspenseQuery({
     queryKey: ["builds"],
@@ -723,6 +827,12 @@ function AuthBuildList() {
   for (const s of summaries ?? []) {
     if (s.build_id) summaryByBuild.set(s.build_id, s)
   }
+  const rankByBuild = useLoadoutRanks(
+    (summaries ?? [])
+      .map((s) => `${s.build_id}:${s.computed_at ?? ""}`)
+      .sort()
+      .join("|"),
+  )
   const { user } = useAuth()
   const { showSuccessToast, showErrorToast } = useCustomToast()
   const queryClient = useQueryClient()
@@ -837,6 +947,7 @@ function AuthBuildList() {
               deleteMutation.isPending && deleteMutation.variables === build.id
             }
             summary={summaryByBuild.get(build.id)}
+            loadoutRank={rankByBuild.get(build.id)}
           />
         ))}
       </div>

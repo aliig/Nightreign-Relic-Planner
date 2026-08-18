@@ -286,6 +286,41 @@ def serialize_top_layouts(results: Sequence[VesselResult], n: int = 3) -> list[d
     return [serialize_layout(r) for r in ranked[:n]]
 
 
+def layout_match_key(vessel_id: int, relics: Iterable[Fingerprint]) -> str:
+    """Identity of a vessel setup: the vessel plus its relic content multiset.
+
+    Deliberately order-insensitive.  A vessel's slots are colour-constrained, so
+    two setups holding the same relics on the same vessel play identically no
+    matter which same-colour slot each relic sits in — and the optimizer already
+    collapses those into one canonical arrangement.  Interchangeable duplicate
+    copies of a relic fall out for free (fingerprints are content, not
+    ga_handle, so two copies produce the same entry).
+
+    Used to recognise an in-game loadout preset as "this is optimizer result
+    #N": the same relation the frontend's savedLoadoutMatch equivalent tier
+    computes for the optimize page's "Saved" badge.
+    """
+    return _sha([vessel_id, sorted(relics)])
+
+
+def result_match_key(result: VesselResult) -> str:
+    return layout_match_key(
+        result.vessel_id,
+        (fingerprint_owned(a.relic) for a in result.assignments if a.relic is not None),
+    )
+
+
+def serialize_match_keys(results: Sequence[VesselResult]) -> list[str]:
+    """Match keys in the results' own DISPLAY order — index 0 is the top card.
+
+    NOT re-sorted by score (unlike ``serialize_top_layouts``, whose job is the
+    diff baseline): the persisted order is the ranked order the optimize page
+    renders (requirement-covering first, score-descending within each tier), so
+    a key's index is exactly the rank the user sees.
+    """
+    return [result_match_key(r) for r in results]
+
+
 def _result_relic_fps(result: VesselResult) -> Counter:
     return Counter(
         fingerprint_owned(a.relic) for a in result.assignments if a.relic is not None

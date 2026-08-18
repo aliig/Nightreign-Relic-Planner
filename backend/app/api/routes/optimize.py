@@ -54,8 +54,10 @@ from nrplanner.changes import (
     build_signature,
     diff_results,
     fingerprint_owned,
+    layout_match_key,
     relevant_relics_signature,
     relics_signature,
+    serialize_match_keys,
     serialize_top_layouts,
 )
 from nrplanner.constants import CHARACTER_NAMES
@@ -351,6 +353,9 @@ def _apply_snapshot(
     )
 
     top_layouts = serialize_top_layouts(results)
+    # Result identities in DISPLAY order -- lets the builds page recognise an
+    # in-game loadout as "result #N" without loading full_results.
+    top_match_keys = serialize_match_keys(results)
     # cumulative_effects is a serve-time presentation field (recomputed on every
     # response, incl. POST /snapshot/query) — never persist it in the snapshot.
     full_results = [r.model_dump(mode="json", exclude={"cumulative_effects"}) for r in results]
@@ -372,6 +377,7 @@ def _apply_snapshot(
             top_n=top_n,
             max_per_vessel=max_per_vessel,
             top_layouts=top_layouts,
+            top_match_keys=top_match_keys,
             full_results=full_results,
             best_score=best_score,
             any_truncated=any_truncated,
@@ -388,6 +394,7 @@ def _apply_snapshot(
         snap.top_n = top_n
         snap.max_per_vessel = max_per_vessel
         snap.top_layouts = top_layouts
+        snap.top_match_keys = top_match_keys
         snap.full_results = full_results
         snap.best_score = best_score
         snap.any_truncated = any_truncated
@@ -747,3 +754,141 @@ def mark_change_reviewed(
         snap.reviewed = True
         session.add(snap)
     session.commit()
+
+
+# ---------------------------------------------------------------------------
+# "Your in-game loadout is result #N" (builds page badge)
+# ---------------------------------------------------------------------------
+
+class LoadoutRef(BaseModel):
+    """One in-game loadout preset to look for among a build's results.
+
+    Sent by the client rather than read from the profile so the LIVE preset
+    list is what gets matched — a setup saved from the optimizer but not yet
+    exported is staged client-side, and a badge that ignored it would tell the
+    user their fresh save isn't there.  Omit the list entirely to match against
+    the presets exactly as they sit in the uploaded save.
+    """
+    index: int
+    character: str
+    name: str = ""
+    vessel_id: int
+    ga_handles: list[int] = Field(default_factory=list)
+
+
+class LoadoutRankRequest(BaseModel):
+    profile_id: uuid.UUID
+    # Same staged in-app diff the optimizer runs on (see app.core.staged) —
+    # needed to resolve a preset that holds a staged Relic Rites purchase.
+    staged_sells: list[int] = Field(default_factory=list)
+    staged_mints: list[StagedMint] = Field(default_factory=list)
+    loadouts: list[LoadoutRef] | None = None
+
+
+class LoadoutRank(BaseModel):
+    """A build whose in-game loadout reproduces one of its optimizer results."""
+    build_id: str
+    # 1-based position among the build's cached results, in the order the
+    # optimize page lists them: 1 = the top suggestion.
+    rank: int
+    # How many results that snapshot holds (the "of 10" in "#3 of 10").
+    total: int
+    loadout_index: int
+    loadout_name: str
+
+
+@router.post("/loadout-ranks", response_model=list[LoadoutRank])
+def list_loadout_ranks(
+    req: LoadoutRankRequest,
+    current_user: CurrentUser,
+    session: SessionDep,
+    ds: GameDataDep,
+) -> list[LoadoutRank]:
+    """Tell each build which of its optimizer results is already saved in-game.
+
+    Answers, per build, "is what I actually have equipped still the optimizer's
+    pick?" — rank 1 means the saved loadout IS the top suggestion, rank 3 means
+    the optimizer has since found two better arrangements.
+
+    Identity is content-based (vessel + relic multiset), the same relation the
+    optimize page's "Saved" badge uses, so a preset holding the same relics in
+    swapped same-colour slots or a different physical copy of a duplicate still
+    counts.  Builds whose loadouts match nothing are simply omitted: silence is
+    the honest answer for "never saved this build" and "fell out of the top N"
+    alike, and neither deserves a badge.
+
+    Reads only ``top_match_keys`` from each snapshot — never the heavy
+    full_results blob — so this stays cheap enough for a list page.
+    """
+    profile = session.get(Profile, req.profile_id)
+    if not profile or profile.owner_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Profile not found")
+
+    db_relics = session.exec(
+        select(Relic).where(Relic.profile_id == req.profile_id)
+    ).all()
+    owned = apply_staged_diff(
+        _owned_from_db(list(db_relics)),
+        req.staged_sells, req.staged_mints, ds, get_items_json(),
+    )
+    fp_by_handle = {r.ga_handle: fingerprint_owned(r) for r in owned}
+
+    if req.loadouts is not None:
+        loadouts = req.loadouts
+    else:
+        loadouts = [
+            LoadoutRef.model_validate(raw) for raw in (profile.loadouts or [])
+        ]
+
+    # character -> [(match key, preset index, preset name)].  A preset holding a
+    # relic that is no longer in the effective inventory can't be identified at
+    # all, so it matches nothing rather than matching as if the slot were empty.
+    by_character: dict[str, list[tuple[str, int, str]]] = {}
+    for lo in loadouts:
+        handles = [h for h in lo.ga_handles if h != 0]
+        fps = [fp_by_handle.get(h) for h in handles]
+        if any(fp is None for fp in fps):
+            continue
+        key = layout_match_key(lo.vessel_id, [fp for fp in fps if fp is not None])
+        by_character.setdefault(lo.character, []).append((key, lo.index, lo.name))
+    if not by_character:
+        return []
+
+    builds = session.exec(
+        select(Build.id, Build.character).where(Build.owner_id == current_user.id)
+    ).all()
+    snaps = session.exec(
+        select(
+            OptimizationSnapshot.build_id, OptimizationSnapshot.top_match_keys
+        ).where(
+            OptimizationSnapshot.owner_id == current_user.id,
+            OptimizationSnapshot.slot_index == profile.slot_index,
+        )
+    ).all()
+    keys_by_build = {str(build_id): keys or [] for build_id, keys in snaps}
+
+    out: list[LoadoutRank] = []
+    for build_id, character in builds:
+        keys = keys_by_build.get(str(build_id))
+        if not keys:
+            continue
+        candidates = by_character.get(character)
+        if not candidates:
+            continue
+        best: tuple[int, int, str] | None = None
+        for key, lo_index, lo_name in candidates:
+            if key not in keys:
+                continue
+            rank = keys.index(key) + 1
+            if best is None or rank < best[0]:
+                best = (rank, lo_index, lo_name)
+        if best is None:
+            continue
+        out.append(LoadoutRank(
+            build_id=str(build_id),
+            rank=best[0],
+            total=len(keys),
+            loadout_index=best[1],
+            loadout_name=best[2],
+        ))
+    return out

@@ -673,3 +673,112 @@ describe("replace-loadout targets (live preset list)", () => {
     })
   })
 })
+
+describe("live loadout list (effectiveLoadouts)", () => {
+  const SAVED = [
+    {
+      index: 0,
+      character: "Wylder",
+      name: "Fire",
+      vessel_id: 10,
+      ga_handles: [1, 2, 3],
+    },
+    {
+      index: 1,
+      character: "Duchess",
+      name: "Dregs Raider",
+      vessel_id: 20,
+      ga_handles: [4, 5, 6],
+    },
+  ]
+
+  it("passes the save's presets through untouched when nothing is staged", async () => {
+    const pc = await freshStore()
+    expect(pc.effectiveLoadouts(SAVED, pc.readSlot(0))).toEqual(SAVED)
+  })
+
+  it("drops staged deletes and applies staged renames", async () => {
+    const pc = await freshStore()
+    pc.addLoadoutOp(0, { kind: "delete", index: 0, name: "Fire" })
+    pc.addLoadoutOp(0, {
+      kind: "rename",
+      index: 1,
+      name: "Dregs v2",
+      oldName: "Dregs Raider",
+    })
+    const live = pc.effectiveLoadouts(SAVED, pc.readSlot(0))
+    expect(live).toHaveLength(1)
+    expect(live[0]).toMatchObject({
+      index: 1,
+      name: "Dregs v2",
+      ga_handles: [4, 5, 6],
+    })
+  })
+
+  it("applies a staged overwrite's vessel AND relics in place", async () => {
+    // Replacing a preset from the optimizer can move it to a different vessel;
+    // matching the old vessel would report the wrong setup as saved.
+    const pc = await freshStore()
+    pc.addLoadoutOp(0, {
+      kind: "overwrite",
+      index: 0,
+      character: "Wylder",
+      vessel_id: 99,
+      ga_handles: [7, 8, 9],
+      targetName: "Fire",
+    })
+    const live = pc.effectiveLoadouts(SAVED, pc.readSlot(0))
+    expect(live[0]).toMatchObject({
+      index: 0,
+      name: "Fire",
+      vessel_id: 99,
+      ga_handles: [7, 8, 9],
+    })
+  })
+
+  it("lists a not-yet-exported saved setup as a real loadout", async () => {
+    // The whole reason this reads through the staged layer: "Save as loadout"
+    // stages an add, and the build card must count it as saved.
+    const pc = await freshStore()
+    pc.addLoadoutOp(0, {
+      kind: "add",
+      character: "Duchess",
+      vessel_id: 30,
+      ga_handles: [11, 12, 13],
+      name: "Brand New",
+    })
+    const live = pc.effectiveLoadouts(SAVED, pc.readSlot(0))
+    expect(live).toHaveLength(3)
+    expect(live[2]).toEqual({
+      index: -1,
+      character: "Duchess",
+      name: "Brand New",
+      vessel_id: 30,
+      ga_handles: [11, 12, 13],
+    })
+  })
+
+  it("a staged full reset leaves only the staged adds", async () => {
+    const pc = await freshStore()
+    pc.addLoadoutOp(0, { kind: "reset_presets" })
+    pc.addLoadoutOp(0, {
+      kind: "add",
+      character: "Wylder",
+      vessel_id: 30,
+      ga_handles: [11],
+      name: "Survivor",
+    })
+    const live = pc.effectiveLoadouts(SAVED, pc.readSlot(0))
+    expect(live).toHaveLength(1)
+    expect(live[0]).toMatchObject({ name: "Survivor", index: -1 })
+  })
+
+  it("tolerates a preset with no relic list", async () => {
+    const pc = await freshStore()
+    const live = pc.effectiveLoadouts(
+      [{ index: 0, character: "Wylder", name: "Empty", vessel_id: 1 }],
+      pc.readSlot(0),
+    )
+    expect(live[0].ga_handles).toEqual([])
+  })
+})

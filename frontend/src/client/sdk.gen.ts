@@ -3,7 +3,7 @@
 import type { CancelablePromise } from './core/CancelablePromise';
 import { OpenAPI } from './core/OpenAPI';
 import { request as __request } from './core/request';
-import type { BuildsListBuildsData, BuildsListBuildsResponse, BuildsCreateBuildData, BuildsCreateBuildResponse, BuildsListFeaturedBuildsData, BuildsListFeaturedBuildsResponse, BuildsGetBuildData, BuildsGetBuildResponse, BuildsUpdateBuildData, BuildsUpdateBuildResponse, BuildsDeleteBuildData, BuildsDeleteBuildResponse, BuildsToggleFeaturedData, BuildsToggleFeaturedResponse, BuildsCloneBuildData, BuildsCloneBuildResponse, DebugExportDebugStateData, DebugExportDebugStateResponse, GameGetEffectsResponse, GameGetFamiliesResponse, GameGetCharactersResponse, GameGetVesselsData, GameGetVesselsResponse, GameGetStackingCategoriesResponse, GameGetColorsResponse, GameCumulativeEffectsData, GameCumulativeEffectsResponse, GameRollRelicData, GameRollRelicResponse, LoginLoginAccessTokenData, LoginLoginAccessTokenResponse, LoginTestTokenResponse, LoginRecoverPasswordData, LoginRecoverPasswordResponse, LoginResetPasswordData, LoginResetPasswordResponse, LoginRecoverPasswordHtmlContentData, LoginRecoverPasswordHtmlContentResponse, OauthLoginGoogleResponse, OauthGoogleCallbackData, OauthGoogleCallbackResponse, OptimizeRunOptimizeData, OptimizeRunOptimizeResponse, OptimizeRunOptimizeStreamData, OptimizeRunOptimizeStreamResponse, OptimizeOptimizeSlotAlternativeData, OptimizeOptimizeSlotAlternativeResponse, OptimizeQuerySnapshotData, OptimizeQuerySnapshotResponse, OptimizeListBuildSummariesResponse, OptimizeMarkChangeReviewedData, OptimizeMarkChangeReviewedResponse, PrivateCreateUserData, PrivateCreateUserResponse, SavesUploadSaveData, SavesUploadSaveResponse, SavesUploadSaveStreamData, SavesUploadSaveStreamResponse, SavesGetSaveStatusResponse, SavesListProfilesResponse, SavesGetProfileRelicsData, SavesGetProfileRelicsResponse, SavesGetProfileLoadoutsData, SavesGetProfileLoadoutsResponse, SavesExportSaveData, SavesExportSaveResponse, SavesExportAddRelicsData, SavesExportAddRelicsResponse, SavesRitesPlanData, SavesRitesPlanResponse, SavesRitesPlanStreamData, SavesRitesPlanStreamResponse, SavesExportLoadoutsData, SavesExportLoadoutsResponse, UsersReadUsersData, UsersReadUsersResponse, UsersCreateUserData, UsersCreateUserResponse, UsersReadUserMeResponse, UsersDeleteUserMeResponse, UsersUpdateUserMeData, UsersUpdateUserMeResponse, UsersUpdatePasswordMeData, UsersUpdatePasswordMeResponse, UsersRegisterUserData, UsersRegisterUserResponse, UsersReadUserByIdData, UsersReadUserByIdResponse, UsersUpdateUserData, UsersUpdateUserResponse, UsersDeleteUserData, UsersDeleteUserResponse, UtilsTestEmailData, UtilsTestEmailResponse, UtilsHealthCheckResponse } from './types.gen';
+import type { BuildsListBuildsData, BuildsListBuildsResponse, BuildsCreateBuildData, BuildsCreateBuildResponse, BuildsListFeaturedBuildsData, BuildsListFeaturedBuildsResponse, BuildsGetBuildData, BuildsGetBuildResponse, BuildsUpdateBuildData, BuildsUpdateBuildResponse, BuildsDeleteBuildData, BuildsDeleteBuildResponse, BuildsToggleFeaturedData, BuildsToggleFeaturedResponse, BuildsCloneBuildData, BuildsCloneBuildResponse, DebugExportDebugStateData, DebugExportDebugStateResponse, GameGetEffectsResponse, GameGetFamiliesResponse, GameGetCharactersResponse, GameGetVesselsData, GameGetVesselsResponse, GameGetStackingCategoriesResponse, GameGetColorsResponse, GameCumulativeEffectsData, GameCumulativeEffectsResponse, GameRollRelicData, GameRollRelicResponse, LoginLoginAccessTokenData, LoginLoginAccessTokenResponse, LoginTestTokenResponse, LoginRecoverPasswordData, LoginRecoverPasswordResponse, LoginResetPasswordData, LoginResetPasswordResponse, LoginRecoverPasswordHtmlContentData, LoginRecoverPasswordHtmlContentResponse, OauthLoginGoogleResponse, OauthGoogleCallbackData, OauthGoogleCallbackResponse, OptimizeRunOptimizeData, OptimizeRunOptimizeResponse, OptimizeRunOptimizeStreamData, OptimizeRunOptimizeStreamResponse, OptimizeOptimizeSlotAlternativeData, OptimizeOptimizeSlotAlternativeResponse, OptimizeQuerySnapshotData, OptimizeQuerySnapshotResponse, OptimizeListBuildSummariesResponse, OptimizeMarkChangeReviewedData, OptimizeMarkChangeReviewedResponse, OptimizeListLoadoutRanksData, OptimizeListLoadoutRanksResponse, PrivateCreateUserData, PrivateCreateUserResponse, SavesUploadSaveData, SavesUploadSaveResponse, SavesUploadSaveStreamData, SavesUploadSaveStreamResponse, SavesGetSaveStatusResponse, SavesListProfilesResponse, SavesGetProfileRelicsData, SavesGetProfileRelicsResponse, SavesGetProfileLoadoutsData, SavesGetProfileLoadoutsResponse, SavesExportSaveData, SavesExportSaveResponse, SavesExportAddRelicsData, SavesExportAddRelicsResponse, SavesRitesPlanData, SavesRitesPlanResponse, SavesRitesPlanStreamData, SavesRitesPlanStreamResponse, SavesExportLoadoutsData, SavesExportLoadoutsResponse, UsersReadUsersData, UsersReadUsersResponse, UsersCreateUserData, UsersCreateUserResponse, UsersReadUserMeResponse, UsersDeleteUserMeResponse, UsersUpdateUserMeData, UsersUpdateUserMeResponse, UsersUpdatePasswordMeData, UsersUpdatePasswordMeResponse, UsersRegisterUserData, UsersRegisterUserResponse, UsersReadUserByIdData, UsersReadUserByIdResponse, UsersUpdateUserData, UsersUpdateUserResponse, UsersDeleteUserData, UsersDeleteUserResponse, UtilsTestEmailData, UtilsTestEmailResponse, UtilsHealthCheckResponse } from './types.gen';
 
 export class BuildsService {
     /**
@@ -618,6 +618,40 @@ export class OptimizeService {
             path: {
                 build_id: data.buildId
             },
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+    
+    /**
+     * List Loadout Ranks
+     * Tell each build which of its optimizer results is already saved in-game.
+     *
+     * Answers, per build, "is what I actually have equipped still the optimizer's
+     * pick?" — rank 1 means the saved loadout IS the top suggestion, rank 3 means
+     * the optimizer has since found two better arrangements.
+     *
+     * Identity is content-based (vessel + relic multiset), the same relation the
+     * optimize page's "Saved" badge uses, so a preset holding the same relics in
+     * swapped same-colour slots or a different physical copy of a duplicate still
+     * counts.  Builds whose loadouts match nothing are simply omitted: silence is
+     * the honest answer for "never saved this build" and "fell out of the top N"
+     * alike, and neither deserves a badge.
+     *
+     * Reads only ``top_match_keys`` from each snapshot — never the heavy
+     * full_results blob — so this stays cheap enough for a list page.
+     * @param data The data for the request.
+     * @param data.requestBody
+     * @returns LoadoutRank Successful Response
+     * @throws ApiError
+     */
+    public static listLoadoutRanks(data: OptimizeListLoadoutRanksData): CancelablePromise<OptimizeListLoadoutRanksResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/api/v1/optimize/loadout-ranks',
+            body: data.requestBody,
+            mediaType: 'application/json',
             errors: {
                 422: 'Validation Error'
             }

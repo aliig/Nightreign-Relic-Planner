@@ -97,6 +97,7 @@ from nrplanner.changes import (
     relic_fingerprint,
     relics_signature,
     relics_signature_from_fingerprints,
+    serialize_match_keys,
     serialize_top_layouts,
 )
 from nrplanner.models import (
@@ -739,6 +740,9 @@ def _apply_snapshot_for_stream(
             change.cause = None
 
     top_layouts = serialize_top_layouts(results)
+    # See optimize.py: result identities in display order for the "saved as
+    # loadout #N" badge on the builds page.
+    top_match_keys = serialize_match_keys(results)
     full_results = [r.model_dump(mode="json") for r in results]
     best_score = max((r.total_score for r in results), default=0)
     any_truncated = any(r.search_truncated for r in results)
@@ -757,6 +761,7 @@ def _apply_snapshot_for_stream(
             top_n=top_n,
             max_per_vessel=max_per_vessel,
             top_layouts=top_layouts,
+            top_match_keys=top_match_keys,
             full_results=full_results,
             best_score=best_score,
             any_truncated=any_truncated,
@@ -778,6 +783,7 @@ def _apply_snapshot_for_stream(
         snap.top_n = top_n
         snap.max_per_vessel = max_per_vessel
         snap.top_layouts = top_layouts
+        snap.top_match_keys = top_match_keys
         snap.full_results = full_results
         snap.best_score = best_score
         snap.any_truncated = any_truncated

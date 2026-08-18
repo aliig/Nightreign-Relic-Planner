@@ -543,6 +543,16 @@ class OptimizationSnapshot(SQLModel, table=True):
         default_factory=list,
         sa_column=Column(JSON, nullable=False, server_default="[]"),
     )
+    # Match key per entry of full_results, SAME order (index 0 = top card), so
+    # an in-game loadout preset can be recognised as "optimizer result #N"
+    # without loading the heavy full_results blob.  Empty on rows written before
+    # the column existed: the badge simply stays hidden until that build's next
+    # optimize refills it.  Not a freshness input — an empty list can never make
+    # a cache silently miss, it only withholds one display badge.
+    top_match_keys: list = Field(
+        default_factory=list,
+        sa_column=Column(JSON, nullable=False, server_default="[]"),
+    )
     best_score: int = 0
     any_truncated: bool = False
     last_change: Optional[dict] = Field(

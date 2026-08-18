@@ -315,6 +315,41 @@ export type HTTPValidationError = {
     detail?: Array<ValidationError>;
 };
 
+/**
+ * A build whose in-game loadout reproduces one of its optimizer results.
+ */
+export type LoadoutRank = {
+    build_id: string;
+    rank: number;
+    total: number;
+    loadout_index: number;
+    loadout_name: string;
+};
+
+export type LoadoutRankRequest = {
+    profile_id: string;
+    staged_sells?: Array<(number)>;
+    staged_mints?: Array<StagedMint>;
+    loadouts?: (Array<LoadoutRef> | null);
+};
+
+/**
+ * One in-game loadout preset to look for among a build's results.
+ *
+ * Sent by the client rather than read from the profile so the LIVE preset
+ * list is what gets matched — a setup saved from the optimizer but not yet
+ * exported is staged client-side, and a badge that ignored it would tell the
+ * user their fresh save isn't there.  Omit the list entirely to match against
+ * the presets exactly as they sit in the uploaded save.
+ */
+export type LoadoutRef = {
+    index: number;
+    character: string;
+    name?: string;
+    vessel_id: number;
+    ga_handles?: Array<(number)>;
+};
+
 export type LoadoutsPublic = {
     data: Array<ParsedLoadoutData>;
     count: number;
@@ -914,6 +949,12 @@ export type OptimizeMarkChangeReviewedData = {
 };
 
 export type OptimizeMarkChangeReviewedResponse = (void);
+
+export type OptimizeListLoadoutRanksData = {
+    requestBody: LoadoutRankRequest;
+};
+
+export type OptimizeListLoadoutRanksResponse = (Array<LoadoutRank>);
 
 export type PrivateCreateUserData = {
     requestBody: PrivateUserCreate;

@@ -1385,6 +1385,115 @@ export const HTTPValidationErrorSchema = {
     title: 'HTTPValidationError'
 } as const;
 
+export const LoadoutRankSchema = {
+    properties: {
+        build_id: {
+            type: 'string',
+            title: 'Build Id'
+        },
+        rank: {
+            type: 'integer',
+            title: 'Rank'
+        },
+        total: {
+            type: 'integer',
+            title: 'Total'
+        },
+        loadout_index: {
+            type: 'integer',
+            title: 'Loadout Index'
+        },
+        loadout_name: {
+            type: 'string',
+            title: 'Loadout Name'
+        }
+    },
+    type: 'object',
+    required: ['build_id', 'rank', 'total', 'loadout_index', 'loadout_name'],
+    title: 'LoadoutRank',
+    description: 'A build whose in-game loadout reproduces one of its optimizer results.'
+} as const;
+
+export const LoadoutRankRequestSchema = {
+    properties: {
+        profile_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Profile Id'
+        },
+        staged_sells: {
+            items: {
+                type: 'integer'
+            },
+            type: 'array',
+            title: 'Staged Sells'
+        },
+        staged_mints: {
+            items: {
+                '$ref': '#/components/schemas/StagedMint'
+            },
+            type: 'array',
+            title: 'Staged Mints'
+        },
+        loadouts: {
+            anyOf: [
+                {
+                    items: {
+                        '$ref': '#/components/schemas/LoadoutRef'
+                    },
+                    type: 'array'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Loadouts'
+        }
+    },
+    type: 'object',
+    required: ['profile_id'],
+    title: 'LoadoutRankRequest'
+} as const;
+
+export const LoadoutRefSchema = {
+    properties: {
+        index: {
+            type: 'integer',
+            title: 'Index'
+        },
+        character: {
+            type: 'string',
+            title: 'Character'
+        },
+        name: {
+            type: 'string',
+            title: 'Name',
+            default: ''
+        },
+        vessel_id: {
+            type: 'integer',
+            title: 'Vessel Id'
+        },
+        ga_handles: {
+            items: {
+                type: 'integer'
+            },
+            type: 'array',
+            title: 'Ga Handles'
+        }
+    },
+    type: 'object',
+    required: ['index', 'character', 'vessel_id'],
+    title: 'LoadoutRef',
+    description: `One in-game loadout preset to look for among a build's results.
+
+Sent by the client rather than read from the profile so the LIVE preset
+list is what gets matched — a setup saved from the optimizer but not yet
+exported is staged client-side, and a badge that ignored it would tell the
+user their fresh save isn't there.  Omit the list entirely to match against
+the presets exactly as they sit in the uploaded save.`
+} as const;
+
 export const LoadoutsPublicSchema = {
     properties: {
         data: {

@@ -667,13 +667,20 @@ export type LoadoutOpBuckets = {
   deleteByIndex: Map<number, string>
   overwriteByIndex: Map<
     number,
-    { id: string; ga_handles: number[]; name?: string }
+    {
+      id: string
+      ga_handles: number[]
+      name?: string
+      character: string
+      vessel_id: number
+    }
   >
   adds: Array<{
     id: string
     name: string
     character: string
     vesselName?: string
+    vessel_id: number
     ga_handles: number[]
   }>
   resetVesselsId?: string
@@ -696,6 +703,8 @@ export function bucketLoadoutOps(s: SlotPending): LoadoutOpBuckets {
         id: op.id,
         ga_handles: op.ga_handles,
         name: op.name,
+        character: op.character,
+        vessel_id: op.vessel_id,
       })
     else if (op.kind === "add")
       out.adds.push({
@@ -703,10 +712,71 @@ export function bucketLoadoutOps(s: SlotPending): LoadoutOpBuckets {
         name: op.name,
         character: op.character,
         vesselName: op.vesselName,
+        vessel_id: op.vessel_id,
         ga_handles: op.ga_handles,
       })
     else if (op.kind === "reset_vessels") out.resetVesselsId = op.id
     else if (op.kind === "reset_presets") out.resetPresetsId = op.id
+  }
+  return out
+}
+
+/** An in-game loadout preset as it stands RIGHT NOW: saved presets with the
+ * staged edits applied, plus setups saved from the optimizer but not yet
+ * exported. */
+export type LiveLoadout = {
+  /** Preset index in the save; -1 for a staged add, which has no slot yet. */
+  index: number
+  character: string
+  name: string
+  vessel_id: number
+  ga_handles: number[]
+}
+
+/**
+ * The loadouts the user effectively has, composed with the staged diff — the
+ * same world the Loadouts page renders: staged deletes drop out, renames and
+ * overwrites are applied in place, a staged full reset leaves only the staged
+ * adds, and staged adds are listed as real loadouts.
+ *
+ * Any surface that asks "does this setup exist in my game?" must read through
+ * here: a loadout saved from the optimizer lives only in the staged diff until
+ * the user exports, and answering from the raw save would tell them the setup
+ * they just saved isn't there.
+ */
+export function effectiveLoadouts(
+  existing: Array<{
+    index: number
+    character: string
+    name: string
+    vessel_id: number
+    ga_handles?: number[] | null
+  }>,
+  s: SlotPending,
+): LiveLoadout[] {
+  const b = bucketLoadoutOps(s)
+  const out: LiveLoadout[] = []
+  if (b.resetPresetsId === undefined) {
+    for (const e of existing) {
+      if (b.deleteByIndex.has(e.index)) continue
+      const ov = b.overwriteByIndex.get(e.index)
+      out.push({
+        index: e.index,
+        character: ov?.character ?? e.character,
+        name: b.renameByIndex.get(e.index)?.name ?? e.name,
+        vessel_id: ov?.vessel_id ?? e.vessel_id,
+        ga_handles: ov ? ov.ga_handles : (e.ga_handles ?? []),
+      })
+    }
+  }
+  for (const a of b.adds) {
+    out.push({
+      index: -1,
+      character: a.character,
+      name: a.name,
+      vessel_id: a.vessel_id,
+      ga_handles: a.ga_handles,
+    })
   }
   return out
 }

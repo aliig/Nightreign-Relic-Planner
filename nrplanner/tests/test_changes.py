@@ -7,11 +7,14 @@ from nrplanner.changes import (
     build_signature,
     diff_results,
     fingerprint_owned,
+    layout_match_key,
     multiset_diff,
     relevant_relics_signature,
     relevant_to_build,
     relic_fingerprint,
     relics_signature,
+    result_match_key,
+    serialize_match_keys,
     serialize_top_layouts,
 )
 from nrplanner.models import (
@@ -311,3 +314,61 @@ class TestStillOwned:
         change = diff_results(old, [], owned=[kept])
         assert {(r.real_id, r.still_owned) for r in change.left} == {
             (1, True), (2, False)}
+
+
+class TestMatchKeys:
+    """Result identity used to recognise an in-game loadout as "result #N"."""
+
+    def test_slot_order_does_not_change_identity(self):
+        a, b = _relic(1, [10]), _relic(2, [20])
+        assert result_match_key(_vessel([a, b], 50)) == result_match_key(
+            _vessel([b, a], 50))
+
+    def test_duplicate_copies_are_interchangeable(self):
+        # Two physical copies of the same relic: swapping which copy sits in
+        # which slot is not a different setup.
+        copy_a, copy_b = _relic(1, [10]), _relic(1, [10])
+        copy_b.ga_handle = copy_a.ga_handle + 1
+        assert result_match_key(_vessel([copy_a, _relic(2, [20])], 50)) == (
+            result_match_key(_vessel([copy_b, _relic(2, [20])], 50)))
+
+    def test_score_and_vessel_name_do_not_affect_identity(self):
+        # Only the vessel and its relics identify a setup — a rescored result
+        # for the same arrangement must still match a saved loadout.
+        a = _relic(1, [10])
+        assert result_match_key(_vessel([a], 50)) == result_match_key(
+            _vessel([a], 999))
+
+    def test_different_vessel_is_a_different_setup(self):
+        a = _relic(1, [10])
+        assert result_match_key(_vessel([a], 50, vessel_id=1)) != (
+            result_match_key(_vessel([a], 50, vessel_id=2)))
+
+    def test_different_relics_are_different_setups(self):
+        assert result_match_key(_vessel([_relic(1, [10])], 50)) != (
+            result_match_key(_vessel([_relic(1, [11])], 50)))
+
+    def test_empty_slots_are_ignored(self):
+        # A 3-slot result holding one relic and a saved preset with the same
+        # relic plus two empty slots are the same setup.
+        a = _relic(1, [10])
+        assert result_match_key(_vessel([a], 50)) == layout_match_key(
+            1, [fingerprint_owned(a)])
+
+    def test_serialize_keeps_display_order_not_score_order(self):
+        # The rank a user sees is the results' own order (covering-first), so
+        # the keys must NOT be re-sorted by score the way top_layouts is.
+        low, high = _vessel([_relic(1, [10])], 10), _vessel([_relic(2, [20])], 90)
+        keys = serialize_match_keys([low, high])
+        assert keys == [result_match_key(low), result_match_key(high)]
+
+    def test_key_matches_a_loadout_built_from_handles(self):
+        # The shape the endpoint uses: relic fingerprints resolved from a
+        # preset's ga_handles produce the same key as the result itself.
+        a, b = _relic(1, [10]), _relic(2, [20, 21])
+        result = _vessel([a, b], 50)
+        by_handle = {r.ga_handle: fingerprint_owned(r) for r in (a, b)}
+        preset_handles = [b.ga_handle, 0, a.ga_handle]
+        key = layout_match_key(
+            1, [by_handle[h] for h in preset_handles if h != 0])
+        assert key == result_match_key(result)
