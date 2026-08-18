@@ -84,6 +84,7 @@ import {
 import {
   changeSummaryText,
   describeBuildChange,
+  isChangeNews,
   rawScoreTooltip,
 } from "@/lib/buildChange"
 import { CHARACTER_NAMES } from "@/lib/constants"
@@ -647,7 +648,7 @@ function SuggestedBuildsSection() {
 
 // --- Authenticated build section (API-backed) ---
 
-// --- "Changes since your last save" — durable, server-backed change list ---
+// --- "Changes since you last looked" — durable, server-backed change list ---
 
 function ChangeRow({
   buildId,
@@ -713,15 +714,16 @@ function ChangesSinceLastSave({
   onDismiss: (buildId: string) => void
 }) {
   const effectMap = useEffectMap()
-  // Unread, relic-caused changes worth surfacing, deduped per build. Build edits
-  // re-baseline silently; only an uploaded save populates this list.
+  // Unread changes worth surfacing, deduped per build: a newer save, or relics
+  // bought in Relic Rites (owned, but still owed to the save file). Build edits
+  // and game-data bumps re-baseline silently and never appear here.
   const seen = new Set<string>()
   const rows: { buildId: string; change: BuildChange }[] = []
   for (const s of summaries) {
     if (s.reviewed !== false || !s.build_id || seen.has(s.build_id)) continue
     const change = s.change
     if (!change) continue
-    if (change.cause !== "relics" && change.cause !== "mixed") continue
+    if (!isChangeNews(change)) continue
     if (!describeBuildChange(change)) continue
     seen.add(s.build_id)
     rows.push({ buildId: s.build_id, change })
@@ -731,7 +733,7 @@ function ChangesSinceLastSave({
   return (
     <Card className="px-6 py-4">
       <div className="flex items-center justify-between gap-2">
-        <h2 className="text-sm font-semibold">Changes since your last save</h2>
+        <h2 className="text-sm font-semibold">Changes since you last looked</h2>
         <Button
           variant="ghost"
           size="sm"

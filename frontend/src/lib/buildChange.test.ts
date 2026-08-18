@@ -9,8 +9,10 @@ import { describe, expect, it } from "vitest"
 import type { BuildChange, RelicRef } from "@/client"
 import {
   type ChangeDescription,
+  changeCauses,
   changeSummaryText,
   describeBuildChange,
+  isChangeNews,
   rawScoreTooltip,
   relicNames,
 } from "./buildChange"
@@ -241,5 +243,95 @@ describe("describeBuildChange", () => {
 
   it("relicNames is empty when no relics moved", () => {
     expect(relicNames(undefined)).toBe("")
+  })
+})
+
+/**
+ * Which changes are the user's news and which are an echo of their own edit.
+ * A committed Relic Rites purchase counts as news — the Murk is spent, the
+ * relic is owned — where it used to be suppressed as a hypothetical.
+ */
+describe("change causes", () => {
+  it("reads the causes list", () => {
+    expect(changeCauses(change({ causes: ["relics", "staged"] }))).toEqual([
+      "relics",
+      "staged",
+    ])
+  })
+
+  it("falls back to the legacy single cause on older snapshots", () => {
+    expect(changeCauses(change({ cause: "relics" }))).toEqual(["relics"])
+    // "mixed" carried no detail; the surfaces already read it as save-driven.
+    expect(changeCauses(change({ cause: "mixed" }))).toEqual(["relics"])
+    expect(changeCauses(change({}))).toEqual([])
+  })
+
+  it("treats a newer save and Rites purchases as news", () => {
+    expect(isChangeNews(change({ causes: ["relics"] }))).toBe(true)
+    expect(isChangeNews(change({ causes: ["staged"] }))).toBe(true)
+    expect(isChangeNews(change({ causes: ["relics", "staged"] }))).toBe(true)
+  })
+
+  it("stays silent for the user's own edits and for no movement", () => {
+    expect(isChangeNews(change({ causes: ["build_edit"] }))).toBe(false)
+    expect(isChangeNews(change({ causes: ["game_data"] }))).toBe(false)
+    expect(isChangeNews(change({ causes: [] }))).toBe(false)
+    expect(isChangeNews(null)).toBe(false)
+  })
+
+  it("a build edit alongside real news is still news", () => {
+    expect(isChangeNews(change({ causes: ["relics", "build_edit"] }))).toBe(
+      true,
+    )
+  })
+})
+
+describe("staged (Relic Rites) relics in a change", () => {
+  const bought = (name: string): RelicRef => ({
+    ...relic(name, 7),
+    staged: true,
+  })
+
+  it("says the relics are still owed to the save file", () => {
+    const d = describeBuildChange(
+      change({
+        status: "improved",
+        best_before: 100,
+        best_after: 150,
+        entered: [bought("Deep Burning Scene")],
+        causes: ["staged"],
+      }),
+    ) as ChangeDescription
+    expect(d.headline).toBe("50% stronger")
+    expect(d.note).toContain("Relic Rites")
+    expect(d.note).toContain("export")
+  })
+
+  it("counts them, and keeps any existing note", () => {
+    const d = describeBuildChange(
+      change({
+        status: "degraded",
+        best_before: 200,
+        best_after: 150,
+        entered: [bought("A"), bought("B")],
+        left: [relic("Old", 2, true)],
+        causes: ["relics", "staged"],
+      }),
+    ) as ChangeDescription
+    expect(d.note).toContain("still in your save")
+    expect(d.note).toContain("2 relics are")
+  })
+
+  it("says nothing when every relic came from the save", () => {
+    const d = describeBuildChange(
+      change({
+        status: "improved",
+        best_before: 100,
+        best_after: 150,
+        entered: [relic("From the game")],
+        causes: ["relics"],
+      }),
+    ) as ChangeDescription
+    expect(d.note).toBeUndefined()
   })
 })

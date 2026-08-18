@@ -8,6 +8,7 @@ from nrplanner.changes import (
     diff_results,
     fingerprint_owned,
     layout_match_key,
+    mark_staged_refs,
     multiset_diff,
     relevant_relics_signature,
     relevant_to_build,
@@ -372,3 +373,58 @@ class TestMatchKeys:
         key = layout_match_key(
             1, [by_handle[h] for h in preset_handles if h != 0])
         assert key == result_match_key(result)
+
+
+class TestMarkStagedRefs:
+    """Relics bought in Relic Rites are owned but not in the save file yet, so
+    a change list has to name which half is which."""
+
+    def _change(self):
+        from nrplanner.models import BuildChange, RelicRef
+
+        return BuildChange(
+            status="improved",
+            entered=[
+                RelicRef(real_id=10, name="Bought", effects=[1, EMPTY, EMPTY],
+                         curses=[EMPTY, EMPTY, EMPTY]),
+                RelicRef(real_id=20, name="From the save",
+                         effects=[2, EMPTY, EMPTY],
+                         curses=[EMPTY, EMPTY, EMPTY]),
+            ],
+        )
+
+    def test_flags_only_the_staged_relic(self):
+        change = self._change()
+        mark_staged_refs(change, [relic_fingerprint(10, [1], [])])
+        assert [r.staged for r in change.entered] == [True, False]
+
+    def test_matches_by_content_not_identity(self):
+        """Mints carry synthetic handles and the game renumbers real ones, so
+        the match has to be on content — a different copy of the same relic
+        content is the same relic for this purpose."""
+        change = self._change()
+        mark_staged_refs(change, [relic_fingerprint(10, [1, EMPTY, EMPTY], [])])
+        assert change.entered[0].staged is True
+
+    def test_a_different_effect_is_a_different_relic(self):
+        change = self._change()
+        mark_staged_refs(change, [relic_fingerprint(10, [999], [])])
+        assert [r.staged for r in change.entered] == [False, False]
+
+    def test_empty_staged_list_touches_nothing(self):
+        change = self._change()
+        mark_staged_refs(change, [])
+        assert [r.staged for r in change.entered] == [False, False]
+
+    def test_covers_departed_and_pinned_relics_too(self):
+        """A relic can be bought and then dropped by the optimizer, or be a
+        pin that a purchase displaced — both still need the flag."""
+        from nrplanner.models import BuildChange, RelicRef
+
+        ref = RelicRef(real_id=10, name="Bought", effects=[1, EMPTY, EMPTY],
+                       curses=[EMPTY, EMPTY, EMPTY])
+        change = BuildChange(status="degraded", left=[ref],
+                             pinned_removed=[ref.model_copy()])
+        mark_staged_refs(change, [relic_fingerprint(10, [1], [])])
+        assert change.left[0].staged is True
+        assert change.pinned_removed[0].staged is True

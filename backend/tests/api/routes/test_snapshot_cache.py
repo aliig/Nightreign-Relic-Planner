@@ -601,9 +601,11 @@ class TestStagedSnapshotCache:
         normal_user_token_headers: dict[str, str],
         db: Session,
     ) -> None:
-        """pure→staged and staged→pure runs attribute the inventory delta to
-        the staged diff (cause="staged"), keeping the save-to-save change
-        narration silent; pure→pure relic changes stay cause="relics"."""
+        """Causes name what moved since the BASELINE, not since the last run:
+        a staged diff attributes to "staged", dropping it again is a return to
+        the baseline (nothing to say), and a real inventory change is
+        "relics" — which is compared on the save's own hash, so a staged
+        purchase can never masquerade as a newer save."""
         user = get_test_user(db)
         profile = seed_profile_with_relics(db, user.id, with_hash=True)
         build = create_build(client, normal_user_token_headers)
@@ -614,7 +616,7 @@ class TestStagedSnapshotCache:
         )
         assert first.status_code == 200, first.text
 
-        def _last_change() -> dict | None:
+        def _snap() -> OptimizationSnapshot:
             row = db.exec(
                 select(OptimizationSnapshot).where(
                     OptimizationSnapshot.build_id == uuid.UUID(build["id"]),
@@ -622,33 +624,148 @@ class TestStagedSnapshotCache:
             ).first()
             assert row is not None
             db.refresh(row)
-            return row.last_change
+            return row
 
-        # pure → staged: the relics delta is the staged sell.
+        def _last_change() -> dict | None:
+            return _snap().last_change
+
+        # pure → staged: the inventory delta is the staged sell alone.
         staged_run = self._run(
             client, normal_user_token_headers, build["id"], str(profile.id),
             staged_sells=[sold],
         )
         assert staged_run.status_code == 200, staged_run.text
         change = _last_change()
-        assert change is not None and change["cause"] == "staged", change
+        assert change is not None and change["causes"] == ["staged"], change
+        assert change["cause"] == "staged", change
 
-        # staged → pure: the delta is the staged diff being dropped.
+        # A staged purchase is news the user should see, so it must NOT quietly
+        # mark the build reviewed (which is how an unread upload change used to
+        # get wiped by a trip through Relic Rites).
+        assert _snap().reviewed is False
+
+        # staged → pure: back to exactly the baseline state, so there is
+        # nothing left to tell the user.
         pure_run = self._run(
             client, normal_user_token_headers, build["id"], str(profile.id)
         )
         assert pure_run.status_code == 200, pure_run.text
         change = _last_change()
-        assert change is not None and change["cause"] == "staged", change
+        assert change is not None and change["causes"] == [], change
+        assert change["cause"] is None, change
 
-        # pure → pure with a real inventory change stays cause="relics".
+        # pure → pure with a real inventory change is "relics".
         TestSnapshotCache._add_relic_and_rehash(db, profile, effect=100)
         relics_run = self._run(
             client, normal_user_token_headers, build["id"], str(profile.id)
         )
         assert relics_run.status_code == 200, relics_run.text
         change = _last_change()
-        assert change is not None and change["cause"] == "relics", change
+        assert change is not None and change["causes"] == ["relics"], change
+
+    def test_save_change_and_staged_purchase_compose_into_one_change(
+        self,
+        client: TestClient,
+        normal_user_token_headers: dict[str, str],
+        db: Session,
+    ) -> None:
+        """The workflow the sticky baseline exists for: a newer save arrives,
+        and before reading the change the user buys relics in Relic Rites.  The
+        second run must still measure from the baseline — naming BOTH causes —
+        rather than re-baselining on the save and reporting only the purchase.
+        """
+        user = get_test_user(db)
+        profile = seed_profile_with_relics(db, user.id, with_hash=True)
+        build = create_build(client, normal_user_token_headers)
+
+        first = self._run(
+            client, normal_user_token_headers, build["id"], str(profile.id)
+        )
+        assert first.status_code == 200, first.text
+
+        def _snap() -> OptimizationSnapshot:
+            row = db.exec(
+                select(OptimizationSnapshot).where(
+                    OptimizationSnapshot.build_id == uuid.UUID(build["id"]),
+                )
+            ).first()
+            assert row is not None
+            db.refresh(row)
+            return row
+
+        baseline_score = _snap().baseline["best_score"]
+
+        # A newer save lands (relic added), and the build re-optimizes.
+        TestSnapshotCache._add_relic_and_rehash(db, profile, effect=100)
+        save_run = self._run(
+            client, normal_user_token_headers, build["id"], str(profile.id)
+        )
+        assert save_run.status_code == 200, save_run.text
+        assert _snap().last_change["causes"] == ["relics"]
+
+        # ...then the user spends Murk in Relic Rites before reading it.
+        mint = _legal_mint(handle=-1)
+        rites_run = self._run(
+            client, normal_user_token_headers, build["id"], str(profile.id),
+            staged_mints=[mint],
+        )
+        assert rites_run.status_code == 200, rites_run.text
+        change = _snap().last_change
+        assert change["causes"] == ["relics", "staged"], change
+        assert change["cause"] == "mixed", change
+        # Still measured from the state the user last saw, not from the save
+        # run that was never read.
+        assert change["best_before"] == baseline_score, change
+        assert _snap().baseline["best_score"] == baseline_score
+
+    def test_review_advances_the_baseline(
+        self,
+        client: TestClient,
+        normal_user_token_headers: dict[str, str],
+        db: Session,
+    ) -> None:
+        """Reviewing is the only acknowledgement of news, so it — and only it —
+        moves the baseline forward: the same state re-run afterwards has
+        nothing left to report."""
+        user = get_test_user(db)
+        profile = seed_profile_with_relics(db, user.id, with_hash=True)
+        build = create_build(client, normal_user_token_headers)
+
+        assert self._run(
+            client, normal_user_token_headers, build["id"], str(profile.id)
+        ).status_code == 200
+
+        TestSnapshotCache._add_relic_and_rehash(db, profile, effect=100)
+        assert self._run(
+            client, normal_user_token_headers, build["id"], str(profile.id)
+        ).status_code == 200
+
+        def _snap() -> OptimizationSnapshot:
+            row = db.exec(
+                select(OptimizationSnapshot).where(
+                    OptimizationSnapshot.build_id == uuid.UUID(build["id"]),
+                )
+            ).first()
+            assert row is not None
+            db.refresh(row)
+            return row
+
+        assert _snap().last_change["causes"] == ["relics"]
+        assert _snap().reviewed is False
+
+        seen = client.post(
+            f"/api/v1/optimize/summaries/{build['id']}/reviewed",
+            headers=normal_user_token_headers,
+        )
+        assert seen.status_code == 204, seen.text
+        assert _snap().reviewed is True
+
+        assert self._run(
+            client, normal_user_token_headers, build["id"], str(profile.id)
+        ).status_code == 200
+        change = _snap().last_change
+        assert change["causes"] == [], change
+        assert change["status"] == "unchanged", change
 
 
 @pytest.mark.usefixtures("override_game_data")

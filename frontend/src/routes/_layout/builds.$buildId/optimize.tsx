@@ -47,7 +47,13 @@ import { isLoggedIn } from "@/hooks/useAuth"
 import useCustomToast from "@/hooks/useCustomToast"
 import { toInlineBuild, useLocalBuilds } from "@/hooks/useLocalBuilds"
 import { getAnonUploadMeta, useSaveStatus } from "@/hooks/useSaveStatus"
-import { stagedFields, stagedKey, usePendingSlot } from "@/lib/pendingChanges"
+import {
+  effectiveLoadouts,
+  effectiveRelicRows,
+  stagedFields,
+  stagedKey,
+  usePendingSlot,
+} from "@/lib/pendingChanges"
 import { relicContentKey } from "@/lib/savedLoadoutMatch"
 
 /** Amber note shown while displayed results predate the current staged diff.
@@ -110,17 +116,33 @@ function AuthOptimizeForm({ buildId }: { buildId: string }) {
 
   // Resolves saved-loadout ga_handles to relic contents so the "Saved" badge
   // can also match content-equivalent arrangements (swapped same-color slots /
-  // duplicate copies). Handle→content is fixed within one save, so the RAW
-  // relic rows are the correct join source (same as the Loadouts page).
+  // duplicate copies).
   const { data: profileRelicsData } = useQuery({
     queryKey: ["relics", profileId],
     queryFn: () => SavesService.getProfileRelics({ profileId }),
     enabled: !!profileId,
     staleTime: 5 * 60 * 1000,
   })
+
+  const pinnedHandles = new Set<number>(selectedBuild?.pinned_relics ?? [])
+  const hasRequirements =
+    (selectedBuild?.required_effects?.length ?? 0) > 0 ||
+    (selectedBuild?.required_families?.length ?? 0) > 0
+  const slotIndex = profiles.find((p) => p.id === profileId)?.slot_index ?? null
+  const pending = usePendingSlot(slotIndex)
+  const sig = stagedKey(pending)
+
+  // Handle→content join for the badge, over the EFFECTIVE inventory: staged
+  // sells drop out (a loadout still holding one becomes unverifiable and is
+  // never content-matched) and Rites mints join under their synthetic negative
+  // handles, so a setup built from a just-bought relic can still match.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: sig covers pending's staged content
   const relicContentByHandle = useMemo(() => {
     const m = new Map<number, string>()
-    for (const r of profileRelicsData?.data ?? []) {
+    for (const r of effectiveRelicRows(
+      profileRelicsData?.data ?? [],
+      pending,
+    )) {
       m.set(
         Number(r.ga_handle),
         relicContentKey({
@@ -131,15 +153,17 @@ function AuthOptimizeForm({ buildId }: { buildId: string }) {
       )
     }
     return m
-  }, [profileRelicsData])
+  }, [profileRelicsData, sig])
 
-  const pinnedHandles = new Set<number>(selectedBuild?.pinned_relics ?? [])
-  const hasRequirements =
-    (selectedBuild?.required_effects?.length ?? 0) > 0 ||
-    (selectedBuild?.required_families?.length ?? 0) > 0
-  const slotIndex = profiles.find((p) => p.id === profileId)?.slot_index ?? null
-  const pending = usePendingSlot(slotIndex)
-  const sig = stagedKey(pending)
+  // The in-game preset list as it stands RIGHT NOW — staged renames/deletes/
+  // overwrites applied, setups saved from the optimizer included. Reading the
+  // raw server list here would badge a deleted loadout as still saved, show a
+  // pre-rename name, and miss a loadout the user just saved.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: sig covers pending's staged content
+  const liveLoadouts = useMemo(
+    () => effectiveLoadouts(loadoutsData?.data ?? [], pending),
+    [loadoutsData, sig],
+  )
   // sig fully determines the staged wire fields, so it's the only real dep.
   // biome-ignore lint/correctness/useExhaustiveDependencies: sig covers pending's staged content
   const staged = useMemo(() => stagedFields(pending), [sig])
@@ -356,13 +380,13 @@ function AuthOptimizeForm({ buildId }: { buildId: string }) {
                   return {
                     slotIndex: p.slot_index,
                     character: selectedBuild.character,
-                    existing: (loadoutsData?.data ?? [])
+                    existing: liveLoadouts
                       .filter((l) => l.character === selectedBuild.character)
                       .map((l) => ({
                         index: l.index,
                         name: l.name,
                         vessel_id: l.vessel_id,
-                        ga_handles: l.ga_handles ?? [],
+                        ga_handles: l.ga_handles,
                       })),
                     relicContentByHandle,
                   }
@@ -484,6 +508,24 @@ function AnonOptimizeForm({ buildId }: { buildId: string }) {
     for (const r of relics) m.set(Number(r.ga_handle), relicContentKey(r))
     return m
   }, [relics])
+
+  // Presets as they stand right now, staged edits applied — same rule as the
+  // authenticated form: the badge must answer from the live world, not the save.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: sig covers pending's staged content
+  const liveLoadouts = useMemo(
+    () =>
+      effectiveLoadouts(
+        ((profile as any)?.presets ?? []) as Array<{
+          index: number
+          name: string
+          character: string
+          vessel_id: number
+          ga_handles: number[]
+        }>,
+        pending,
+      ),
+    [profile, sig],
+  )
 
   const inlineBuild = useMemo(
     () => (build ? toInlineBuild(build) : null),
@@ -675,21 +717,13 @@ function AnonOptimizeForm({ buildId }: { buildId: string }) {
                     ? {
                         slotIndex: Number(profile.slot_index),
                         character: build.character,
-                        existing: (
-                          ((profile as any)?.presets ?? []) as Array<{
-                            index: number
-                            name: string
-                            character: string
-                            vessel_id: number
-                            ga_handles: number[]
-                          }>
-                        )
+                        existing: liveLoadouts
                           .filter((p) => p.character === build.character)
                           .map((p) => ({
                             index: p.index,
                             name: p.name,
                             vessel_id: p.vessel_id,
-                            ga_handles: p.ga_handles ?? [],
+                            ga_handles: p.ga_handles,
                           })),
                         relicContentByHandle,
                       }

@@ -5,7 +5,7 @@ import queue
 import tempfile
 import threading
 import uuid
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -47,12 +47,20 @@ from app.models import (
     ParsedRelicData,
     Relic,
     RelicDelta,
+    SaveComparison,
     RelicPublic,
     RelicsPublic,
     SaveUpload,
     SaveStatusPublic,
     StagedMint,
     UploadResponse,
+)
+from app.core.snapshot_baseline import (
+    baseline_layouts,
+    causes_since,
+    legacy_cause,
+    make_baseline,
+    snapshot_inputs,
 )
 from app.core.staged import effective_slot_state
 from nrplanner import (
@@ -204,11 +212,76 @@ def _same_account(old_owner_id: str | None, new_owner_id: str | None) -> bool:
     return old_owner_id == new_owner_id
 
 
+def _account_reason(old_owner_id: str | None, new_owner_id: str | None) -> str:
+    """Why the account check reached its verdict — for the upload summary.
+
+    Suppression used to be silent, which reads exactly like "nothing changed":
+    a player testing a friend's save, or on PS4 where no owner anchor is
+    readable, had no way to tell whether the comparison ran at all.
+    """
+    if old_owner_id is not None and new_owner_id is not None:
+        return "ok" if old_owner_id == new_owner_id else "different_account"
+    # A save whose owner we cannot read is compared anyway (never hide a real
+    # change) but the summary says the identity is unproven.
+    return "unverified_owner"
+
+
+# A slot whose relics have NOTHING in common with the previous save is a
+# different character, not a changed one: real play keeps almost the whole
+# inventory between sessions, and even a heavy cull leaves overlap.  Below this
+# many previous relics the signal is too weak to act on (a brand-new character
+# legitimately has a handful, and losing them all is plausible).
+_RESTART_MIN_OLD_RELICS = 10
+
+
+def _restarted_slots(
+    old_by_slot: dict[int, list], new_by_slot: dict[int, list]
+) -> set[int]:
+    """Slots holding a DIFFERENT character than the previous save.
+
+    The comparison is keyed by slot_index, which is the save's stable character
+    slot — but a player who deletes a character and starts another reuses that
+    slot, and diffing the two would report the whole old inventory as lost.
+    Detected by content overlap rather than by name: the profile name is
+    account-wide and renameable, so it cannot identify a character.
+    """
+    restarted: set[int] = set()
+    for slot, old_fps in old_by_slot.items():
+        if len(old_fps) < _RESTART_MIN_OLD_RELICS:
+            continue
+        new_fps = new_by_slot.get(slot)
+        if not new_fps:
+            continue  # slot now empty/absent — handled as a normal diff
+        if not (Counter(old_fps) & Counter(new_fps)):
+            restarted.add(slot)
+    return restarted
+
+
 def _compute_relic_delta(
-    old_relics: list[Relic], new_profiles: list[ParsedProfileData]
+    old_relics: list[Relic],
+    new_profiles: list[ParsedProfileData],
+    old_slot_of: dict[uuid.UUID, int] | None = None,
+    skip_slots: set[int] | None = None,
 ) -> RelicDelta:
-    old_fps = [_db_relic_fingerprint(r) for r in old_relics]
-    new_fps = [_parsed_relic_fingerprint(r) for prof in new_profiles for r in prof.relics]
+    """Relics gained/lost versus the previous save, across the whole account.
+
+    ``skip_slots`` drops character slots that hold a different character than
+    last time (see ``_restarted_slots``); counting those would report a fresh
+    character's empty shelf as hundreds of relics lost.
+    """
+    skip = skip_slots or set()
+    slot_of = old_slot_of or {}
+    old_fps = [
+        _db_relic_fingerprint(r)
+        for r in old_relics
+        if slot_of.get(r.profile_id) not in skip
+    ]
+    new_fps = [
+        _parsed_relic_fingerprint(r)
+        for prof in new_profiles
+        if prof.slot_index not in skip
+        for r in prof.relics
+    ]
     added, removed = multiset_diff(old_fps, new_fps)
     return RelicDelta(added=len(added), removed=len(removed))
 
@@ -221,21 +294,12 @@ class _AffectedBuild:
     broken_pins: list[RelicRef] = field(default_factory=list)
 
 
-def _identify_affected_builds(
-    session: Any,
-    ds: Any,
-    owner_id: uuid.UUID,
+def _slot_fingerprints(
     old_relics: list[Relic],
     old_profiles: list[Profile],
     new_profiles: list[ParsedProfileData],
-    db_builds: list[Build],
-    handle_remap: dict[int, int],
-) -> list[_AffectedBuild]:
-    """Identify builds whose stored arrangement may have changed (read-only).
-
-    Returns the affected (build, slot_index, broken_pins) without mutating any
-    snapshot state.  Callers decide whether to flag or re-optimize.
-    """
+) -> tuple[dict[uuid.UUID, int], dict[int, list], dict[int, list]]:
+    """(profile_id → slot, old relic fingerprints by slot, new ones by slot)."""
     old_slot_of = {p.id: p.slot_index for p in old_profiles}
 
     old_by_slot: dict[int, list] = defaultdict(list)
@@ -249,6 +313,33 @@ def _identify_affected_builds(
         for r in prof.relics:
             new_by_slot[prof.slot_index].append(_parsed_relic_fingerprint(r))
 
+    return old_slot_of, old_by_slot, new_by_slot
+
+
+def _identify_affected_builds(
+    session: Any,
+    ds: Any,
+    owner_id: uuid.UUID,
+    old_relics: list[Relic],
+    old_profiles: list[Profile],
+    new_profiles: list[ParsedProfileData],
+    db_builds: list[Build],
+    handle_remap: dict[int, int],
+    skip_slots: set[int] | None = None,
+) -> list[_AffectedBuild]:
+    """Identify builds whose stored arrangement may have changed (read-only).
+
+    Returns the affected (build, slot_index, broken_pins) without mutating any
+    snapshot state.  Callers decide whether to flag or re-optimize.
+
+    ``skip_slots`` are slots holding a different character than last time; their
+    builds are left alone entirely rather than diffed against a stranger.
+    """
+    skip = skip_slots or set()
+    old_slot_of, old_by_slot, new_by_slot = _slot_fingerprints(
+        old_relics, old_profiles, new_profiles
+    )
+
     old_by_handle = {r.ga_handle: r for r in old_relics}
     builds_by_id = {b.id: b for b in db_builds}
 
@@ -260,6 +351,8 @@ def _identify_affected_builds(
     for snap in snaps:
         build = builds_by_id.get(snap.build_id)
         if build is None:
+            continue
+        if snap.slot_index in skip:
             continue
 
         added, removed = multiset_diff(
@@ -297,6 +390,7 @@ def _flag_affected_snapshots(
     new_profiles: list[ParsedProfileData],
     db_builds: list[Build],
     handle_remap: dict[int, int],
+    skip_slots: set[int] | None = None,
 ) -> list[BuildChange]:
     """Cheaply flag builds whose stored arrangement may have changed.
 
@@ -305,7 +399,7 @@ def _flag_affected_snapshots(
     """
     affected = _identify_affected_builds(
         session, ds, owner_id, old_relics, old_profiles, new_profiles,
-        db_builds, handle_remap,
+        db_builds, handle_remap, skip_slots,
     )
     changes: list[BuildChange] = []
     for ab in affected:
@@ -324,6 +418,7 @@ def _flag_affected_snapshots(
             status="broken_pin" if ab.broken_pins else "potentially_affected",
             relevant_added=0,
             pinned_removed=ab.broken_pins,
+            causes=["relics"],
             cause="relics",
             reliable=False,
         )
@@ -557,6 +652,14 @@ async def upload_save(
         select(Relic).where(Relic.owner_id == current_user.id)
     ).all()
     handle_remap = _compute_handle_remap(list(old_relics), profiles)
+    comparison = (
+        SaveComparison(
+            compared=same_account,
+            reason=_account_reason(old_owner_id, owner_steam_id),
+        )
+        if old_relics
+        else SaveComparison(compared=False, reason="no_previous_save")
+    )
     if old_relics:
         db_builds = session.exec(
             select(Build).where(Build.owner_id == current_user.id)
@@ -578,10 +681,17 @@ async def upload_save(
             old_profiles = session.exec(
                 select(Profile).where(Profile.owner_id == current_user.id)
             ).all()
-            relic_delta = _compute_relic_delta(list(old_relics), profiles)
+            old_slot_of, old_by_slot, new_by_slot = _slot_fingerprints(
+                list(old_relics), list(old_profiles), profiles
+            )
+            restarted = _restarted_slots(old_by_slot, new_by_slot)
+            comparison.restarted_slots = sorted(restarted)
+            relic_delta = _compute_relic_delta(
+                list(old_relics), profiles, old_slot_of, restarted
+            )
             affected_builds = _flag_affected_snapshots(
                 session, ds, current_user.id, list(old_relics), list(old_profiles),
-                profiles, list(db_builds), handle_remap,
+                profiles, list(db_builds), handle_remap, restarted,
             )
 
     # Authenticated — delete old upload and persist fresh data
@@ -657,6 +767,7 @@ async def upload_save(
         persisted=True,
         relic_delta=relic_delta,
         affected_builds=affected_builds,
+        comparison=comparison,
     )
 
 
@@ -690,7 +801,17 @@ def _apply_snapshot_for_stream(
     top_n: int,
     max_per_vessel: int,
 ) -> BuildChange:
-    """Diff a fresh optimization against the stored snapshot, then upsert it."""
+    """Diff a fresh post-upload optimization against the build's baseline.
+
+    Mirrors optimize._apply_snapshot; the difference is that an upload run is
+    pure-save by definition (the staged diff is discarded when the working file
+    is replaced), so ``staged_signature`` is None on this side and any staged
+    relics the user had are now either in the save — where the base hash sees
+    them — or gone.
+
+    The baseline never advances here: an upload always has news in it, and the
+    change must survive until the user actually reads it.
+    """
     from app.models import get_datetime_utc
 
     snap = session.exec(
@@ -706,38 +827,25 @@ def _apply_snapshot_for_stream(
     relevant_hash = relevant_relics_signature(
         build_def, [(fingerprint_owned(r), r.ga_handle) for r in owned_relics], ds
     )
+    inputs = snapshot_inputs(
+        # Pure-save run: the effective inventory IS the save's inventory.
+        base_relics_hash=relics_hash,
+        relics_hash=relics_hash,
+        build_hash=build_hash,
+        game_data_version=gdv,
+        optimizer_version=str(OPTIMIZER_VERSION),
+        staged_signature=None,
+    )
 
+    baseline = snap.baseline if snap else None
     change = diff_results(
-        snap.top_layouts if snap else None, results, owned=owned_relics
+        baseline_layouts(baseline), results, owned=owned_relics
     )
     change.build_id = str(build.id)
     change.build_name = build.name
     change.slot_index = slot_index
-
-    # Attribute cause.  Upload re-optimizes always run on the pure save
-    # inventory; when the previous snapshot was a STAGED run, the delta mixes
-    # the dropped staged diff with any real save changes and must not be
-    # narrated as a save-to-save relic change (cause "staged" stays silent).
-    if snap is None:
-        change.cause = None
-    else:
-        relics_changed = snap.relics_hash != relics_hash
-        build_changed = snap.build_hash != build_hash
-        data_changed = (
-            snap.game_data_version != gdv or snap.optimizer_version != OPTIMIZER_VERSION
-        )
-        if relics_changed and snap.staged_signature is not None:
-            change.cause = "mixed" if build_changed else "staged"
-        elif relics_changed and build_changed:
-            change.cause = "mixed"
-        elif relics_changed:
-            change.cause = "relics"
-        elif build_changed:
-            change.cause = "build_edit"
-        elif data_changed:
-            change.cause = "game_data"
-        else:
-            change.cause = None
+    change.causes = causes_since(baseline, inputs)
+    change.cause = legacy_cause(change.causes)
 
     top_layouts = serialize_top_layouts(results)
     # See optimize.py: result identities in display order for the "saved as
@@ -766,10 +874,13 @@ def _apply_snapshot_for_stream(
             best_score=best_score,
             any_truncated=any_truncated,
             last_change=change_json,
-            # A freshly uploaded change is "unread" until the user views or
-            # dismisses it — this is what surfaces it in the builds-page
-            # "Changes since your last save" list.
-            reviewed=False,
+            # First-ever optimization of this build: there is no prior state to
+            # compare against, so this run IS the baseline and there is nothing
+            # to review.
+            baseline=make_baseline(
+                layouts=top_layouts, best_score=best_score, inputs=inputs
+            ),
+            reviewed=True,
         )
     else:
         snap.relics_hash = relics_hash
@@ -788,7 +899,9 @@ def _apply_snapshot_for_stream(
         snap.best_score = best_score
         snap.any_truncated = any_truncated
         snap.last_change = change_json
-        # Unread until viewed/dismissed — see the create branch above.
+        # Unread until viewed/dismissed — this is what surfaces the build in
+        # the builds-page "Changes since your last save" list.  The baseline
+        # deliberately stays where it was: reviewing is what advances it.
         snap.reviewed = False
         snap.updated_at = get_datetime_utc()
     session.add(snap)
@@ -853,6 +966,14 @@ async def upload_save_stream(
     handle_remap = _compute_handle_remap(old_relics, profiles)
     affected: list[_AffectedBuild] = []
     relic_delta = RelicDelta()
+    comparison = (
+        SaveComparison(
+            compared=same_account,
+            reason=_account_reason(old_owner_id, owner_steam_id),
+        )
+        if old_relics
+        else SaveComparison(compared=False, reason="no_previous_save")
+    )
 
     if old_relics:
         db_builds = list(session.exec(
@@ -873,10 +994,17 @@ async def upload_save_stream(
             old_profiles = list(session.exec(
                 select(Profile).where(Profile.owner_id == current_user.id)
             ).all())
-            relic_delta = _compute_relic_delta(old_relics, profiles)
+            old_slot_of, old_by_slot, new_by_slot = _slot_fingerprints(
+                old_relics, old_profiles, profiles
+            )
+            restarted = _restarted_slots(old_by_slot, new_by_slot)
+            comparison.restarted_slots = sorted(restarted)
+            relic_delta = _compute_relic_delta(
+                old_relics, profiles, old_slot_of, restarted
+            )
             affected = _identify_affected_builds(
                 session, ds, current_user.id, old_relics, old_profiles,
-                profiles, db_builds, handle_remap,
+                profiles, db_builds, handle_remap, restarted,
             )
 
     # Persist fresh data (same as non-streaming upload)
@@ -955,6 +1083,7 @@ async def upload_save_stream(
         "profiles": [p.model_dump(mode="json") for p in profiles],
         "persisted": True,
         "relic_delta": relic_delta.model_dump(mode="json"),
+        "comparison": comparison.model_dump(mode="json"),
         "save_upload_id": str(save_upload.id),
     }
 
@@ -1057,6 +1186,7 @@ async def upload_save_stream(
                     build_name=build_name,
                     slot_index=slot_index,
                     status="unchanged",
+                    causes=["relics"],
                     cause="relics",
                     reliable=True,
                 ).model_dump(mode="json")

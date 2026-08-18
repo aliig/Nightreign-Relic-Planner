@@ -266,6 +266,22 @@ def relic_ref_from_owned(r: OwnedRelic) -> RelicRef:
     )
 
 
+def mark_staged_refs(change: BuildChange, staged_fps: Iterable[Fingerprint]) -> None:
+    """Flag the relics in ``change`` that live only in the staged diff.
+
+    A committed Relic Rites purchase is a real acquisition — the Murk is spent —
+    but it sits in the app's diff until the user exports, so a change list must
+    not present it as something the save handed over.  Matching is by content
+    fingerprint (mints have synthetic handles, and handles are unstable anyway).
+    """
+    wanted = set(staged_fps)
+    if not wanted:
+        return
+    for ref in (*change.entered, *change.left, *change.pinned_removed):
+        if relic_fingerprint(ref.real_id, ref.effects, ref.curses) in wanted:
+            ref.staged = True
+
+
 def serialize_layout(result: VesselResult) -> dict:
     """Compact, handle-free snapshot of one vessel result (for DB storage)."""
     return {

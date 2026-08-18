@@ -49,7 +49,11 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import useCustomToast from "@/hooks/useCustomToast"
-import { describeBuildChange, rawScoreTooltip } from "@/lib/buildChange"
+import {
+  describeBuildChange,
+  isChangeNews,
+  rawScoreTooltip,
+} from "@/lib/buildChange"
 import {
   addLoadoutOp,
   queueReplaceLoadout,
@@ -110,11 +114,12 @@ export function cacheKey(
 // --- Change highlighting (save-diff) ---
 
 /** Content keys of relics that entered the best arrangement (for "NEW" badges).
- *  Only meaningful for a save-driven change — a build edit re-baselines and is
- *  not a "since last save" event, so nothing is tagged NEW for it. */
+ *  Only meaningful when the change is news — a build edit re-baselines and is
+ *  not a "since last save" event, so nothing is tagged NEW for it. A relic
+ *  bought in Relic Rites IS news: the user owns it, and it just earned a slot. */
 export function enteredKeys(change?: BuildChange | null): Set<string> {
   const keys = new Set<string>()
-  if (!change || change.cause !== "relics") return keys
+  if (!change || !isChangeNews(change)) return keys
   for (const r of change.entered ?? []) keys.add(relicKey(r))
   return keys
 }
@@ -624,9 +629,14 @@ export function VesselCard({
                 variant="secondary"
                 className="text-[10px] px-1.5 py-0 gap-1"
                 title={
-                  savedMatch.equivalent
-                    ? `Same relics as your saved in-game loadout "${savedMatch.loadout.name || "(unnamed)"}" — arranged differently across interchangeable slots, which doesn't change the result`
-                    : `Already saved in-game as "${savedMatch.loadout.name || "(unnamed)"}"`
+                  (savedMatch.equivalent
+                    ? `Same relics as your loadout "${savedMatch.loadout.name || "(unnamed)"}" — arranged differently across interchangeable slots, which doesn't change the result`
+                    : `Already saved as "${savedMatch.loadout.name || "(unnamed)"}"`) +
+                  // index -1 = a staged add: saved in the app, not written to
+                  // the save file until the user exports.
+                  (savedMatch.loadout.index < 0
+                    ? " — saved in the app, not exported to your save yet"
+                    : " (in-game)")
                 }
               >
                 <BookMarked className="h-3 w-3" />
@@ -895,9 +905,10 @@ export function ChangeBanner({
   change?: BuildChange | null
   effectMap: Map<number, string>
 }) {
-  // Only narrate changes a newer save caused. Build edits (cause "build_edit" /
-  // "mixed") and run-to-run search noise (cause null) re-baseline silently.
-  if (!change || change.cause !== "relics") return null
+  // Narrate what the user did not do themselves: a newer save, or relics they
+  // bought in Relic Rites. Build edits and game-data bumps re-baseline
+  // silently, as does run-to-run search noise (no causes at all).
+  if (!isChangeNews(change)) return null
   const d = describeBuildChange(change)
   if (!d) return null
   const Icon = d.icon

@@ -400,6 +400,14 @@ export const BuildChangeSchema = {
             title: 'Relevant Added',
             default: 0
         },
+        causes: {
+            items: {
+                type: 'string',
+                enum: ['relics', 'staged', 'build_edit', 'game_data']
+            },
+            type: 'array',
+            title: 'Causes'
+        },
         cause: {
             anyOf: [
                 {
@@ -2202,6 +2210,11 @@ export const RelicRefSchema = {
                 }
             ],
             title: 'Still Owned'
+        },
+        staged: {
+            type: 'boolean',
+            title: 'Staged',
+            default: false
         }
     },
     type: 'object',
@@ -2434,6 +2447,36 @@ export const RollRelicRequestSchema = {
     type: 'object',
     title: 'RollRelicRequest',
     description: 'Parameters for one relic-purchase roll.'
+} as const;
+
+export const SaveComparisonSchema = {
+    properties: {
+        compared: {
+            type: 'boolean',
+            title: 'Compared',
+            default: true
+        },
+        reason: {
+            type: 'string',
+            title: 'Reason',
+            default: 'ok'
+        },
+        restarted_slots: {
+            items: {
+                type: 'integer'
+            },
+            type: 'array',
+            title: 'Restarted Slots'
+        }
+    },
+    type: 'object',
+    title: 'SaveComparison',
+    description: `Whether this upload was diffed against the previous save, and why not.
+
+The comparison is only meaningful within one game account and one character
+(see saves._account_reason / _restarted_slots).  Suppressing it silently
+reads exactly like "nothing changed", so the verdict rides along with the
+upload response and the page says which it was.`
 } as const;
 
 export const SaveStatusPublicSchema = {
@@ -2811,6 +2854,16 @@ export const UploadResponseSchema = {
             anyOf: [
                 {
                     '$ref': '#/components/schemas/RelicDelta'
+                },
+                {
+                    type: 'null'
+                }
+            ]
+        },
+        comparison: {
+            anyOf: [
+                {
+                    '$ref': '#/components/schemas/SaveComparison'
                 },
                 {
                     type: 'null'

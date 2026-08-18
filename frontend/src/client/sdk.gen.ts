@@ -604,8 +604,14 @@ export class OptimizeService {
      * Mark Change Reviewed
      * Mark a build's change as seen, removing it from the unread changes list.
      *
-     * Flips ``reviewed`` on every snapshot the user owns for this build (a build
-     * may have one snapshot per profile slot).  Idempotent.
+     * This is also the ONLY place a change with news in it advances the baseline:
+     * reviewing is the user saying "I've seen where this build stands now", so the
+     * next change is measured from here.  Until then every re-run keeps comparing
+     * against the last reviewed state, which is what makes an upload plus a Relic
+     * Rites spree read as one verdict instead of two lost ones.
+     *
+     * Applies to every snapshot the user owns for this build (a build may have one
+     * per profile slot).  Idempotent.
      * @param data The data for the request.
      * @param data.buildId
      * @returns void Successful Response

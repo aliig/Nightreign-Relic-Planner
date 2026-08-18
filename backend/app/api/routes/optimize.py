@@ -15,10 +15,14 @@ save the user gets by actually exporting and re-uploading those edits.
 
 DB-mode runs also upsert an OptimizationSnapshot keyed by (build_id, slot_index)
 and return a BuildChange describing how the best arrangement moved versus the
-previous snapshot — this powers the "your build may have improved" notification
-after a newer save is uploaded (staged-diff deltas attribute as cause="staged"
-and stay out of that narration).  Inline (anonymous) runs persist nothing and
-return change=null.
+build's BASELINE — the state the user last acknowledged, which only advances on
+review (see app.core.snapshot_baseline).  That is what powers the "your build
+may have improved" notification after a newer save is uploaded, and what keeps
+it alive across a Relic Rites spree instead of overwriting it: `causes` names
+every input that moved (relics / staged / build_edit / game_data), and staged
+purchases are narrated rather than suppressed, flagged per relic so the user
+knows they still owe them to the save file.  Inline (anonymous) runs persist
+nothing and return change=null.
 """
 import json
 import uuid
@@ -41,6 +45,14 @@ from app.core.build_def import build_def_from_db
 from app.core.config import settings
 from app.core.db import engine
 from app.core.game_data import game_data_version, get_items_json
+from app.core.snapshot_baseline import (
+    baseline_layouts,
+    causes_since,
+    is_narratable,
+    legacy_cause,
+    make_baseline,
+    snapshot_inputs,
+)
 from app.core.staged import apply_staged_diff, staged_diff_signature
 from app.models import (
     Build,
@@ -55,6 +67,8 @@ from nrplanner.changes import (
     diff_results,
     fingerprint_owned,
     layout_match_key,
+    mark_staged_refs,
+    relic_fingerprint,
     relevant_relics_signature,
     relics_signature,
     serialize_match_keys,
@@ -160,6 +174,10 @@ class _SnapshotCtx:
     build_id: uuid.UUID
     build_name: str
     slot_index: int
+    # Hash of the SAVE's own inventory, staged diff excluded.  Cause attribution
+    # needs it to tell "your save changed" from "you bought relics in the app":
+    # a staged mint moves the effective inventory hash but not this one.
+    base_relics_hash: str
 
 
 def _owned_from_db(relics: list[Relic]) -> list[OwnedRelic]:
@@ -228,8 +246,9 @@ def _resolve(
         db_relics = session.exec(
             select(Relic).where(Relic.profile_id == req.profile_id)
         ).all()
+        base_relics = _owned_from_db(list(db_relics))
         owned_relics = apply_staged_diff(
-            _owned_from_db(list(db_relics)),
+            base_relics,
             req.staged_sells, req.staged_mints, ds, get_items_json(),
         )
         if len(owned_relics) > settings.MAX_RELICS_PER_OPTIMIZE:
@@ -242,6 +261,7 @@ def _resolve(
             build_id=db_build.id,
             build_name=db_build.name,
             slot_index=profile.slot_index,
+            base_relics_hash=relics_signature(base_relics),
         )
         return build_def, owned_relics, ctx
 
@@ -282,37 +302,6 @@ def _run_optimizer(
 # Snapshot persistence + change detection (DB mode only)
 # ---------------------------------------------------------------------------
 
-def _attribute_cause(
-    snap: OptimizationSnapshot | None,
-    relics_hash: str,
-    build_hash: str,
-    gdv: str,
-    staged_signature: str | None,
-) -> str | None:
-    """Which input moved since the last snapshot — for the BuildChange.cause field."""
-    if snap is None:
-        return None
-    relics_changed = snap.relics_hash != relics_hash
-    build_changed = snap.build_hash != build_hash
-    data_changed = (
-        snap.game_data_version != gdv or snap.optimizer_version != OPTIMIZER_VERSION
-    )
-    if relics_changed and snap.staged_signature != staged_signature:
-        # The inventory moved because the staged in-app diff (sells/mints)
-        # differs from the previous run's — a deliberate app-side edit, not a
-        # save-to-save change, so "since your last save" must stay silent.
-        return "mixed" if build_changed else "staged"
-    if relics_changed and build_changed:
-        return "mixed"
-    if relics_changed:
-        return "relics"
-    if build_changed:
-        return "build_edit"
-    if data_changed:
-        return "game_data"
-    return None
-
-
 def _apply_snapshot(
     session: Session,
     ctx: _SnapshotCtx,
@@ -322,11 +311,19 @@ def _apply_snapshot(
     ds: Any,
     top_n: int,
     max_per_vessel: int,
-    staged_signature: str | None,
+    staged_sells: list[int],
+    staged_mints: list[StagedMint],
 ) -> BuildChange:
-    """Diff a fresh optimization against the stored snapshot, then upsert it.
+    """Diff a fresh optimization against the build's BASELINE, then upsert it.
 
-    Returns the BuildChange (build identity + cause filled).  Commits the session.
+    The baseline is the state the user last acknowledged, not the previous run
+    (see app.core.snapshot_baseline), so a change survives until it is read and
+    several events compose into one verdict.  It advances here only when this
+    run has no news in it — a build edit or a game-data bump re-baselines
+    silently, exactly as before; anything the user should see is left standing
+    (and marked unreviewed) until they review it.
+
+    Returns the BuildChange (build identity + causes filled).  Commits the session.
     """
     snap = session.exec(
         select(OptimizationSnapshot).where(
@@ -338,18 +335,32 @@ def _apply_snapshot(
     relics_hash = relics_signature(owned_relics)
     build_hash = build_signature(build_def)
     gdv = game_data_version()
+    staged_signature = staged_diff_signature(staged_sells, staged_mints)
     relevant_hash = relevant_relics_signature(
         build_def, [(fingerprint_owned(r), r.ga_handle) for r in owned_relics], ds
     )
+    inputs = snapshot_inputs(
+        base_relics_hash=ctx.base_relics_hash,
+        relics_hash=relics_hash,
+        build_hash=build_hash,
+        game_data_version=gdv,
+        optimizer_version=str(OPTIMIZER_VERSION),
+        staged_signature=staged_signature,
+    )
 
+    baseline = snap.baseline if snap else None
     change = diff_results(
-        snap.top_layouts if snap else None, results, owned=owned_relics
+        baseline_layouts(baseline), results, owned=owned_relics
     )
     change.build_id = str(ctx.build_id)
     change.build_name = ctx.build_name
     change.slot_index = ctx.slot_index
-    change.cause = _attribute_cause(
-        snap, relics_hash, build_hash, gdv, staged_signature
+    change.causes = causes_since(baseline, inputs)
+    change.cause = legacy_cause(change.causes)
+    # Name the relics that are purchases-in-waiting rather than save contents.
+    mark_staged_refs(
+        change,
+        [relic_fingerprint(m.real_id, m.effects, m.curses) for m in staged_mints],
     )
 
     top_layouts = serialize_top_layouts(results)
@@ -362,6 +373,14 @@ def _apply_snapshot(
     best_score = max((r.total_score for r in results), default=0)
     any_truncated = any(r.search_truncated for r in results)
     change_json = change.model_dump(mode="json")
+
+    # Nothing the user needs to hear (their own build edit, a game-data bump, or
+    # no movement at all) — fold this run into the baseline so the NEXT change is
+    # measured from here.  News is left un-baselined and unreviewed.
+    news = is_narratable(change.causes)
+    fresh_baseline = make_baseline(
+        layouts=top_layouts, best_score=best_score, inputs=inputs
+    )
 
     if snap is None:
         snap = OptimizationSnapshot(
@@ -383,6 +402,7 @@ def _apply_snapshot(
             any_truncated=any_truncated,
             last_change=change_json,
             reviewed=True,
+            baseline=fresh_baseline,
         )
     else:
         snap.relics_hash = relics_hash
@@ -399,7 +419,13 @@ def _apply_snapshot(
         snap.best_score = best_score
         snap.any_truncated = any_truncated
         snap.last_change = change_json
-        snap.reviewed = True
+        if news:
+            # Unread news stays unread; a build the user already reviewed goes
+            # back to unreviewed so the change list picks it up.
+            snap.reviewed = False
+        else:
+            snap.baseline = fresh_baseline
+            snap.reviewed = True
         snap.updated_at = get_datetime_utc()
     session.add(snap)
     session.commit()
@@ -450,7 +476,7 @@ def run_optimize(
         try:
             _apply_snapshot(session, ctx, build_def, owned_relics, results, ds,
                             req.top_n, req.max_per_vessel,
-                            staged_diff_signature(req.staged_sells, req.staged_mints))
+                            req.staged_sells, req.staged_mints)
         except Exception:
             # Snapshotting is best-effort — never fail the optimize response.
             session.rollback()
@@ -501,8 +527,7 @@ def run_optimize_stream(
                                 change = _apply_snapshot(
                                     snap_session, ctx, build_def, owned_relics,
                                     results, ds, req.top_n, req.max_per_vessel,
-                                    staged_diff_signature(
-                                        req.staged_sells, req.staged_mints),
+                                    req.staged_sells, req.staged_mints,
                                 )
                         except Exception:
                             change = None  # best-effort; don't break the stream
@@ -741,8 +766,14 @@ def mark_change_reviewed(
 ) -> None:
     """Mark a build's change as seen, removing it from the unread changes list.
 
-    Flips ``reviewed`` on every snapshot the user owns for this build (a build
-    may have one snapshot per profile slot).  Idempotent.
+    This is also the ONLY place a change with news in it advances the baseline:
+    reviewing is the user saying "I've seen where this build stands now", so the
+    next change is measured from here.  Until then every re-run keeps comparing
+    against the last reviewed state, which is what makes an upload plus a Relic
+    Rites spree read as one verdict instead of two lost ones.
+
+    Applies to every snapshot the user owns for this build (a build may have one
+    per profile slot).  Idempotent.
     """
     snaps = session.exec(
         select(OptimizationSnapshot).where(
@@ -752,6 +783,31 @@ def mark_change_reviewed(
     ).all()
     for snap in snaps:
         snap.reviewed = True
+        # Advance the baseline to the state just reviewed.  The inputs are read
+        # back off the snapshot's own provenance columns; base_relics_hash is
+        # the one value not stored there, so it is carried over from the run
+        # that produced this change (the snapshot's current baseline knows it
+        # only if the run was pure-save — a staged run keeps the save's hash
+        # from the previous baseline, which is exactly what we want: the save
+        # itself did not change).
+        prev_inputs = (snap.baseline or {}).get("inputs") or {}
+        base_hash = (
+            snap.relics_hash
+            if snap.staged_signature is None
+            else prev_inputs.get("base_relics_hash", snap.relics_hash)
+        )
+        snap.baseline = make_baseline(
+            layouts=snap.top_layouts or [],
+            best_score=snap.best_score,
+            inputs=snapshot_inputs(
+                base_relics_hash=base_hash,
+                relics_hash=snap.relics_hash,
+                build_hash=snap.build_hash,
+                game_data_version=snap.game_data_version,
+                optimizer_version=str(snap.optimizer_version),
+                staged_signature=snap.staged_signature,
+            ),
+        )
         session.add(snap)
     session.commit()
 

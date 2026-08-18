@@ -151,6 +151,59 @@ function ChangesSummary({ changes }: { changes: BuildChange[] }) {
   )
 }
 
+/**
+ * Why the save-to-save comparison did (or didn't) run.
+ *
+ * Suppression used to be silent, which is indistinguishable from "nothing
+ * changed" — a player testing a friend's save saw an empty summary and no way
+ * to tell whether the app had compared their own collection against it.
+ */
+function ComparisonNote({
+  comparison,
+}: {
+  comparison?: StreamUploadResult["comparison"]
+}) {
+  if (!comparison) return null
+  const { compared, reason, restarted_slots: restarted } = comparison
+  const lines: string[] = []
+
+  if (!compared && reason === "different_account") {
+    lines.push(
+      "This save belongs to a different Steam account than your last upload, so it wasn't compared against it — every relic here reads as new.",
+    )
+  } else if (!compared && reason === "no_previous_save") {
+    // Nothing to say: a first upload has nothing to be compared against.
+    return null
+  } else if (reason === "unverified_owner") {
+    lines.push(
+      "We couldn't read this save's account ID (console saves don't carry one), so it was compared against your last upload without verifying they're the same account.",
+    )
+  }
+
+  if (restarted?.length) {
+    lines.push(
+      `Slot ${restarted.join(", ")} holds a different character than last time — its relics were left out of the comparison rather than counted as lost.`,
+    )
+  }
+
+  if (lines.length === 0) return null
+  return (
+    <Alert>
+      <Info className="h-4 w-4" />
+      <AlertTitle>
+        {compared ? "Comparison caveat" : "Not compared to your last save"}
+      </AlertTitle>
+      <AlertDescription>
+        <div className="mt-1 space-y-1 text-sm">
+          {lines.map((l) => (
+            <p key={l}>{l}</p>
+          ))}
+        </div>
+      </AlertDescription>
+    </Alert>
+  )
+}
+
 function UploadPage() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
@@ -405,6 +458,7 @@ function UploadPage() {
             Found {streamResult.profileCount} profile
             {streamResult.profileCount !== 1 ? "s" : ""}
           </h2>
+          <ComparisonNote comparison={streamResult.comparison} />
           <ChangesSummary changes={streamResult.changes} />
           <div className="grid gap-3 sm:grid-cols-2">
             {streamResult.profiles.map((prof) => (

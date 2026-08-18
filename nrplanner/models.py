@@ -291,6 +291,18 @@ class RelicRef(BaseModel):
     tier: str = ""
     is_deep: bool = False
     still_owned: Optional[bool] = None
+    # True when this relic exists only in the app's staged diff (a committed
+    # Relic Rites purchase) and is not in the save file yet.  The player owns it
+    # — the Murk is spent — but it reaches the save only on export, and a change
+    # list that doesn't say so reads as if the game handed it over.
+    staged: bool = False
+
+
+# What moved between a build's baseline and the current run.  "relics" = the
+# save file's inventory; "staged" = the app's uncommitted diff (Rites buys /
+# sells); "build_edit" = the build config; "game_data" = optimizer or game data
+# version.
+ChangeCause = Literal["relics", "staged", "build_edit", "game_data"]
 
 
 class BuildChange(BaseModel):
@@ -313,6 +325,11 @@ class BuildChange(BaseModel):
     left: list[RelicRef] = Field(default_factory=list)
     pinned_removed: list[RelicRef] = Field(default_factory=list)
     relevant_added: int = 0
+    # EVERY input that moved between the baseline and this run, in a fixed
+    # order.  A run can be caused by more than one thing at once (a newer save
+    # AND staged Rites purchases), which the single `cause` string below cannot
+    # express — it stays as a coarse summary for older clients.
+    causes: list[ChangeCause] = Field(default_factory=list)
     cause: Optional[Literal["relics", "build_edit", "game_data", "mixed", "staged"]] = None
     reliable: bool = True
 

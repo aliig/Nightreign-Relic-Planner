@@ -559,6 +559,16 @@ class OptimizationSnapshot(SQLModel, table=True):
         default=None, sa_column=Column(JSON, nullable=True)
     )
     reviewed: bool = Field(default=False)
+    # The state changes are measured FROM: {layouts, best_score, inputs} (see
+    # app.core.snapshot_baseline).  Distinct from the columns above, which every
+    # run overwrites because they are the cache: this only advances when the
+    # user reviews the change or when nothing narratable moved, so an upload
+    # followed by Relic Rites purchases composes into ONE verdict instead of two
+    # half-diffs the user never saw.  Backfilled on the adding migration — a
+    # NULL baseline is only correct for a build that has never been optimized.
+    baseline: Optional[dict] = Field(
+        default=None, sa_column=Column(JSON, nullable=True)
+    )
 
     computed_at: datetime | None = Field(
         default_factory=get_datetime_utc,
@@ -702,6 +712,25 @@ class RelicDelta(SQLModel):
     removed: int = 0
 
 
+class SaveComparison(SQLModel):
+    """Whether this upload was diffed against the previous save, and why not.
+
+    The comparison is only meaningful within one game account and one character
+    (see saves._account_reason / _restarted_slots).  Suppressing it silently
+    reads exactly like "nothing changed", so the verdict rides along with the
+    upload response and the page says which it was.
+    """
+    # False when no diff was run at all.
+    compared: bool = True
+    # "ok" | "no_previous_save" | "different_account" | "unverified_owner".
+    # "unverified_owner" still compares — an unreadable owner anchor (PS4 saves,
+    # pre-column rows) must never hide a real change — but says so.
+    reason: str = "ok"
+    # Character slots left out because they hold a DIFFERENT character than the
+    # previous save (deleted and re-rolled); their relics are not a loss.
+    restarted_slots: list[int] = Field(default_factory=list)
+
+
 class UploadResponse(SQLModel):
     platform: str
     profile_count: int
@@ -710,6 +739,7 @@ class UploadResponse(SQLModel):
     persisted: bool = False
     # Save-diff summary (authenticated uploads only).
     relic_delta: Optional[RelicDelta] = None
+    comparison: Optional[SaveComparison] = None
     affected_builds: list[BuildChange] = Field(default_factory=list)
 
 

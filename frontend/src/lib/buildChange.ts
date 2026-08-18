@@ -9,6 +9,9 @@ import {
 
 import type { BuildChange, RelicRef } from "@/client"
 
+/** What moved since the baseline (mirrors nrplanner.models.ChangeCause). */
+export type ChangeCause = "relics" | "staged" | "build_edit" | "game_data"
+
 export type ChangeTone = "up" | "down" | "neutral" | "warn"
 
 /** Which of the four things that can happen to a relic this group describes. */
@@ -112,8 +115,8 @@ function splitLeft(refs: RelicRef[] | undefined): {
  * (for a tooltip).
  *
  * Returns null for changes not worth surfacing (unchanged / first-ever optimize).
- * Callers apply their own policy on `change.cause` — e.g. the post-upload list
- * only wants relic-caused changes, while the at-a-glance badge shows any.
+ * Callers apply their own policy on WHY the change happened — see
+ * `isChangeNews`, which every narrating surface should gate on.
  */
 export function describeBuildChange(
   change?: BuildChange | null,
@@ -182,6 +185,18 @@ export function describeBuildChange(
       : "new relics may help"
   }
 
+  // Relics bought in Relic Rites are owned but not yet in the save file. The
+  // change is real; the export is still owed, and the user has to be told which
+  // half is which.
+  const stagedCount = groups.reduce(
+    (n, g) => n + g.relics.filter((r) => r.staged).length,
+    0,
+  )
+  if (stagedCount > 0) {
+    const owed = `${stagedCount === 1 ? "one relic is" : `${stagedCount} relics are`} from Relic Rites — export to write ${stagedCount === 1 ? "it" : "them"} to your save`
+    note = note ? `${note}; ${owed}` : owed
+  }
+
   return {
     tone,
     icon,
@@ -193,6 +208,34 @@ export function describeBuildChange(
     textClass: TONE_TEXT[tone],
     boxClass: TONE_BOX[tone],
   }
+}
+
+/**
+ * Everything that moved since the build's baseline.
+ *
+ * Falls back to the legacy single `cause` for snapshots written before the list
+ * existed ("mixed" carried no detail, so it degrades to "relics" — the reading
+ * every surface already gave it).
+ */
+export function changeCauses(change?: BuildChange | null): ChangeCause[] {
+  if (!change) return []
+  if (change.causes?.length) return change.causes as ChangeCause[]
+  if (!change.cause) return []
+  if (change.cause === "mixed") return ["relics"]
+  return [change.cause as ChangeCause]
+}
+
+/**
+ * Whether a change is news for the user rather than an echo of their own edit.
+ *
+ * Relics arriving (a newer save) and staged Relic Rites purchases both count:
+ * a committed purchase is a real acquisition — the Murk is spent — and used to
+ * be suppressed as if it were a hypothetical. Build edits and game-data bumps
+ * re-baseline silently, as they always did.
+ */
+export function isChangeNews(change?: BuildChange | null): boolean {
+  const causes = changeCauses(change)
+  return causes.includes("relics") || causes.includes("staged")
 }
 
 /** "Crimson Whetblade, Stalwart Horn" — for tooltips/aria and compact rows. */

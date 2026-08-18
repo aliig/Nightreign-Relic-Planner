@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
+import { findSavedLoadoutMatch, relicContentKey } from "./savedLoadoutMatch"
+
 // The store is a module singleton (state + currentBaseBySlot + localStorage).
 // Re-import a fresh copy per test so nothing leaks between cases.
 type PendingModule = typeof import("./pendingChanges")
@@ -780,5 +782,89 @@ describe("live loadout list (effectiveLoadouts)", () => {
       pc.readSlot(0),
     )
     expect(live[0].ga_handles).toEqual([])
+  })
+})
+
+/**
+ * The optimizer's "Saved" badge asks "does this setup exist in my game?" — it
+ * must ask the LIVE preset list, not the save's. These pair effectiveLoadouts
+ * with the matcher to pin the four ways the raw list lied.
+ */
+describe("saved-loadout badge over the live list", () => {
+  const SAVED = [
+    {
+      index: 0,
+      character: "Wylder",
+      name: "Fire",
+      vessel_id: 10,
+      ga_handles: [1, 2, 3],
+    },
+  ]
+  const assigned = [1, 2, 3].map((h) => ({
+    ga_handle: h,
+    real_id: 100 + h,
+    effects: [h, 0, 0],
+    curses: [0, 0, 0],
+  }))
+  const contentMap = new Map(
+    assigned.map((r) => [r.ga_handle, relicContentKey(r)]),
+  )
+  const match = (pc: PendingModule) =>
+    findSavedLoadoutMatch(
+      10,
+      assigned,
+      pc.effectiveLoadouts(SAVED, pc.readSlot(0)),
+      contentMap,
+    )
+
+  it("matches the saved preset when nothing is staged", async () => {
+    const pc = await freshStore()
+    expect(match(pc)?.loadout.name).toBe("Fire")
+  })
+
+  it("shows the staged NEW name after a rename", async () => {
+    const pc = await freshStore()
+    pc.addLoadoutOp(0, {
+      kind: "rename",
+      index: 0,
+      name: "Ice",
+      oldName: "Fire",
+    })
+    expect(match(pc)?.loadout.name).toBe("Ice")
+  })
+
+  it("stops matching a staged-deleted preset", async () => {
+    const pc = await freshStore()
+    pc.addLoadoutOp(0, { kind: "delete", index: 0, name: "Fire" })
+    expect(match(pc)).toBeUndefined()
+  })
+
+  it("matches a setup saved from the optimizer but not yet exported", async () => {
+    const pc = await freshStore()
+    pc.addLoadoutOp(0, { kind: "delete", index: 0, name: "Fire" })
+    pc.addLoadoutOp(0, {
+      kind: "add",
+      character: "Wylder",
+      vessel_id: 10,
+      ga_handles: [1, 2, 3],
+      name: "Fresh",
+    })
+    const m = match(pc)
+    expect(m?.loadout.name).toBe("Fresh")
+    // index -1 is what the badge reads to say "not exported yet".
+    expect(m?.loadout.index).toBe(-1)
+  })
+
+  it("follows a staged overwrite to the new relic set", async () => {
+    const pc = await freshStore()
+    pc.addLoadoutOp(0, {
+      kind: "overwrite",
+      index: 0,
+      character: "Wylder",
+      vessel_id: 10,
+      ga_handles: [9, 9, 9],
+      targetName: "Fire",
+    })
+    expect(match(pc)).toBeUndefined()
   })
 })

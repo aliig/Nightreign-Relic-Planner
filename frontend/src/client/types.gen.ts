@@ -92,6 +92,7 @@ export type BuildChange = {
     left?: Array<RelicRef>;
     pinned_removed?: Array<RelicRef>;
     relevant_added?: number;
+    causes?: Array<('relics' | 'staged' | 'build_edit' | 'game_data')>;
     cause?: ('relics' | 'build_edit' | 'game_data' | 'mixed' | 'staged' | null);
     reliable?: boolean;
 };
@@ -538,6 +539,7 @@ export type RelicRef = {
     tier?: string;
     is_deep?: boolean;
     still_owned?: (boolean | null);
+    staged?: boolean;
 };
 
 export type RelicsPublic = {
@@ -592,6 +594,20 @@ export type RollRelicRequest = {
     color?: (string | null);
     tier?: (number | null);
     seed?: (number | null);
+};
+
+/**
+ * Whether this upload was diffed against the previous save, and why not.
+ *
+ * The comparison is only meaningful within one game account and one character
+ * (see saves._account_reason / _restarted_slots).  Suppressing it silently
+ * reads exactly like "nothing changed", so the verdict rides along with the
+ * upload response and the page says which it was.
+ */
+export type SaveComparison = {
+    compared?: boolean;
+    reason?: string;
+    restarted_slots?: Array<(number)>;
 };
 
 /**
@@ -703,6 +719,7 @@ export type UploadResponse = {
     save_upload_id?: (string | null);
     persisted?: boolean;
     relic_delta?: (RelicDelta | null);
+    comparison?: (SaveComparison | null);
     affected_builds?: Array<BuildChange>;
 };
 

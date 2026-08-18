@@ -97,14 +97,22 @@ function RelicDetail({
         <div className="text-xs text-muted-foreground">No effects.</div>
       )}
 
-      {relic.still_owned != null && (
-        <div className="border-t pt-1 text-xs">
-          {relic.still_owned ? (
-            <span className="text-muted-foreground">Still in your save</span>
-          ) : (
-            <span className="text-destructive">No longer in your save</span>
-          )}
+      {relic.staged ? (
+        // Bought in Relic Rites: owned and paid for, but it reaches the save
+        // file only on export — so it is never "in your save" yet.
+        <div className="border-t pt-1 text-xs text-amber-600 dark:text-amber-400">
+          Bought in Relic Rites — not exported to your save yet
         </div>
+      ) : (
+        relic.still_owned != null && (
+          <div className="border-t pt-1 text-xs">
+            {relic.still_owned ? (
+              <span className="text-muted-foreground">Still in your save</span>
+            ) : (
+              <span className="text-destructive">No longer in your save</span>
+            )}
+          </div>
+        )
       )}
     </div>
   )
@@ -122,7 +130,11 @@ export function RelicRefChip({
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <span className="inline-flex max-w-full cursor-help items-center gap-1 rounded border bg-background/60 px-1.5 py-0.5 text-xs">
+        <span
+          className={`inline-flex max-w-full cursor-help items-center gap-1 rounded border bg-background/60 px-1.5 py-0.5 text-xs${
+            relic.staged ? " border-dashed border-amber-500/60" : ""
+          }`}
+        >
           <span
             className="h-2 w-2 shrink-0 rounded-full"
             style={{
@@ -135,6 +147,16 @@ export function RelicRefChip({
           <span className="truncate">
             {relic.name || `Relic ${relic.real_id}`}
           </span>
+          {/* Dashed border + marker: this one is not in the save file yet. */}
+          {relic.staged && (
+            <span
+              role="img"
+              aria-label="not exported yet"
+              className="shrink-0 text-amber-600 dark:text-amber-400"
+            >
+              ⤓
+            </span>
+          )}
         </span>
       </TooltipTrigger>
       <TooltipContent className="max-w-[18rem]">

@@ -40,6 +40,12 @@ export interface StreamUploadResult {
   profileCount: number
   platform: string
   relicDelta?: { added: number; removed: number }
+  /** Whether this save was diffed against the previous one, and why not. */
+  comparison?: {
+    compared: boolean
+    reason: string
+    restarted_slots: number[]
+  }
   changes: BuildChange[]
 }
 
@@ -153,6 +159,7 @@ async function runUploadStream(
     profileCount: uploadData?.profile_count ?? 0,
     platform: uploadData?.platform ?? "PC",
     relicDelta: uploadData?.relic_delta,
+    comparison: uploadData?.comparison,
     changes,
   })
 

@@ -1,0 +1,145 @@
+"""Who the save-to-save comparison is allowed to run against.
+
+"Changes since your last save" is only meaningful within one game account AND
+one character.  Upload a friend's save to try the app on their inventory and a
+naive diff reports your entire collection as lost; delete a character and roll a
+new one in the same slot and it does the same thing.  These cover the two gates
+and the reason reported back to the upload page, which used to suppress the
+comparison silently — indistinguishable from "nothing changed".
+"""
+import uuid
+
+from app.api.routes.saves import (
+    _account_reason,
+    _compute_relic_delta,
+    _restarted_slots,
+    _same_account,
+)
+from app.models import ParsedProfileData, ParsedRelicData, Relic
+
+EMPTY = 4294967295
+
+
+def _fp(n: int) -> tuple:
+    """A distinct relic content fingerprint, as the slot maps hold them."""
+    return (100 + n, n, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY)
+
+
+def _fps(*ns: int) -> list[tuple]:
+    return [_fp(n) for n in ns]
+
+
+class TestAccountGate:
+    def test_same_owner_compares(self) -> None:
+        assert _same_account("7656119", "7656119") is True
+        assert _account_reason("7656119", "7656119") == "ok"
+
+    def test_a_friends_save_is_not_compared(self) -> None:
+        assert _same_account("7656119", "7656120") is False
+        assert _account_reason("7656119", "7656120") == "different_account"
+
+    def test_unreadable_owner_still_compares_but_says_so(self) -> None:
+        """PS4 memory.dat has no readable owner anchor.  Fail OPEN — an unknown
+        owner must never hide a real change — but flag it, so a user testing a
+        friend's console save can see why the diff looks absurd."""
+        assert _same_account(None, "7656119") is True
+        assert _same_account("7656119", None) is True
+        assert _account_reason(None, "7656119") == "unverified_owner"
+        assert _account_reason("7656119", None) == "unverified_owner"
+
+
+class TestRestartedSlots:
+    def test_ordinary_session_is_not_a_restart(self) -> None:
+        """Play keeps almost the whole inventory: a few new relics, a few sold."""
+        old = {0: _fps(*range(20))}
+        new = {0: _fps(*range(2, 24))}
+        assert _restarted_slots(old, new) == set()
+
+    def test_zero_overlap_is_a_different_character(self) -> None:
+        old = {0: _fps(*range(20))}
+        new = {0: _fps(*range(100, 103))}
+        assert _restarted_slots(old, new) == {0}
+
+    def test_only_the_restarted_slot_is_flagged(self) -> None:
+        old = {0: _fps(*range(20)), 1: _fps(*range(30, 50))}
+        new = {0: _fps(*range(100, 103)), 1: _fps(*range(31, 50))}
+        assert _restarted_slots(old, new) == {0}
+
+    def test_small_previous_inventory_is_left_alone(self) -> None:
+        """Under the threshold the signal is too weak: a new character really
+        can hold three relics and sell all three."""
+        old = {0: _fps(1, 2, 3)}
+        new = {0: _fps(50, 51)}
+        assert _restarted_slots(old, new) == set()
+
+    def test_missing_or_empty_new_slot_is_a_normal_diff(self) -> None:
+        """Nothing at all in the slot is a real (if drastic) change, not a
+        different character — the ordinary diff can say so."""
+        assert _restarted_slots({0: _fps(*range(20))}, {}) == set()
+        assert _restarted_slots({0: _fps(*range(20))}, {0: []}) == set()
+
+
+class TestRelicDeltaSkipsRestartedSlots:
+    @staticmethod
+    def _db_relic(profile_id: uuid.UUID, n: int) -> Relic:
+        return Relic(
+            owner_id=uuid.uuid4(),
+            profile_id=profile_id,
+            ga_handle=0xC0000000 + n,
+            item_id=100 + n + 2147483648,
+            real_id=100 + n,
+            color="Red",
+            effect_1=n, effect_2=EMPTY, effect_3=EMPTY,
+            curse_1=EMPTY, curse_2=EMPTY, curse_3=EMPTY,
+            is_deep=False,
+            name=f"Relic {n}",
+            tier="Delicate",
+        )
+
+    @staticmethod
+    def _parsed(slot: int, ns: list[int]) -> ParsedProfileData:
+        return ParsedProfileData(
+            slot_index=slot,
+            name="Tarnished",
+            relic_count=len(ns),
+            relics=[
+                ParsedRelicData(
+                    ga_handle=0xD0000000 + n,
+                    item_id=100 + n + 2147483648,
+                    real_id=100 + n,
+                    color="Red",
+                    effect_1=n, effect_2=EMPTY, effect_3=EMPTY,
+                    curse_1=EMPTY, curse_2=EMPTY, curse_3=EMPTY,
+                    is_deep=False,
+                    name=f"Relic {n}",
+                    tier="Delicate",
+                )
+                for n in ns
+            ],
+        )
+
+    def test_counts_a_normal_change(self) -> None:
+        prof_id = uuid.uuid4()
+        old = [self._db_relic(prof_id, n) for n in range(5)]
+        new = [self._parsed(0, list(range(1, 7)))]
+        delta = _compute_relic_delta(old, new, {prof_id: 0}, set())
+        assert (delta.added, delta.removed) == (2, 1)
+
+    def test_a_restarted_slot_contributes_nothing(self) -> None:
+        """Without the skip this reports 20 relics lost and 3 gained — a scary,
+        entirely fictional headline for someone who simply re-rolled."""
+        prof_id = uuid.uuid4()
+        old = [self._db_relic(prof_id, n) for n in range(20)]
+        new = [self._parsed(0, [100, 101, 102])]
+        delta = _compute_relic_delta(old, new, {prof_id: 0}, {0})
+        assert (delta.added, delta.removed) == (0, 0)
+
+    def test_other_slots_still_count(self) -> None:
+        restarted_id, kept_id = uuid.uuid4(), uuid.uuid4()
+        old = [self._db_relic(restarted_id, n) for n in range(20)]
+        old += [self._db_relic(kept_id, n) for n in range(50, 55)]
+        new = [self._parsed(0, [100, 101]), self._parsed(1, list(range(50, 57)))]
+        delta = _compute_relic_delta(
+            old, new, {restarted_id: 0, kept_id: 1}, {0}
+        )
+        assert (delta.added, delta.removed) == (2, 0)
