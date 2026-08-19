@@ -758,6 +758,17 @@ export const BuildSnapshotSummarySchema = {
                 }
             ],
             title: 'Computed At'
+        },
+        updated_at: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Updated At'
         }
     },
     type: 'object',

@@ -181,6 +181,7 @@ export type BuildSnapshotSummary = {
     reviewed?: boolean;
     best_score?: number;
     computed_at?: (string | null);
+    updated_at?: (string | null);
 };
 
 export type BuildsPublic = {

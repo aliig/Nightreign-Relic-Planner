@@ -726,6 +726,10 @@ class BuildSnapshotSummary(BaseModel):
     reviewed: bool = True
     best_score: int = 0
     computed_at: str | None = None
+    # When these results were last WRITTEN.  computed_at only ever records the
+    # row's creation, so it cannot tell a client that a re-optimize replaced the
+    # results — the builds page keys its saved-loadout rank query on this.
+    updated_at: str | None = None
 
 
 @router.get("/summaries", response_model=list[BuildSnapshotSummary])
@@ -754,6 +758,7 @@ def list_build_summaries(
             reviewed=snap.reviewed,
             best_score=snap.best_score,
             computed_at=snap.computed_at.isoformat() if snap.computed_at else None,
+            updated_at=snap.updated_at.isoformat() if snap.updated_at else None,
         ))
     return summaries
 

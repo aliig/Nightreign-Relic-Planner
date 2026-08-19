@@ -139,7 +139,7 @@ describe("builds list — saved-loadout rank badge", () => {
   })
   afterEach(cleanup)
 
-  it("reads as in sync when the saved loadout is the top suggestion", () => {
+  it("names the saved loadout and its rank when it is the top suggestion", () => {
     mockRanks = [
       {
         build_id: "build-1",
@@ -150,10 +150,12 @@ describe("builds list — saved-loadout rank badge", () => {
       },
     ]
     renderPage()
-    expect(screen.getByText("In sync · Dregs Raider")).toBeInTheDocument()
+    expect(
+      screen.getByText("Saved: Dregs Raider · #1 of 10"),
+    ).toBeInTheDocument()
   })
 
-  it("shows the rank when the optimizer has moved past the saved loadout", () => {
+  it("reads identically further down the list", () => {
     mockRanks = [
       {
         build_id: "build-1",
@@ -164,9 +166,12 @@ describe("builds list — saved-loadout rank badge", () => {
       },
     ]
     renderPage()
-    expect(screen.getByText("Dregs Raider · #3 of 10")).toBeInTheDocument()
-    // The drifted case must be visually distinct from the in-sync one, or the
-    // badge stops being an at-a-glance signal.
+    // Same wording as rank 1, by design: the optimizer SUGGESTS arrangements
+    // and the player may well prefer #3, so the badge states a position rather
+    // than grading the save against the top result.
+    expect(
+      screen.getByText("Saved: Dregs Raider · #3 of 10"),
+    ).toBeInTheDocument()
     expect(screen.queryByText(/In sync/)).not.toBeInTheDocument()
   })
 
@@ -203,6 +208,6 @@ describe("builds list — saved-loadout rank badge", () => {
       },
     ]
     renderPage()
-    expect(screen.getByText("In sync · (unnamed)")).toBeInTheDocument()
+    expect(screen.getByText("Saved: (unnamed) · #1 of 10")).toBeInTheDocument()
   })
 })

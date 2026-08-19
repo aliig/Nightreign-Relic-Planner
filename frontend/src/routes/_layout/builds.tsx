@@ -207,35 +207,28 @@ interface BuildCardData {
 }
 
 /**
- * "What I actually have saved in-game IS this build's suggestion #N."
+ * "The loadout I have saved in-game is this build's suggestion #N."
  *
- * Rank 1 means the loadout sitting in the save is still the optimizer's top
- * pick; a lower rank means the optimizer has since found better arrangements
- * (usually because newer relics arrived) and the in-game setup has drifted.
- * Rendered only on a match: "never saved this build" and "fell out of the top
- * N" are both silence, since neither is news worth a badge.
+ * Deliberately flat across ranks — same wording, same colour, whether the save
+ * matches #1 or #7.  The optimizer SUGGESTS arrangements; the top ten exist
+ * because the player may well prefer #4 (fewer curses, relics they'd rather
+ * not move, a spread they like), so a rank is a position in a list, not a
+ * score to chase.  It reads the same as the optimize page's card badge, which
+ * is the same fact seen from the other side.
+ *
+ * Rendered only on a match: "never saved this build" and "saved something
+ * outside the top ten" are both silence, since neither is news worth a badge.
  */
 function SavedLoadoutBadge({ rank }: { rank: LoadoutRank }) {
-  const inSync = rank.rank === 1
   const label = rank.loadout_name || "(unnamed)"
   return (
     <span
-      className={`mt-1.5 inline-flex max-w-full items-center gap-1 text-[11px] font-medium ${
-        inSync
-          ? "text-green-600 dark:text-green-500"
-          : "text-amber-600 dark:text-amber-500"
-      }`}
-      title={
-        inSync
-          ? `Your in-game loadout "${label}" is this build's top suggestion.`
-          : `Your in-game loadout "${label}" is now only suggestion #${rank.rank} of ${rank.total} for this build — re-optimize and save the top result to catch up.`
-      }
+      className="mt-1.5 inline-flex max-w-full items-center gap-1 text-[11px] font-medium text-muted-foreground"
+      title={`Your in-game loadout "${label}" is suggestion #${rank.rank} of ${rank.total} for this build.`}
     >
       <BookMarked className="h-3 w-3 shrink-0" />
       <span className="truncate">
-        {inSync
-          ? `In sync · ${label}`
-          : `${label} · #${rank.rank} of ${rank.total}`}
+        Saved: {label} · #{rank.rank} of {rank.total}
       </span>
     </span>
   )
@@ -767,7 +760,7 @@ function ChangesSinceLastSave({
  * Matched against the LIVE preset list (staged loadout edits composed in), so
  * a setup saved from the optimizer but not yet exported counts as saved — it
  * is what the user's save will hold. Ranks come from each build's cached
- * optimize, so `snapshotSig` (the summaries' computed_at set) is part of the
+ * optimize, so `snapshotSig` (the summaries' updated_at set) is part of the
  * key: a re-optimize moves the results and must move the badge with them.
  */
 function useLoadoutRanks(snapshotSig: string): Map<string, LoadoutRank> {
@@ -830,8 +823,11 @@ function AuthBuildList() {
     if (s.build_id) summaryByBuild.set(s.build_id, s)
   }
   const rankByBuild = useLoadoutRanks(
+    // updated_at, not computed_at: the latter only records when the snapshot
+    // ROW was created, so a re-optimize left this signature unchanged and the
+    // rank map kept serving its cached (pre-optimize) answer.
     (summaries ?? [])
-      .map((s) => `${s.build_id}:${s.computed_at ?? ""}`)
+      .map((s) => `${s.build_id}:${s.updated_at ?? s.computed_at ?? ""}`)
       .sort()
       .join("|"),
   )
