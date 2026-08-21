@@ -4,7 +4,12 @@ from app import crud
 from app.core.config import settings
 from app.models import User, UserCreate
 
-engine = create_engine(str(settings.SQLALCHEMY_DATABASE_URI))
+engine = create_engine(
+    str(settings.SQLALCHEMY_DATABASE_URI),
+    # Bound the TCP connect so an unreachable server raises instead of
+    # blocking forever (see POSTGRES_CONNECT_TIMEOUT).
+    connect_args={"connect_timeout": settings.POSTGRES_CONNECT_TIMEOUT},
+)
 
 
 # make sure all SQLModel models are imported (app.models) before initializing DB

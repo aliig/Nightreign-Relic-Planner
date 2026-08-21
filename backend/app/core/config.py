@@ -57,6 +57,11 @@ class Settings(BaseSettings):
     POSTGRES_USER: str
     POSTGRES_PASSWORD: str = ""
     POSTGRES_DB: str = ""
+    # Seconds to wait for a TCP connection to Postgres before giving up.
+    # libpq's default is 0 (wait forever): with no server listening, psycopg
+    # blocks in select() with no deadline, which hangs the whole pytest run at
+    # fixture setup instead of failing.  A bounded timeout fails fast instead.
+    POSTGRES_CONNECT_TIMEOUT: int = 10
 
     @computed_field  # type: ignore[prop-decorator]
     @property
