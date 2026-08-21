@@ -32,6 +32,7 @@ from app.core.game_data import (
     get_relic_generator,
     get_relic_lots,
 )
+from app.core.optimizer_pool import prefetch_depth
 from app.models import (
     AddRelicSpec,
     Build,
@@ -1373,26 +1374,38 @@ async def upload_save_stream(
                 max_per_vessel=3, executor=executor,
                 vessel_ids=rerun_by_build.get(b_id))
 
-        # Depth-1 prefetch: the next non-skipped build's vessel tasks are
-        # submitted before draining the current build's futures, so pool
-        # workers idle during a build's completion tail start early on the
-        # next.  Per-build SSE event order is unchanged — prefetched futures
-        # are simply collected instantly when their build's turn comes.
-        pending: tuple[int, dict] | None = None
+        # Depth-N prefetch: keep up to `depth` builds' vessel tasks queued at
+        # once, so the pool never drains during a build's completion tail.
+        # Depth 1 leaves workers idle whenever the current build is down to
+        # its slowest vessel — and per build that is usually a single vessel
+        # carrying nearly all the work, so the whole pool stalls behind it.
+        # Per-build SSE event order is unchanged: builds are still COLLECTED
+        # strictly in order, only submission runs ahead.
+        depth = prefetch_depth()
+        inflight: dict[int, dict] = {}
+        next_submit = 0
 
-        def _prefetch_after(i0: int) -> None:
-            nonlocal pending
-            if executor is None or pending is not None:
+        def _fill_inflight() -> None:
+            """Submit forward until `depth` builds have vessel tasks queued.
+
+            Skipped builds and unknown-hero builds consume no depth — they
+            produce no futures, so the window advances past them for free.
+            """
+            nonlocal next_submit
+            if executor is None:
                 return
-            for j in range(i0 + 1, total):
-                if not skip_flags[j]:
-                    futures = _submit_for(j)
-                    if futures is not None:
-                        pending = (j, futures)
-                    return
+            while next_submit < total and len(inflight) < depth:
+                j = next_submit
+                next_submit += 1
+                futures = _submit_for(j)
+                if futures is not None:
+                    inflight[j] = futures
 
         for idx0, (build_id, build_name, character, slot_index, broken_pins) in enumerate(affected_info):
             idx = idx0 + 1
+            # Top up the submission window first — including for builds that
+            # are about to be skipped, so the pool keeps working through them.
+            _fill_inflight()
             yield f"data: {json.dumps({'type': 'optimize_start', 'build_id': str(build_id), 'build_name': build_name, 'index': idx, 'total': total})}\n\n"
 
             owned_relics = relics_by_slot.get(slot_index, [])
@@ -1418,13 +1431,10 @@ async def upload_save_stream(
                 if hero_type is None:
                     raise ValueError(f"Unknown character '{character}'")
 
-                futures = None
-                if pending is not None and pending[0] == idx0:
-                    futures = pending[1]
-                    pending = None
-                if futures is None:
-                    futures = _submit_for(idx0)  # None when executor is None
-                _prefetch_after(idx0)
+                # _fill_inflight (top of loop) already attempted idx0, so a
+                # miss here means "no futures for this build" (no pool or
+                # unknown hero), not "not submitted yet".
+                futures = inflight.pop(idx0, None)
 
                 inventory = RelicInventory.from_owned_relics(owned_relics)
 
