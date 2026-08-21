@@ -219,3 +219,65 @@ def test_different_account_reupload_suppresses_comparison(
     assert body["relic_delta"]["added"] == 0
     assert body["relic_delta"]["removed"] == 0
     assert body["affected_builds"] == []
+
+
+@pytest.mark.skipif(
+    not FIXTURE_PATH.exists(),
+    reason="Real save fixture not present",
+)
+@pytest.mark.usefixtures("override_game_data")
+def test_stream_upload_optimizes_a_never_optimized_build(
+    client: TestClient, superuser_token_headers: dict[str, str], db: Session
+) -> None:
+    """A build the user never optimized has no snapshot, so the affected-build
+    scan (which walks snapshots) cannot see it.  It must still be optimized —
+    otherwise it stays resultless upload after upload.
+
+    This is a FIRST upload for this account, where the save-to-save diff never
+    runs, so nothing but the never-optimized rule can put a build in the stream.
+
+    Scope note: only the SSE stream is asserted.  The build lives in the test's
+    rolled-back transaction, while the route persists snapshots on a separate
+    connection (``Session(engine)``) that cannot see it — so the snapshot write
+    for this build is expected to fail here.  The snapshot-creation path itself
+    is covered by the optimize-route tests.
+    """
+    import json as _json
+
+    from app.core.config import settings
+    from app.models import Build, User
+
+    user = db.exec(
+        select(User).where(User.email == settings.FIRST_SUPERUSER)
+    ).first()
+    assert user is not None
+
+    build = Build(
+        owner_id=user.id,
+        name="Never Optimized",
+        character="Wylder",
+        groups=[{"weight": 100, "effects": [], "families": ["Attack Power"]}],
+    )
+    db.add(build)
+    db.flush()
+
+    with FIXTURE_PATH.open("rb") as f:
+        response = client.post(
+            "/api/v1/saves/upload/stream",
+            files={"file": ("NR0000.sl2", f, "application/octet-stream")},
+            headers=superuser_token_headers,
+        )
+    assert response.status_code == 200, response.text
+
+    events = [
+        _json.loads(line[len("data: "):])
+        for line in response.text.splitlines()
+        if line.startswith("data: ")
+    ]
+    started = {
+        e["build_id"] for e in events if e.get("type") == "optimize_start"
+    }
+    assert str(build.id) in started, (
+        "a build with no snapshot was never optimized — it would stay "
+        "resultless through every upload"
+    )

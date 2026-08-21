@@ -381,6 +381,40 @@ def _identify_affected_builds(
     return affected
 
 
+def _builds_without_snapshots(
+    db_builds: list[Build],
+    snapped_build_ids: set[uuid.UUID],
+    new_profiles: list[ParsedProfileData],
+) -> list[_AffectedBuild]:
+    """Builds that have never been optimized, aimed at the slot the UI shows.
+
+    ``_identify_affected_builds`` is snapshot-driven: it can only invalidate
+    results that already exist.  A build the user created but never optimized
+    has none, so it would sit resultless through every upload and report
+    nothing on the builds page until opened by hand.
+
+    There is nothing to diff for these — no baseline means ``diff_results``
+    returns status "new" and the snapshot is written already-reviewed, so they
+    stay out of "changes since your last save".  The point is only to give them
+    results.  For the same reason they ignore the account/restart gates that
+    guard the diff: those exist because diffing against a stranger's save is
+    meaningless, and this is not a diff.  Whatever inventory the upload just
+    persisted is the one the rest of the app is now showing.
+
+    Slot: the lowest ``slot_index`` in the new save.  The builds list and the
+    optimize page both default to ``profiles[0]`` (ordered by slot_index), so
+    that is the snapshot the user will actually be shown.
+    """
+    if not new_profiles:
+        return []
+    slot = min(p.slot_index for p in new_profiles)
+    return [
+        _AffectedBuild(build=b, slot_index=slot)
+        for b in sorted(db_builds, key=lambda b: b.name)
+        if b.id not in snapped_build_ids
+    ]
+
+
 def _flag_affected_snapshots(
     session: Any,
     ds: Any,
@@ -975,10 +1009,11 @@ async def upload_save_stream(
         else SaveComparison(compared=False, reason="no_previous_save")
     )
 
+    db_builds = list(session.exec(
+        select(Build).where(Build.owner_id == current_user.id)
+    ).all())
+
     if old_relics:
-        db_builds = list(session.exec(
-            select(Build).where(Build.owner_id == current_user.id)
-        ).all())
         for build in db_builds:
             if not build.pinned_relics:
                 continue
@@ -989,7 +1024,9 @@ async def upload_save_stream(
         session.flush()
 
         # A different account's slot N is a different character — skip the diff
-        # and the eager re-optimization when accounts differ.
+        # and the re-optimization it drives when accounts differ.  (Builds with
+        # no snapshot at all are added below regardless; they have nothing to
+        # diff.)
         if same_account:
             old_profiles = list(session.exec(
                 select(Profile).where(Profile.owner_id == current_user.id)
@@ -1006,6 +1043,19 @@ async def upload_save_stream(
                 session, ds, current_user.id, old_relics, old_profiles,
                 profiles, db_builds, handle_remap, restarted,
             )
+
+    # Builds that have never been optimized have no snapshot for the diff above
+    # to find, so they join the run unconditionally — including on a first
+    # upload, where the diff never runs at all.  Appended last: the builds with
+    # actual news stream first.
+    snapped_build_ids = set(session.exec(
+        select(OptimizationSnapshot.build_id).where(
+            OptimizationSnapshot.owner_id == current_user.id
+        )
+    ).all())
+    affected.extend(
+        _builds_without_snapshots(db_builds, snapped_build_ids, profiles)
+    )
 
     # Persist fresh data (same as non-streaming upload)
     old_uploads = session.exec(

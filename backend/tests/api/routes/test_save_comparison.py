@@ -11,11 +11,12 @@ import uuid
 
 from app.api.routes.saves import (
     _account_reason,
+    _builds_without_snapshots,
     _compute_relic_delta,
     _restarted_slots,
     _same_account,
 )
-from app.models import ParsedProfileData, ParsedRelicData, Relic
+from app.models import Build, ParsedProfileData, ParsedRelicData, Relic
 
 EMPTY = 4294967295
 
@@ -143,3 +144,47 @@ class TestRelicDeltaSkipsRestartedSlots:
             old, new, {restarted_id: 0, kept_id: 1}, {0}
         )
         assert (delta.added, delta.removed) == (2, 0)
+
+
+class TestNeverOptimizedBuilds:
+    """A build with no snapshot has no results for the upload diff to
+    invalidate, so the snapshot-driven scan cannot see it at all — it would sit
+    resultless upload after upload.  These join the run on their own."""
+
+    @staticmethod
+    def _build(name: str) -> Build:
+        return Build(id=uuid.uuid4(), owner_id=uuid.uuid4(), name=name,
+                     character="Wylder")
+
+    @staticmethod
+    def _profile(slot: int) -> ParsedProfileData:
+        return ParsedProfileData(
+            slot_index=slot, name="Tarnished", relic_count=0, relics=[]
+        )
+
+    def test_only_builds_with_no_snapshot_are_added(self) -> None:
+        optimized, fresh = self._build("Old"), self._build("New")
+        out = _builds_without_snapshots(
+            [optimized, fresh], {optimized.id}, [self._profile(0)]
+        )
+        assert [ab.build.id for ab in out] == [fresh.id]
+        assert out[0].broken_pins == []
+
+    def test_aimed_at_the_slot_the_ui_shows(self) -> None:
+        """profiles[0] — lowest slot_index — is what the builds list and the
+        optimize page default to; a snapshot for any other slot would be
+        invisible there."""
+        fresh = self._build("New")
+        out = _builds_without_snapshots(
+            [fresh], set(), [self._profile(2), self._profile(1)]
+        )
+        assert [ab.slot_index for ab in out] == [1]
+
+    def test_ordered_by_name(self) -> None:
+        builds = [self._build("Zephyr"), self._build("Alpha"), self._build("Mid")]
+        out = _builds_without_snapshots(builds, set(), [self._profile(0)])
+        assert [ab.build.name for ab in out] == ["Alpha", "Mid", "Zephyr"]
+
+    def test_no_save_slots_means_nothing_to_optimize_against(self) -> None:
+        out = _builds_without_snapshots([self._build("New")], set(), [])
+        assert out == []
