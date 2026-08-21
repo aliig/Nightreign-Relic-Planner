@@ -1,6 +1,7 @@
 """Save file upload, profile discovery, and relic inventory endpoints."""
 import hashlib
 import json
+import logging
 import queue
 import tempfile
 import threading
@@ -100,13 +101,14 @@ from nrplanner.changes import (
     diff_results,
     fingerprint_owned,
     multiset_diff,
+    relevant_changes,
     relevant_relics_signature,
-    relevant_to_build,
     relic_fingerprint,
     relics_signature,
     relics_signature_from_fingerprints,
     serialize_match_keys,
     serialize_top_layouts,
+    vessels_needing_rerun,
 )
 from nrplanner.models import (
     BuildChange,
@@ -123,6 +125,8 @@ from nrplanner.rites import (
     bulk_acquire,
 )
 from nrplanner.scoring import BuildScorer
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/saves", tags=["saves"])
 
@@ -292,6 +296,13 @@ class _AffectedBuild:
     build: Build
     slot_index: int
     broken_pins: list[RelicRef] = field(default_factory=list)
+    # Vessel-level pruning inputs.  ``added_keys`` are the (color, is_deep)
+    # placement keys of the relevant ADDED relics — the only vessels that can
+    # move are the ones with a slot able to hold one of them.  Reuse of cached
+    # per-vessel results is only sound when nothing relevant was removed and no
+    # pin broke (see _rerun_vessel_ids).
+    added_keys: set[tuple[str, bool]] = field(default_factory=set)
+    additions_only: bool = False
 
 
 def _slot_fingerprints(
@@ -342,6 +353,12 @@ def _identify_affected_builds(
 
     old_by_handle = {r.ga_handle: r for r in old_relics}
     builds_by_id = {b.id: b for b in db_builds}
+    # Placement key per fingerprint, straight off the parsed save — no lookup
+    # table needed, the relics carry their own color and deep-ness.
+    key_of_fp = {
+        _parsed_relic_fingerprint(r): (r.color, r.is_deep)
+        for prof in new_profiles for r in prof.relics
+    }
 
     snaps = session.exec(
         select(OptimizationSnapshot).where(OptimizationSnapshot.owner_id == owner_id)
@@ -360,7 +377,8 @@ def _identify_affected_builds(
             new_by_slot.get(snap.slot_index, []),
         )
         build_def = _build_def_for_relevance(build)
-        relevant_added, relevant_removed = relevant_to_build(build_def, added, removed, ds)
+        rel_added, rel_removed = relevant_changes(build_def, added, removed, ds)
+        relevant_added, relevant_removed = len(rel_added), len(rel_removed)
 
         broken: list[RelicRef] = []
         for handle in build.pinned_relics or []:
@@ -376,6 +394,8 @@ def _identify_affected_builds(
 
         affected.append(_AffectedBuild(
             build=build, slot_index=snap.slot_index, broken_pins=broken,
+            added_keys={key_of_fp[fp] for fp in rel_added if fp in key_of_fp},
+            additions_only=not rel_removed and not broken,
         ))
 
     return affected
@@ -413,6 +433,88 @@ def _builds_without_snapshots(
         for b in sorted(db_builds, key=lambda b: b.name)
         if b.id not in snapped_build_ids
     ]
+
+
+def _rerun_vessel_ids(
+    ab: _AffectedBuild,
+    build_def: BuildDefinition,
+    snap: Any,
+    old_relics_hash: str | None,
+    vessels: list[dict],
+) -> set[int] | None:
+    """Vessels this build must re-optimize, or None to re-run all of them.
+
+    A relic can only occupy a slot matching its (color, deep) key, so a vessel
+    with no such slot cannot have moved and its cached results still stand.
+    Reuse rides on the snapshot's stored top-N, which is a GLOBAL ranking, not
+    a per-vessel one — results that missed the cut are gone.  That is sound for
+    an additions-only diff and only then: untouched vessels keep their exact
+    scores while re-run vessels can only score higher, so nothing that missed
+    the old cut can climb into the new one.  Any relevant removal (a cull, a
+    sale) can lower a re-run vessel instead, which could promote a layout we no
+    longer have — those fall back to a full run.
+
+    Every other condition here says the same thing in a different key: the
+    cached results must describe THIS build, at THIS version, over exactly the
+    inventory the upload is diffing away from.
+
+    ``snap`` needs only the freshness columns.  Whether the snapshot actually
+    holds usable results is the caller's problem: an empty ``full_results``
+    leaves nothing to carry, so the caller must fall back to a full run.
+    """
+    if not ab.additions_only or not ab.added_keys:
+        return None
+    # additions_only is computed from _build_def_for_relevance, which carries
+    # every field the relevance scan reads EXCEPT default_curse_weight.  A
+    # build that weights curses positively counts any cursed relic as relevant,
+    # so a removal the scan did not see could still lower a re-run vessel.  No
+    # such build exists today (weights are zero or negative); refusing reuse
+    # keeps the soundness argument true if one ever does.
+    if build_def.default_curse_weight > 0:
+        return None
+    if snap is None:
+        return None
+    if old_relics_hash is None or snap.relics_hash != old_relics_hash:
+        return None
+    # A staged diff means the cached results include relics that were never in
+    # the save — not a base this diff can be applied to.
+    if snap.staged_signature is not None:
+        return None
+    if snap.build_hash != build_signature(build_def):
+        return None
+    if (snap.optimizer_version != OPTIMIZER_VERSION
+            or snap.game_data_version != game_data_version()):
+        return None
+    if snap.top_n != 10 or snap.max_per_vessel != 3:
+        return None
+    return vessels_needing_rerun(vessels, ab.added_keys, build_def.include_deep)
+
+
+def _remap_carried_handles(
+    results: list[VesselResult], handle_remap: dict[int, int]
+) -> bool:
+    """Rewrite cached layouts onto the new save's ga_handles, in place.
+
+    The game renumbers every handle when it writes a save, so a cached layout
+    points at handles the new inventory does not have.  Content is what
+    survives a save, and pairing by content is exactly what
+    ``_compute_handle_remap`` does.
+
+    Returns False when a carried layout uses a relic the new save no longer
+    has: that layout cannot be salvaged, so the build must be re-run in full.
+    Under an additions-only diff this should not happen — every relic in a
+    layout scored positively, so losing one would have registered as a relevant
+    removal — but a cached result is not worth trusting on an argument.
+    """
+    for res in results:
+        for a in res.assignments:
+            if a.relic is None:
+                continue
+            new_handle = handle_remap.get(a.relic.ga_handle)
+            if new_handle is None:
+                return False
+            a.relic.ga_handle = new_handle
+    return True
 
 
 def _flag_affected_snapshots(
@@ -999,6 +1101,7 @@ async def upload_save_stream(
     ).all())
     handle_remap = _compute_handle_remap(old_relics, profiles)
     affected: list[_AffectedBuild] = []
+    old_hash_by_slot: dict[int, str] = {}
     relic_delta = RelicDelta()
     comparison = (
         SaveComparison(
@@ -1036,6 +1139,12 @@ async def upload_save_stream(
             )
             restarted = _restarted_slots(old_by_slot, new_by_slot)
             comparison.restarted_slots = sorted(restarted)
+            # The inventory each snapshot must match for its cached per-vessel
+            # results to be reusable (see _rerun_vessel_ids).
+            old_hash_by_slot = {
+                slot: relics_signature_from_fingerprints(fps)
+                for slot, fps in old_by_slot.items()
+            }
             relic_delta = _compute_relic_delta(
                 old_relics, profiles, old_slot_of, restarted
             )
@@ -1152,6 +1261,64 @@ async def upload_save_stream(
         ab.build.id: build_def_from_db(ab.build) for ab in affected
     }
 
+    # Vessel-level reuse plan: which vessels each build must actually re-run,
+    # and the cached results that carry the rest.  Both are resolved here,
+    # while the session is open and BEFORE any vessel task is submitted — the
+    # depth-1 prefetch submits a build's vessels ahead of its turn, so the
+    # subset must not still be in question by then.
+    rerun_by_build: dict[uuid.UUID, set[int]] = {}
+    carried_by_build: dict[uuid.UUID, list[VesselResult]] = {}
+    vessels_by_hero: dict[int, list[dict]] = {}
+    snap_meta = {
+        (row.build_id, row.slot_index): row
+        for row in session.exec(
+            select(
+                OptimizationSnapshot.build_id,
+                OptimizationSnapshot.slot_index,
+                OptimizationSnapshot.relics_hash,
+                OptimizationSnapshot.build_hash,
+                OptimizationSnapshot.optimizer_version,
+                OptimizationSnapshot.game_data_version,
+                OptimizationSnapshot.staged_signature,
+                OptimizationSnapshot.top_n,
+                OptimizationSnapshot.max_per_vessel,
+            ).where(OptimizationSnapshot.owner_id == current_user.id)
+        ).all()
+    }
+    for ab in affected:
+        hero = _CHAR_NAME_TO_HERO_TYPE.get(ab.build.character)
+        if hero is None:
+            continue
+        if hero not in vessels_by_hero:
+            vessels_by_hero[hero] = list(ds.get_all_vessels_for_hero(hero))
+        rerun_ids = _rerun_vessel_ids(
+            ab, build_defs[ab.build.id],
+            snap_meta.get((ab.build.id, ab.slot_index)),
+            old_hash_by_slot.get(ab.slot_index),
+            vessels_by_hero[hero],
+        )
+        if rerun_ids is None:
+            continue
+        stored = session.exec(
+            select(OptimizationSnapshot.full_results).where(
+                OptimizationSnapshot.build_id == ab.build.id,
+                OptimizationSnapshot.slot_index == ab.slot_index,
+            )
+        ).first()
+        cached = [VesselResult.model_validate(r) for r in (stored or [])]
+        if not cached:
+            continue  # nothing to carry — a partial run would lose vessels
+        carried = [r for r in cached if r.vessel_id not in rerun_ids]
+        if not _remap_carried_handles(carried, handle_remap):
+            continue
+        rerun_by_build[ab.build.id] = rerun_ids
+        carried_by_build[ab.build.id] = carried
+        log.info(
+            "vessel reuse build=%r rerun=%d/%d carried=%d keys=%s",
+            ab.build.name, len(rerun_ids), len(vessels_by_hero[hero]),
+            len(carried), sorted(ab.added_keys),
+        )
+
     def _generate():
         yield f"data: {json.dumps({'type': 'upload_complete', 'data': upload_data})}\n\n"
 
@@ -1203,7 +1370,8 @@ async def upload_save_stream(
                 relics_by_slot.get(b_slot, []))
             return optimizer.submit_all_vessels(
                 build_defs[b_id], b_inventory, b_hero,
-                max_per_vessel=3, executor=executor)
+                max_per_vessel=3, executor=executor,
+                vessel_ids=rerun_by_build.get(b_id))
 
         # Depth-1 prefetch: the next non-skipped build's vessel tasks are
         # submitted before draining the current build's futures, so pool
@@ -1265,6 +1433,8 @@ async def upload_save_stream(
                     build_def, inventory, hero_type,
                     top_n=10, max_per_vessel=3,
                     executor=executor, presubmitted=futures,
+                    vessel_ids=rerun_by_build.get(build_id),
+                    carried=carried_by_build.get(build_id),
                 ):
                     if event["type"] == "progress":
                         yield f"data: {json.dumps({'type': 'optimize_progress', 'build_id': str(build_id), 'vessel': event['vessel'], 'total': event['total'], 'name': event['name']})}\n\n"

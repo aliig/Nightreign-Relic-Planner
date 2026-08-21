@@ -8,14 +8,30 @@ and the reason reported back to the upload page, which used to suppress the
 comparison silently — indistinguishable from "nothing changed".
 """
 import uuid
+from types import SimpleNamespace
+from typing import Any
+
+from nrplanner.changes import build_signature
+from nrplanner.models import (
+    BuildDefinition,
+    OwnedRelic,
+    SlotAssignment,
+    VesselResult,
+    WeightGroup,
+)
+from nrplanner.optimizer import OPTIMIZER_VERSION
 
 from app.api.routes.saves import (
     _account_reason,
+    _AffectedBuild,
     _builds_without_snapshots,
     _compute_relic_delta,
+    _remap_carried_handles,
+    _rerun_vessel_ids,
     _restarted_slots,
     _same_account,
 )
+from app.core.game_data import game_data_version
 from app.models import Build, ParsedProfileData, ParsedRelicData, Relic
 
 EMPTY = 4294967295
@@ -188,3 +204,178 @@ class TestNeverOptimizedBuilds:
     def test_no_save_slots_means_nothing_to_optimize_against(self) -> None:
         out = _builds_without_snapshots([self._build("New")], set(), [])
         assert out == []
+
+
+class TestVesselReuseGate:
+    """When may an upload keep a build's cached per-vessel results?
+
+    Only when the cache provably describes the same build, at the same
+    version, over exactly the inventory being diffed away from — and the diff
+    only ADDS.  The snapshot stores a global top-N, so a removal can promote a
+    layout it no longer holds (nrplanner/tests/test_vessel_reuse.py shows the
+    divergence).  Each test here removes one leg and expects a full re-run.
+    """
+    import uuid as _uuid
+
+    VESSELS = [
+        {"vessel_id": 1, "Colors": ("Red", "Red", "Red", "Red", "Red", "Red")},
+        {"vessel_id": 2, "Colors": ("Blue", "Blue", "Blue",
+                                    "Blue", "Blue", "Blue")},
+    ]
+
+    @staticmethod
+    def _build_def() -> BuildDefinition:
+        return BuildDefinition(
+            id="b", name="B", character="Wylder",
+            groups=[WeightGroup(weight=50, effects=[1001])],
+        )
+
+    @classmethod
+    def _snap(cls, build_def: BuildDefinition, **over: Any) -> SimpleNamespace:
+        fields = {
+            "relics_hash": "OLDHASH",
+            "build_hash": build_signature(build_def),
+            "optimizer_version": OPTIMIZER_VERSION,
+            "game_data_version": game_data_version(),
+            "staged_signature": None,
+            "top_n": 10,
+            "max_per_vessel": 3,
+        }
+        fields.update(over)
+        return SimpleNamespace(**fields)
+
+    @classmethod
+    def _affected(cls, **over: Any) -> _AffectedBuild:
+        build = Build(id=cls._uuid.uuid4(), owner_id=cls._uuid.uuid4(),
+                      name="B", character="Wylder")
+        fields = {"added_keys": {("Red", False)}, "additions_only": True}
+        fields.update(over)
+        return _AffectedBuild(build=build, slot_index=0, **fields)
+
+    def _call(self, ab=None, snap=None, old_hash="OLDHASH"):
+        bd = self._build_def()
+        return _rerun_vessel_ids(
+            ab or self._affected(),
+            bd,
+            self._snap(bd) if snap is None else snap,
+            old_hash,
+            self.VESSELS,
+        )
+
+    def test_reuses_the_vessels_a_red_addition_cannot_reach(self) -> None:
+        assert self._call() == {1}
+
+    def test_a_relevant_removal_forces_a_full_run(self) -> None:
+        assert self._call(ab=self._affected(additions_only=False)) is None
+
+    def test_a_broken_pin_forces_a_full_run(self) -> None:
+        """Pins are pre-assigned before any slot is solved, so a broken one
+        changes every vessel — additions_only is False in that case."""
+        assert self._call(ab=self._affected(
+            additions_only=False, added_keys={("Red", False)})) is None
+
+    def test_nothing_added_means_nothing_to_plan(self) -> None:
+        assert self._call(ab=self._affected(added_keys=set())) is None
+
+    def test_no_snapshot_forces_a_full_run(self) -> None:
+        """A build with no cached results has nothing to carry."""
+        assert _rerun_vessel_ids(
+            self._affected(), self._build_def(), None, "OLDHASH", self.VESSELS
+        ) is None
+
+    def test_snapshot_from_a_different_inventory_forces_a_full_run(self) -> None:
+        """The cache must describe the save we are diffing away from; anything
+        else and the carried vessels are answers to a different question."""
+        bd = self._build_def()
+        assert _rerun_vessel_ids(
+            self._affected(), bd, self._snap(bd, relics_hash="SOMETHING_ELSE"),
+            "OLDHASH", self.VESSELS,
+        ) is None
+
+    def test_unknown_previous_inventory_forces_a_full_run(self) -> None:
+        assert self._call(old_hash=None) is None
+
+    def test_staged_results_are_not_a_base(self) -> None:
+        """A staged diff means the cached layouts used relics that were never
+        in the save."""
+        bd = self._build_def()
+        assert _rerun_vessel_ids(
+            self._affected(), bd, self._snap(bd, staged_signature="abc"),
+            "OLDHASH", self.VESSELS,
+        ) is None
+
+    def test_edited_build_forces_a_full_run(self) -> None:
+        bd = self._build_def()
+        assert _rerun_vessel_ids(
+            self._affected(), bd, self._snap(bd, build_hash="STALE"),
+            "OLDHASH", self.VESSELS,
+        ) is None
+
+    def test_a_curse_weighted_build_forces_a_full_run(self) -> None:
+        """The relevance scan behind additions_only ignores
+        default_curse_weight, so a curse-weighting build could hide a relevant
+        removal.  None exists today — this keeps the guard honest if one does.
+        """
+        bd = BuildDefinition(
+            id="b", name="B", character="Wylder",
+            groups=[WeightGroup(weight=50, effects=[1001])],
+            default_curse_weight=3,
+        )
+        assert _rerun_vessel_ids(
+            self._affected(), bd, self._snap(bd), "OLDHASH", self.VESSELS,
+        ) is None
+
+    def test_version_drift_forces_a_full_run(self) -> None:
+        bd = self._build_def()
+        for over in ({"optimizer_version": OPTIMIZER_VERSION - 1},
+                     {"game_data_version": "stale"},
+                     {"top_n": 3},
+                     {"max_per_vessel": 1}):
+            assert _rerun_vessel_ids(
+                self._affected(), bd, self._snap(bd, **over),
+                "OLDHASH", self.VESSELS,
+            ) is None, over
+
+
+class TestCarriedHandleRemap:
+    """Cached layouts are re-pointed at the new save's handles.
+
+    The game renumbers every ga_handle when it writes a save, so a layout kept
+    from the previous upload references handles that no longer exist.  Content
+    survives; handles do not.
+    """
+
+    @staticmethod
+    def _result(handles: list[int | None]) -> VesselResult:
+        assignments = []
+        for i, h in enumerate(handles):
+            relic = None if h is None else OwnedRelic(
+                ga_handle=h, item_id=h + 1, real_id=100, color="Red",
+                effects=[1, EMPTY, EMPTY], curses=[EMPTY, EMPTY, EMPTY],
+                is_deep=False, name="R", tier="Delicate",
+            )
+            assignments.append(SlotAssignment(
+                slot_index=i, slot_color="Red", is_deep=False,
+                relic=relic, score=0, breakdown=[],
+            ))
+        return VesselResult(
+            vessel_id=1, vessel_name="V", vessel_character="Wylder",
+            unlock_flag=0, slot_colors=("Red",) * len(handles),
+            assignments=assignments, total_score=10,
+        )
+
+    def test_rewrites_every_handle(self) -> None:
+        results = [self._result([10, 11, None])]
+        assert _remap_carried_handles(results, {10: 90, 11: 91}) is True
+        assert [a.relic.ga_handle if a.relic else None
+                for a in results[0].assignments] == [90, 91, None]
+
+    def test_a_missing_relic_kills_the_reuse(self) -> None:
+        """The layout used a relic the new save does not have — it cannot be
+        carried, and the caller must re-run the build in full."""
+        results = [self._result([10, 11])]
+        assert _remap_carried_handles(results, {10: 90}) is False
+
+    def test_empty_slots_are_left_alone(self) -> None:
+        results = [self._result([None, None])]
+        assert _remap_carried_handles(results, {}) is True

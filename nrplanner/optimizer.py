@@ -489,6 +489,7 @@ class VesselOptimizer:
         max_per_vessel: int = 3,
         executor: ProcessPoolExecutor | None = None,
         deadline_secs: float = DEFAULT_BACKTRACK_DEADLINE_SECS,
+        vessel_ids: set[int] | None = None,
     ) -> dict[Future, dict]:
         """Submit one pool task per vessel; returns the future→vessel map.
 
@@ -496,8 +497,11 @@ class VesselOptimizer:
         current build's futures (depth-1 prefetch): the pool's FIFO queue then
         fills idle workers during each build's completion tail.  Consume with
         ``collect_all_vessels`` or ``optimize_vessels_streaming(presubmitted=…)``.
+
+        ``vessel_ids`` restricts the run to those vessels; the caller is then
+        responsible for supplying the rest as ``carried`` results.
         """
-        vessels = list(self.data_source.get_all_vessels_for_hero(hero_type))
+        vessels = self._vessel_subset(hero_type, vessel_ids)
         relics = inventory.relics
         futures: dict[Future, dict] = {}
         for v in vessels:
@@ -509,6 +513,14 @@ class VesselOptimizer:
             )
             futures[fut] = v
         return futures
+
+    def _vessel_subset(self, hero_type: int,
+                       vessel_ids: set[int] | None) -> list[dict]:
+        """The hero's vessels, optionally narrowed to ``vessel_ids``."""
+        vessels = list(self.data_source.get_all_vessels_for_hero(hero_type))
+        if vessel_ids is None:
+            return vessels
+        return [v for v in vessels if v["vessel_id"] in vessel_ids]
 
     @staticmethod
     def _dedup_rank(all_results: list[VesselResult], top_n: int) -> list[VesselResult]:
@@ -554,6 +566,8 @@ class VesselOptimizer:
         executor: ProcessPoolExecutor | None = None,
         deadline_secs: float = DEFAULT_BACKTRACK_DEADLINE_SECS,
         presubmitted: dict[Future, dict] | None = None,
+        vessel_ids: set[int] | None = None,
+        carried: list[VesselResult] | None = None,
     ):
         """Like optimize_all_vessels but yields events for SSE streaming.
 
@@ -567,13 +581,19 @@ class VesselOptimizer:
         ``submit_all_vessels``, requires *executor*) consumes already-submitted
         futures instead of submitting fresh ones — multi-build flows use it
         for depth-1 prefetch across builds.
+
+        ``vessel_ids`` optimizes only those vessels and ``carried`` supplies
+        results for the ones left out, so a caller that can prove some vessels
+        are untouched pays only for the rest.  Carried results join the final
+        ranking exactly as freshly computed ones do — the caller owns the proof
+        that they are still valid.
         """
-        all_results: list[VesselResult] = []
+        all_results: list[VesselResult] = list(carried or [])
         t_run = time.perf_counter()
 
         if executor is None:
-            # Sequential path (unchanged)
-            vessels = list(self.data_source.get_all_vessels_for_hero(hero_type))
+            # Sequential path (unchanged apart from the vessel subset)
+            vessels = self._vessel_subset(hero_type, vessel_ids)
             total = len(vessels)
             for i, v in enumerate(vessels):
                 vessel_data = dict(v)
@@ -588,7 +608,7 @@ class VesselOptimizer:
             futures = (presubmitted if presubmitted is not None
                        else self.submit_all_vessels(
                            build, inventory, hero_type, max_per_vessel,
-                           executor, deadline_secs))
+                           executor, deadline_secs, vessel_ids))
             total = len(futures)
             completed = 0
             for future in as_completed(futures):

@@ -193,6 +193,27 @@ def _fp_is_relevant(
     return False
 
 
+def relevant_changes(
+    build: BuildDefinition,
+    added: Iterable[Fingerprint],
+    removed: Iterable[Fingerprint],
+    ds: "SourceDataHandler",
+) -> tuple[list[Fingerprint], list[Fingerprint]]:
+    """The added/removed relics that could actually move this build's optimum.
+
+    Same test as :func:`relevant_to_build`, which is the count of these.
+    Callers that need to know *which* relics changed (vessel-level pruning)
+    take the lists.
+    """
+    pos_ids, pos_fams, pos_names = build_positive_sets(build, ds)
+    curses_rel = build.default_curse_weight > 0
+    ra = [fp for fp in added
+          if _fp_is_relevant(fp, pos_ids, pos_fams, pos_names, ds, curses_rel)]
+    rr = [fp for fp in removed
+          if _fp_is_relevant(fp, pos_ids, pos_fams, pos_names, ds, curses_rel)]
+    return ra, rr
+
+
 def relevant_to_build(
     build: BuildDefinition,
     added: Iterable[Fingerprint],
@@ -200,13 +221,8 @@ def relevant_to_build(
     ds: "SourceDataHandler",
 ) -> tuple[int, int]:
     """``(relevant_added, relevant_removed)`` — relics sharing a wanted effect/family."""
-    pos_ids, pos_fams, pos_names = build_positive_sets(build, ds)
-    curses_rel = build.default_curse_weight > 0
-    ra = sum(1 for fp in added
-             if _fp_is_relevant(fp, pos_ids, pos_fams, pos_names, ds, curses_rel))
-    rr = sum(1 for fp in removed
-             if _fp_is_relevant(fp, pos_ids, pos_fams, pos_names, ds, curses_rel))
-    return ra, rr
+    ra, rr = relevant_changes(build, added, removed, ds)
+    return len(ra), len(rr)
 
 
 def relevant_fingerprints(
@@ -248,6 +264,59 @@ def relevant_relics_signature(
     :func:`relics_signature`.
     """
     return _sha(sorted(relevant_fingerprints(build, relics, ds)))
+
+
+# ---------------------------------------------------------------------------
+# Vessel-level pruning (runs on upload)
+# ---------------------------------------------------------------------------
+
+# (relic color, is_deep) — the ONLY two properties that decide which vessel
+# slots a relic may occupy, so two relics sharing a key reach exactly the same
+# vessels.  There are eight in total, which is what bounds the pruning: a diff
+# spanning all eight can reach every vessel and nothing can be reused.
+PlacementKey = tuple[str, bool]
+
+
+def vessel_accepts(slot_colors: Sequence[str], key: PlacementKey,
+                   include_deep: bool = True) -> bool:
+    """Whether any slot of this vessel could hold a relic with this key.
+
+    Mirrors ``RelicInventory.get_candidates`` (models.py): a relic fits a slot
+    iff its deep-ness matches the slot's — slots 0-2 are standard, 3-5 deep
+    (``VesselOptimizer.optimize``) — and the slot is White (wildcard) or the
+    relic's own color.  ``include_deep=False`` builds never look past slot 2,
+    so no deep relic reaches them at all.
+
+    The duplication of that rule is deliberate: pruning must decide placement
+    from a fingerprint, without an inventory to filter.  TestVesselAccepts
+    pins the two implementations together against the real vessel table.
+    """
+    color, is_deep = key
+    if is_deep and not include_deep:
+        return False
+    idxs = range(3, 6) if is_deep else range(0, 3)
+    return any(
+        slot_colors[i] in ("White", color)
+        for i in idxs if i < len(slot_colors)
+    )
+
+
+def vessels_needing_rerun(
+    vessels: Iterable[dict],
+    keys: Iterable[PlacementKey],
+    include_deep: bool = True,
+) -> set[int]:
+    """IDs of the vessels these changed relics could reach.
+
+    Every other vessel of the hero is provably untouched — no slot in it can
+    hold any of the changed relics, so its optimal layout cannot have moved and
+    its cached results stand.
+    """
+    keys = set(keys)
+    return {
+        v["vessel_id"] for v in vessels
+        if any(vessel_accepts(v["Colors"], k, include_deep) for k in keys)
+    }
 
 
 # ---------------------------------------------------------------------------
