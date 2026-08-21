@@ -27,12 +27,21 @@ class RelicProfile:
     """
     __slots__ = ("relic", "ga_handle", "static_score", "dyn", "curse_ids",
                  "penalized_curse_ids", "place_ops", "limit_keys", "pos_bound",
-                 "net")
+                 "net",
+                 # Pre-unioned placement sets — one per VesselState collection,
+                 # in the same order place_profile applies them.
+                 "eff_set", "excl_set", "ns_excl_set", "ns_compat_set",
+                 "dcp_set")
 
     def __init__(self, relic: OwnedRelic, static_score: int, dyn: tuple,
                  curse_ids: tuple, place_ops: tuple, limit_keys: tuple,
                  pos_bound: int, net: int,
-                 penalized_curse_ids: tuple | None = None):
+                 penalized_curse_ids: tuple | None = None,
+                 eff_set: frozenset = frozenset(),
+                 excl_set: frozenset = frozenset(),
+                 ns_excl_set: frozenset = frozenset(),
+                 ns_compat_set: frozenset = frozenset(),
+                 dcp_set: frozenset = frozenset()):
         self.relic = relic
         self.ga_handle = relic.ga_handle
         self.static_score = static_score
@@ -45,6 +54,11 @@ class RelicProfile:
         self.penalized_curse_ids = (
             curse_ids if penalized_curse_ids is None else penalized_curse_ids)
         self.place_ops = place_ops
+        self.eff_set = eff_set
+        self.excl_set = excl_set
+        self.ns_excl_set = ns_excl_set
+        self.ns_compat_set = ns_compat_set
+        self.dcp_set = dcp_set
         self.limit_keys = limit_keys
         self.pos_bound = pos_bound
         self.net = net
@@ -822,6 +836,21 @@ class BuildScorer:
                 (eff, text_add, excl, is_ns, self_compat, alias_base,
                  desired_compat))
 
+        # Pre-union the place_ops columns into one frozenset per VesselState
+        # collection.  place_profile then applies each with a single C-level
+        # set difference + union instead of re-walking place_ops and building
+        # five fresh sets per search node.  Derived from place_ops itself, so
+        # the two cannot drift.
+        eff_set = frozenset(
+            [op[0] for op in place_ops]
+            + [op[1] for op in place_ops if op[1] != -1]
+            + [op[5] for op in place_ops if op[5] != -1])
+        excl_set = frozenset(op[2] for op in place_ops if op[2] != -1)
+        ns_excl_set = frozenset(
+            op[2] for op in place_ops if op[2] != -1 and op[3])
+        ns_compat_set = frozenset(op[4] for op in place_ops if op[4] != -1)
+        dcp_set = frozenset(op[6] for op in place_ops if op[6] != -1)
+
         # Limit-counter keys, deduped once per relic (mirrors place()).
         limit_keys: tuple[str, ...] = ()
         if elbn or flm:
@@ -844,6 +873,11 @@ class BuildScorer:
             dyn=tuple(dyn),
             curse_ids=curse_ids,
             place_ops=tuple(place_ops),
+            eff_set=eff_set,
+            excl_set=excl_set,
+            ns_excl_set=ns_excl_set,
+            ns_compat_set=ns_compat_set,
+            dcp_set=dcp_set,
             limit_keys=limit_keys,
             pos_bound=self.positive_pre_score(relic, build),
             net=self.score_relic(relic, build),

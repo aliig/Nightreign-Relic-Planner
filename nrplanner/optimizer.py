@@ -962,8 +962,15 @@ class VesselOptimizer:
                       score: int, req_mask: int) -> None:
             nonlocal min_threshold, truncated, nodes
             nodes += 1
-            if time.time() > deadline:
+            # Sample the clock on the first node and every 1024 thereafter,
+            # rather than every node — the per-node call was ~2% of solve time
+            # on its own.  The first-node check keeps an already-expired
+            # deadline truncating immediately (callers pass one deliberately).
+            # `truncated` is still checked every node so the unwind stays
+            # prompt once tripped.
+            if not ((nodes - 1) & 1023) and time.time() > deadline:
                 truncated = True
+            if truncated:
                 return
 
             if constrained and (
