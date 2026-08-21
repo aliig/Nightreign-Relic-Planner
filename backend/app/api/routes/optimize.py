@@ -31,14 +31,37 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
+from nrplanner.changes import (
+    build_signature,
+    diff_results,
+    fingerprint_owned,
+    layout_match_key,
+    mark_staged_refs,
+    relevant_relics_signature,
+    relic_fingerprint,
+    relics_signature,
+    serialize_match_keys,
+    serialize_top_layouts,
+)
+from nrplanner.constants import CHARACTER_NAMES
+from nrplanner.cumulative import summarize_cumulative_effects
+from nrplanner.models import (
+    BuildChange,
+    BuildDefinition,
+    OwnedRelic,
+    RelicInventory,
+    VesselResult,
+)
+from nrplanner.optimizer import OPTIMIZER_VERSION, VesselOptimizer
+from nrplanner.scoring import BuildScorer
 from pydantic import BaseModel, Field
 from sqlmodel import Session, select
 
 from app.api.deps import (
     CurrentUser,
     GameDataDep,
-    OptionalUser,
     OptimizerPoolDep,
+    OptionalUser,
     SessionDep,
 )
 from app.core.build_def import build_def_from_db
@@ -62,29 +85,6 @@ from app.models import (
     StagedMint,
     get_datetime_utc,
 )
-from nrplanner.changes import (
-    build_signature,
-    diff_results,
-    fingerprint_owned,
-    layout_match_key,
-    mark_staged_refs,
-    relic_fingerprint,
-    relevant_relics_signature,
-    relics_signature,
-    serialize_match_keys,
-    serialize_top_layouts,
-)
-from nrplanner.constants import CHARACTER_NAMES
-from nrplanner.cumulative import summarize_cumulative_effects
-from nrplanner.models import (
-    BuildChange,
-    BuildDefinition,
-    OwnedRelic,
-    RelicInventory,
-    VesselResult,
-)
-from nrplanner.optimizer import OPTIMIZER_VERSION, VesselOptimizer
-from nrplanner.scoring import BuildScorer
 
 router = APIRouter(prefix="/optimize", tags=["optimize"])
 

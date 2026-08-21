@@ -14,6 +14,67 @@ from typing import Any
 from fastapi import APIRouter, Form, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import Response, StreamingResponse
+from nrplanner import (
+    AddCapacityError,
+    InvalidReason,
+    LoadoutHandler,
+    RelicChecker,
+    RelicInventory,
+    VesselWriteError,
+    add_capacity,
+    add_preset,
+    add_relics,
+    adjust_murks,
+    build_relic_record,
+    decrypt_sl2,
+    delete_preset,
+    delete_relics,
+    discover_characters,
+    overwrite_preset,
+    parse_relics,
+    read_acquisition_ids,
+    read_favorite_handles,
+    read_murks,
+    read_owner_steam_id,
+    rename_preset,
+    repack_sl2,
+    reset_all_presets,
+    reset_all_vessels,
+    sell_value,
+    set_favorites,
+    split_memory_dat,
+)
+from nrplanner.changes import (
+    build_signature,
+    diff_results,
+    fingerprint_owned,
+    multiset_diff,
+    relevant_changes,
+    relevant_relics_signature,
+    relic_fingerprint,
+    relics_signature,
+    relics_signature_from_fingerprints,
+    serialize_match_keys,
+    serialize_top_layouts,
+    vessels_needing_rerun,
+)
+from nrplanner.constants import CHARACTER_NAMES, EMPTY_EFFECT, RELIC_STORAGE_CAP
+from nrplanner.cumulative import summarize_cumulative_effects
+from nrplanner.models import (
+    BuildChange,
+    BuildDefinition,
+    OwnedRelic,
+    RelicRef,
+    VesselResult,
+    WeightGroup,
+)
+from nrplanner.optimizer import OPTIMIZER_VERSION, VesselOptimizer
+from nrplanner.rites import (
+    BuildContext,
+    PurchaseBucket,
+    bulk_acquire,
+)
+from nrplanner.scoring import BuildScorer
 from sqlmodel import Session, col, select
 
 from app.api.deps import (
@@ -33,30 +94,6 @@ from app.core.game_data import (
     get_relic_lots,
 )
 from app.core.optimizer_pool import prefetch_depth
-from app.models import (
-    AddRelicSpec,
-    Build,
-    LoadoutOp,
-    LoadoutsPublic,
-    OptimizationSnapshot,
-    RitesKeeper,
-    RitesPlanResponse,
-    ProfilePublic,
-    ProfilesPublic,
-    Profile,
-    ParsedLoadoutData,
-    ParsedProfileData,
-    ParsedRelicData,
-    Relic,
-    RelicDelta,
-    SaveComparison,
-    RelicPublic,
-    RelicsPublic,
-    SaveUpload,
-    SaveStatusPublic,
-    StagedMint,
-    UploadResponse,
-)
 from app.core.snapshot_baseline import (
     baseline_layouts,
     causes_since,
@@ -65,67 +102,30 @@ from app.core.snapshot_baseline import (
     snapshot_inputs,
 )
 from app.core.staged import effective_slot_state
-from nrplanner import (
-    AddCapacityError,
-    InvalidReason,
-    LoadoutHandler,
-    RelicChecker,
-    RelicInventory,
-    VesselWriteError,
-    add_capacity,
-    add_preset,
-    add_relics,
-    adjust_murks,
-    build_relic_record,
-    delete_preset,
-    discover_characters,
-    decrypt_sl2,
-    delete_relics,
-    overwrite_preset,
-    parse_relics,
-    read_acquisition_ids,
-    read_favorite_handles,
-    read_murks,
-    read_owner_steam_id,
-    rename_preset,
-    repack_sl2,
-    reset_all_presets,
-    reset_all_vessels,
-    sell_value,
-    set_favorites,
-    split_memory_dat,
+from app.models import (
+    AddRelicSpec,
+    Build,
+    LoadoutOp,
+    LoadoutsPublic,
+    OptimizationSnapshot,
+    ParsedLoadoutData,
+    ParsedProfileData,
+    ParsedRelicData,
+    Profile,
+    ProfilePublic,
+    ProfilesPublic,
+    Relic,
+    RelicDelta,
+    RelicPublic,
+    RelicsPublic,
+    RitesKeeper,
+    RitesPlanResponse,
+    SaveComparison,
+    SaveStatusPublic,
+    SaveUpload,
+    StagedMint,
+    UploadResponse,
 )
-from nrplanner.constants import CHARACTER_NAMES, EMPTY_EFFECT, RELIC_STORAGE_CAP
-from nrplanner.cumulative import summarize_cumulative_effects
-from nrplanner.changes import (
-    build_signature,
-    diff_results,
-    fingerprint_owned,
-    multiset_diff,
-    relevant_changes,
-    relevant_relics_signature,
-    relic_fingerprint,
-    relics_signature,
-    relics_signature_from_fingerprints,
-    serialize_match_keys,
-    serialize_top_layouts,
-    vessels_needing_rerun,
-)
-from nrplanner.models import (
-    BuildChange,
-    BuildDefinition,
-    OwnedRelic,
-    RelicRef,
-    VesselResult,
-    WeightGroup,
-)
-from nrplanner.optimizer import OPTIMIZER_VERSION, VesselOptimizer
-from nrplanner.rites import (
-    BuildContext,
-    PurchaseBucket,
-    bulk_acquire,
-)
-from nrplanner.scoring import BuildScorer
 
 log = logging.getLogger(__name__)
 
@@ -162,7 +162,7 @@ def _compute_handle_remap(
     remap: dict[int, int] = {}
     for fp, old_handles in old_fp.items():
         new_handles = new_fp.get(fp, [])
-        for old_h, new_h in zip(old_handles, new_handles):
+        for old_h, new_h in zip(old_handles, new_handles, strict=False):
             remap[old_h] = new_h
 
     return remap
@@ -1046,8 +1046,6 @@ def _apply_snapshot_for_stream(
     return change
 
 
-from nrplanner.constants import CHARACTER_NAMES
-
 _CHAR_NAME_TO_HERO_TYPE: dict[str, int] = {
     name: idx for idx, name in enumerate(CHARACTER_NAMES, start=1)
 }
@@ -1571,7 +1569,7 @@ def get_profile_loadouts(
 
     # Backfill cumulative effects for loadouts stored before the field existed
     # (deterministic from the loadout's relics — recompute rather than re-upload).
-    if any(not l.cumulative_effects for l in loadouts):
+    if any(not lo.cumulative_effects for lo in loadouts):
         relics = session.exec(
             select(Relic).where(Relic.profile_id == profile_id)
         ).all()
@@ -1722,7 +1720,7 @@ def _export_modified_save(
 async def export_save(
     file: UploadFile,
     ds: GameDataDep,
-    current_user: OptionalUser,
+    current_user: OptionalUser,  # noqa: ARG001 - resolved for auth, unused in body
     slot_index: int = Form(...),
     ga_handles: str = Form("[]"),
     favorite_changes: str = Form("{}"),
@@ -1906,7 +1904,7 @@ def _export_added_save(
 async def export_add_relics(
     file: UploadFile,
     ds: GameDataDep,
-    current_user: OptionalUser,
+    current_user: OptionalUser,  # noqa: ARG001 - resolved for auth, unused in body
     slot_index: int = Form(...),
     specs: str = Form("[]"),
     murk_delta: int = Form(0),
@@ -2803,7 +2801,7 @@ def _export_modified_loadouts(
 async def export_loadouts(
     file: UploadFile,
     ds: GameDataDep,
-    current_user: OptionalUser,
+    current_user: OptionalUser,  # noqa: ARG001 - resolved for auth, unused in body
     slot_index: int = Form(...),
     operations: str = Form("[]"),
 ) -> Response:

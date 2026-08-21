@@ -158,7 +158,7 @@ class TestGoldStandard:
         _log(f"\n  Search space: {total_combos:,} combinations (before pruning)")
 
         # Run exhaustive backtracking with NO time limit
-        _log(f"\n  Starting brute-force backtracking (no time limit)...")
+        _log("\n  Starting brute-force backtracking (no time limit)...")
         t0 = time.perf_counter()
 
         # Pre-compute max pre_score per slot for upper-bound pruning
@@ -274,7 +274,7 @@ class TestGoldStandard:
                 _log(f"  Slot {i} ({slot_colors[i]}): EMPTY")
 
         # Compare with greedy
-        _log(f"\n--- Greedy (left-to-right) for comparison ---")
+        _log("\n--- Greedy (left-to-right) for comparison ---")
         greedy_state = VesselState(ds, desired_conflict_weights=desired_cw,
                                     desired_compat_effects=desired_compat_effs)
         greedy_score = 0

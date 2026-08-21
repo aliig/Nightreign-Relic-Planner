@@ -449,11 +449,13 @@ class TestGreedyMyopiaWithLimits:
         # purely to push the candidate pool > 500 and force the large-pool path.
         h = 0xC2000000
         for _ in range(330):  # Red standard -> only the White slot sees these
-            relics.append(_make_relic([self._Y, EMPTY, EMPTY], color="Red", ga_handle=h)); h += 1
+            relics.append(_make_relic([self._Y, EMPTY, EMPTY], color="Red", ga_handle=h))
+            h += 1
         for color in ("Blue", "Green", "Yellow"):  # deep fillers per deep slot
             for _ in range(70):
                 relics.append(_make_relic([self._Y, EMPTY, EMPTY], color=color,
-                                          is_deep=True, ga_handle=h)); h += 1
+                                          is_deep=True, ga_handle=h))
+                h += 1
         return RelicInventory.from_owned_relics(relics)
 
     def test_exhaustive_solver_beats_greedy_on_large_pool(

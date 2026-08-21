@@ -5,15 +5,15 @@ All data is static and loaded once at startup via the SourceDataHandler singleto
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
+from nrplanner.constants import CHARACTER_NAME_ID, CHARACTER_NAMES, RELIC_COLOR_HEX
+from nrplanner.cumulative import summarize_cumulative_effects
+from nrplanner.generator import GenerationError
+from nrplanner.models import CumulativeEffectGroup
 from pydantic import BaseModel
 
 from app.api.deps import GameDataDep
 from app.core.game_data import RelicGeneratorDep
 from app.models import GeneratedRelicPublic, RollRelicRequest
-from nrplanner.constants import CHARACTER_NAME_ID, CHARACTER_NAMES, RELIC_COLOR_HEX
-from nrplanner.cumulative import summarize_cumulative_effects
-from nrplanner.generator import GenerationError
-from nrplanner.models import CumulativeEffectGroup
 
 router = APIRouter(prefix="/game", tags=["game"])
 
@@ -35,7 +35,7 @@ def get_characters() -> list[dict[str, Any]]:
     """Playable character names with their hero_type IDs."""
     return [
         {"name": name, "hero_type": hero_type}
-        for name, hero_type in zip(CHARACTER_NAMES[:-1], CHARACTER_NAME_ID)
+        for name, hero_type in zip(CHARACTER_NAMES[:-1], CHARACTER_NAME_ID, strict=True)
         # Exclude "All" sentinel (last entry has no hero_type)
     ]
 

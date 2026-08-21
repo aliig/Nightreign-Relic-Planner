@@ -21,13 +21,13 @@ import json
 from dataclasses import dataclass
 
 from fastapi import HTTPException
-
-from app.models import StagedMint
 from nrplanner.changes import relic_fingerprint
 from nrplanner.checker import InvalidReason, RelicChecker
 from nrplanner.constants import EMPTY_EFFECT, RELIC_STORAGE_CAP
 from nrplanner.models import OwnedRelic
 from nrplanner.writer import sell_value
+
+from app.models import StagedMint
 
 
 def staged_diff_signature(

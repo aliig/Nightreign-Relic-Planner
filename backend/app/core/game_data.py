@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import Depends
-
 from nrplanner import RelicGenerator, SourceDataHandler
 
 

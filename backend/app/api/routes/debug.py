@@ -17,12 +17,14 @@ outside local dev.
 import json
 import subprocess
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
 import nrplanner
 from fastapi import APIRouter, Depends
+from nrplanner.models import OwnedRelic
+from nrplanner.optimizer import OPTIMIZER_VERSION
 from pydantic import BaseModel
 from sqlmodel import select
 
@@ -31,8 +33,6 @@ from app.core.build_def import build_def_from_db
 from app.core.config import settings
 from app.core.game_data import game_data_version
 from app.models import Build, OptimizationSnapshot, Profile, Relic, User
-from nrplanner.models import OwnedRelic
-from nrplanner.optimizer import OPTIMIZER_VERSION
 
 router = APIRouter(prefix="/debug", tags=["debug"])
 
@@ -128,7 +128,7 @@ def export_debug_state(
 
     bundle: dict[str, Any] = {
         "meta": {
-            "exported_at": datetime.now(timezone.utc).isoformat(),
+            "exported_at": datetime.now(UTC).isoformat(),
             "environment": settings.ENVIRONMENT,
             "game_data_version": game_data_version(),
             "optimizer_version": OPTIMIZER_VERSION,
@@ -152,7 +152,7 @@ def export_debug_state(
     }
 
     export_dir = get_debug_export_dir()
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     filename = f"{stamp}-{req.mode}.json"
     payload = json.dumps(bundle, indent=2, default=str)
     (export_dir / filename).write_text(payload, encoding="utf-8")

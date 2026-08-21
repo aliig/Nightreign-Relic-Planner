@@ -164,7 +164,7 @@ class TestBenchmarkSolver:
         optimizer = VesselOptimizer(ds, scorer)
 
         _log(f"\n{'='*70}")
-        _log(f"BENCHMARK: All vessels (sequential) — Guardian")
+        _log("BENCHMARK: All vessels (sequential) — Guardian")
         _log(f"{'='*70}")
 
         # Warm up
@@ -198,7 +198,7 @@ class TestBenchmarkSolver:
         desired_compat = scorer.get_desired_compat_effects(build)
 
         _log(f"\n{'='*70}")
-        _log(f"BENCHMARK: Scoring microbenchmark")
+        _log("BENCHMARK: Scoring microbenchmark")
         _log(f"{'='*70}")
 
         # Pre-score (no context)
@@ -239,7 +239,7 @@ class TestBenchmarkSolver:
     ) -> None:
         """Microbenchmark individual SourceDataHandler lookups."""
         _log(f"\n{'='*70}")
-        _log(f"BENCHMARK: Data source lookups")
+        _log("BENCHMARK: Data source lookups")
         _log(f"{'='*70}")
 
         # Collect all unique effect IDs from inventory
@@ -281,7 +281,7 @@ class TestBenchmarkSolver:
         slot_colors = chalice["Colors"]
 
         _log(f"\n{'='*70}")
-        _log(f"BENCHMARK: Backtrack vs brute-force correctness")
+        _log("BENCHMARK: Backtrack vs brute-force correctness")
         _log(f"{'='*70}")
 
         # Run optimizer
@@ -366,7 +366,7 @@ class TestBenchmarkSolver:
         desired_compat = scorer.get_desired_compat_effects(build)
 
         _log(f"\n{'='*70}")
-        _log(f"BENCHMARK: VesselState place/remove")
+        _log("BENCHMARK: VesselState place/remove")
         _log(f"{'='*70}")
 
         # Pick relics with effects

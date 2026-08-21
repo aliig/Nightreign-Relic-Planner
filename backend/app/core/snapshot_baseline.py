@@ -20,7 +20,7 @@ The baseline is a single JSON blob rather than a column per field: nothing
 filters or joins on it, and the freshness hashes it duplicates stay in their own
 columns where the cache-hit query needs them.
 """
-from typing import Any, Optional
+from typing import Any
 
 from nrplanner.models import ChangeCause
 
@@ -37,7 +37,7 @@ def snapshot_inputs(
     build_hash: str,
     game_data_version: str,
     optimizer_version: str,
-    staged_signature: Optional[str],
+    staged_signature: str | None,
 ) -> dict[str, Any]:
     """The inputs an optimization result depends on, as a comparable dict.
 
@@ -64,7 +64,7 @@ def make_baseline(
     return {"layouts": layouts, "best_score": best_score, "inputs": dict(inputs)}
 
 
-def baseline_layouts(baseline: Optional[dict[str, Any]]) -> Optional[list[dict]]:
+def baseline_layouts(baseline: dict[str, Any] | None) -> list[dict] | None:
     """The stored arrangement to diff against (None on a first-ever run)."""
     if not baseline:
         return None
@@ -72,7 +72,7 @@ def baseline_layouts(baseline: Optional[dict[str, Any]]) -> Optional[list[dict]]
 
 
 def causes_since(
-    baseline: Optional[dict[str, Any]], inputs: dict[str, Any]
+    baseline: dict[str, Any] | None, inputs: dict[str, Any]
 ) -> list[ChangeCause]:
     """Every input that differs between the baseline and this run.
 
@@ -114,7 +114,7 @@ def is_narratable(causes: list[str]) -> bool:
     return any(c in NARRATABLE for c in causes)
 
 
-def legacy_cause(causes: list[str]) -> Optional[str]:
+def legacy_cause(causes: list[str]) -> str | None:
     """Coarse single-value summary of ``causes`` for pre-list clients.
 
     Kept so an older frontend keeps behaving as it did: one cause passes

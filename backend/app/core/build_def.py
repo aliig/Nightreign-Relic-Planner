@@ -3,8 +3,9 @@
 Single source of truth so the build signature computed when a snapshot is
 written (optimize) and when it is reset (build edit) can never drift.
 """
-from app.models import Build
 from nrplanner.models import BuildDefinition, WeightGroup
+
+from app.models import Build
 
 
 def build_def_from_db(build: Build) -> BuildDefinition:

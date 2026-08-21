@@ -19,7 +19,7 @@ if settings.SENTRY_DSN and settings.ENVIRONMENT != "local":
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI):  # noqa: ARG001 - signature fixed by FastAPI
     init_optimizer_pool()
     yield
     shutdown_optimizer_pool()

@@ -1,9 +1,10 @@
 """Build definition CRUD — per-user, auth required."""
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
+from nrplanner.changes import build_signature
 from sqlmodel import col, func, select
 
 from app.api.deps import CurrentUser, SessionDep
@@ -20,7 +21,6 @@ from app.models import (
     OptimizationSnapshot,
     User,
 )
-from nrplanner.changes import build_signature
 
 router = APIRouter(prefix="/builds", tags=["builds"])
 
@@ -54,11 +54,11 @@ def create_build(
     build_in: BuildCreate,
 ) -> Any:
     """Create a new build."""
-    kwargs: dict = dict(
-        owner_id=current_user.id,
-        name=build_in.name,
-        character=build_in.character,
-    )
+    kwargs: dict = {
+        "owner_id": current_user.id,
+        "name": build_in.name,
+        "character": build_in.character,
+    }
     if build_in.groups is not None:
         kwargs["groups"] = build_in.groups
     build = Build(**kwargs)
@@ -148,7 +148,7 @@ def update_build(
     update_data = build_in.model_dump(exclude_unset=True)
     for field, value in update_data.items():
         setattr(build, field, value)
-    build.updated_at = datetime.now(timezone.utc)
+    build.updated_at = datetime.now(UTC)
     session.add(build)
 
     # Reset change-tracking when the scoring definition actually changed: drop

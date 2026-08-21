@@ -3,9 +3,8 @@ from datetime import timedelta
 from urllib.parse import urlencode
 
 import httpx
-from fastapi import APIRouter, Cookie, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import RedirectResponse
-from sqlmodel import Session
 
 from app import crud
 from app.api.deps import SessionDep

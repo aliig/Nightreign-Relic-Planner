@@ -1,17 +1,16 @@
 import uuid
-from datetime import datetime, timezone
-from typing import Annotated, Literal, Optional, Union
-
-from pydantic import BaseModel, EmailStr
-from pydantic import Field as PydanticField
-from sqlalchemy import BigInteger, Boolean, Column, DateTime, JSON, UniqueConstraint
-from sqlmodel import Field, Relationship, SQLModel
+from datetime import UTC, datetime
+from typing import Annotated, Literal, Optional
 
 from nrplanner.models import BuildChange, CumulativeEffectGroup
+from pydantic import BaseModel, EmailStr
+from pydantic import Field as PydanticField
+from sqlalchemy import JSON, BigInteger, Boolean, Column, DateTime, UniqueConstraint
+from sqlmodel import Field, Relationship, SQLModel
 
 
 def get_datetime_utc() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 # ---------------------------------------------------------------------------
@@ -555,7 +554,7 @@ class OptimizationSnapshot(SQLModel, table=True):
     )
     best_score: int = 0
     any_truncated: bool = False
-    last_change: Optional[dict] = Field(
+    last_change: dict | None = Field(
         default=None, sa_column=Column(JSON, nullable=True)
     )
     reviewed: bool = Field(default=False)
@@ -566,7 +565,7 @@ class OptimizationSnapshot(SQLModel, table=True):
     # followed by Relic Rites purchases composes into ONE verdict instead of two
     # half-diffs the user never saw.  Backfilled on the adding migration — a
     # NULL baseline is only correct for a build that has never been optimized.
-    baseline: Optional[dict] = Field(
+    baseline: dict | None = Field(
         default=None, sa_column=Column(JSON, nullable=True)
     )
 
@@ -686,10 +685,8 @@ class AddLoadoutOp(BaseModel):
 
 
 LoadoutOp = Annotated[
-    Union[
-        ResetVesselsOp, ResetPresetsOp, DeleteLoadoutOp,
-        RenameLoadoutOp, OverwriteLoadoutOp, AddLoadoutOp,
-    ],
+    ResetVesselsOp | ResetPresetsOp | DeleteLoadoutOp
+    | RenameLoadoutOp | OverwriteLoadoutOp | AddLoadoutOp,
     PydanticField(discriminator="op"),
 ]
 
@@ -738,8 +735,8 @@ class UploadResponse(SQLModel):
     save_upload_id: uuid.UUID | None = None
     persisted: bool = False
     # Save-diff summary (authenticated uploads only).
-    relic_delta: Optional[RelicDelta] = None
-    comparison: Optional[SaveComparison] = None
+    relic_delta: RelicDelta | None = None
+    comparison: SaveComparison | None = None
     affected_builds: list[BuildChange] = Field(default_factory=list)
 
 
