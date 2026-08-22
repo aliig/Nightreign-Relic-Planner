@@ -11,7 +11,13 @@ import pytest
 
 from nrplanner import SourceDataHandler
 from nrplanner.constants import EMPTY_EFFECT as EMPTY
-from nrplanner.models import BuildDefinition, OwnedRelic, VesselState, WeightGroup
+from nrplanner.models import (
+    BuildDefinition,
+    OwnedRelic,
+    RelicInventory,
+    VesselState,
+    WeightGroup,
+)
 from nrplanner.optimizer import VesselOptimizer
 from nrplanner.scoring import BuildScorer, score_profile
 
@@ -132,3 +138,62 @@ def test_profiles_match_legacy_scoring_and_place(
                 f"deltas diverge\nlegacy={d_legacy}\ncompiled={d_compiled}"
             )
             _assert_states_equal(legacy, compiled)
+
+
+def test_a_reused_ga_handle_does_not_serve_a_stale_profile(
+    ds: SourceDataHandler,
+) -> None:
+    """A handle identifies a relic only within ONE inventory.
+
+    The game renumbers every ga_handle when it writes a save, and a pool worker
+    outlives any single request, so the same scorer legitimately sees one handle
+    standing for different relics.  The compiled-profile memo is keyed by
+    handle, and a RelicProfile carries its ``relic``, so a memo that outlives
+    its inventory places and scores the WRONG relic -- silently, with a
+    plausible score.  The build cache cannot catch it: both runs here have the
+    same _scoring_sig.
+
+    Both relics must be worth placing (an unweighted one is dropped by the
+    positive_pre_score filter before it ever reaches the memo), and they carry
+    DIFFERENT weights so a stale profile shows up in the score as well as in
+    the relic it places.
+    """
+    build = BuildDefinition(
+        id="b", name="b", character="Wylder",
+        groups=[
+            WeightGroup(weight=10, effects=[100], families=[]),
+            WeightGroup(weight=40, effects=[101], families=[]),
+        ],
+    )
+    scorer = BuildScorer(ds)
+    optimizer = VesselOptimizer(ds, scorer)
+    vessel = dict(next(iter(ds.get_all_vessels_for_hero(1))))
+    vessel["_id"] = vessel["vessel_id"]
+
+    def run(real_id: int, effect: int):
+        relic = OwnedRelic(
+            ga_handle=0xC0020000,  # the SAME handle both times
+            item_id=real_id + 2147483648, real_id=real_id,
+            color=vessel["Colors"][0],
+            effects=[effect, EMPTY, EMPTY], curses=[EMPTY, EMPTY, EMPTY],
+            is_deep=False, name=f"Relic {real_id}", tier="Delicate",
+        )
+        results = optimizer.optimize(
+            build, RelicInventory.from_owned_relics([relic]), vessel, top_n=1)
+        assert results, f"real_id={real_id} produced no result"
+        placed = [a.relic for a in results[0].assignments if a.relic]
+        assert placed, f"real_id={real_id} was not placed"
+        return results[0], placed
+
+    first, _ = run(100, 100)
+    assert first.total_score == 10, first.total_score
+
+    # Same handle, different relic, different weight.
+    second, placed = run(127, 101)
+    assert [r.real_id for r in placed] == [127], (
+        f"stale profile served the previous inventory's relic: "
+        f"{[r.real_id for r in placed]}"
+    )
+    assert second.total_score == 40, (
+        f"stale profile scored the previous relic's effect: {second.total_score}"
+    )

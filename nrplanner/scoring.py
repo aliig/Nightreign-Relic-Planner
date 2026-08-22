@@ -4,7 +4,7 @@ from __future__ import annotations
 from nrplanner.constants import EMPTY_EFFECT
 from nrplanner.data import SourceDataHandler
 from nrplanner.models import (
-    BuildDefinition, OwnedRelic, VesselState,
+    BuildDefinition, OwnedRelic, RelicInventory, VesselState,
     CURSE_EXCESS_PENALTY, REQUIRED_WEIGHT,
 )
 
@@ -133,6 +133,8 @@ class BuildScorer:
         self._resolve_memo: dict[int, tuple[str | None, int]] = {}
         self._protected_memo: dict[int, bool] = {}
         self._profile_memo: dict[int, RelicProfile] = {}
+        # The inventory _profile_memo's ga_handle keys refer to (bind_inventory).
+        self._memo_inventory: RelicInventory | None = None
         self._character: str | None = None
         self._inert_memo: dict[int, bool] = {}
         self._excl_cats: frozenset[int] = frozenset()
@@ -188,6 +190,7 @@ class BuildScorer:
         self._resolve_memo = {}
         self._protected_memo = {}
         self._profile_memo = {}
+        self._memo_inventory = None
         self._character = build.character
         self._inert_memo = {}
         self._excl_cats = frozenset(build.excluded_stacking_categories)
@@ -778,6 +781,32 @@ class BuildScorer:
     # ------------------------------------------------------------------
     # Compiled relic profiles (solver hot path)
     # ------------------------------------------------------------------
+
+    def bind_inventory(self, inventory: RelicInventory) -> None:
+        """Bind the compiled-profile memo to *inventory*, dropping a stale one.
+
+        ``_profile_memo`` is keyed by ga_handle, which identifies a relic only
+        within ONE inventory: the game renumbers every handle when it writes a
+        save, and a pool worker outlives any single request, so the same scorer
+        legitimately sees one handle standing for different relics.  The build
+        cache cannot catch that -- two runs of the same build share a
+        _scoring_sig, so nothing invalidates a profile whose handle now belongs
+        to a different relic, and since a RelicProfile carries its ``relic``,
+        the stale one gets placed and scored.
+
+        Identity, not content: a different object cannot be proven to be the
+        same inventory, so it clears.  Every vessel of one run is solved against
+        the same RelicInventory, which keeps the memo doing its real job (a
+        relic eligible for several slots, and for several vessels, compiles
+        once); a worker task unpickles its own copy, so it starts clean.
+        Holding a strong reference means an identity hit can never be a
+        recycled address.  Assumes an inventory is not mutated in place
+        mid-optimization, exactly as _ensure_build_cache assumes of builds.
+        """
+        if inventory is self._memo_inventory:
+            return
+        self._memo_inventory = inventory
+        self._profile_memo = {}
 
     def compile_profile(self, relic: OwnedRelic, build: BuildDefinition,
                         effect_limit_by_name: dict[str, int] | None = None,

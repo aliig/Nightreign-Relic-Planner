@@ -47,6 +47,61 @@ def _ranks(client: TestClient, headers: dict, profile_id: str, loadouts):
     return resp.json()
 
 
+# Colour is a property of the relic's EquipParamAntique row (its relicColor
+# column), so a relic's colour and its real_id never disagree in game: these are
+# the first non-deep row of each colour -- 100 relicColor=0 (Red), 109
+# relicColor=1 (Blue), 127 relicColor=3 (Green).
+# Source: nrplanner/resources/param/EquipParamAntique.csv, COLOR_MAP in
+# nrplanner/constants.py.
+_COLOR_REAL_IDS = (("Red", 100), ("Blue", 109), ("Green", 127))
+
+
+def _distinct_owned_relics() -> list[OwnedRelic]:
+    """The seeded inventory, but with each colour on its own real_id.
+
+    default_owned_relics() gives all three the same real_id, which makes them
+    one relic by content -- so two results placing different ones collapse into
+    a single match key, and the endpoint reports the BEST of their positions
+    for both.  Ranking by position is only meaningful when the results being
+    ranked have distinct identities, so these tests bring relics the game could
+    actually tell apart.  (Kept local: the shared fixture's content-identity is
+    load-bearing elsewhere -- see its docstring.)
+    """
+    return [
+        OwnedRelic(
+            ga_handle=0xC0020000 + i,
+            item_id=real_id + 2147483648,
+            real_id=real_id,
+            color=color,
+            effects=[100, EMPTY, EMPTY],
+            curses=[EMPTY, EMPTY, EMPTY],
+            is_deep=False,
+            name="Seeded Relic",
+            tier="Delicate",
+        )
+        for i, (color, real_id) in enumerate(_COLOR_REAL_IDS)
+    ]
+
+
+def _setup_identity(result: dict) -> tuple:
+    """What the endpoint matches a preset ON: vessel + relic content multiset.
+
+    Two results sharing this are the same setup in play, so both report the
+    BEST of their positions -- a rank-by-position assertion is only meaningful
+    between results whose identities differ.  Expressed here in the test's own
+    terms rather than imported, so a change to the identity relation shows up
+    as a failure instead of moving with it.
+    """
+    return (result["vessel_id"], sorted(
+        (
+            a["relic"]["real_id"],
+            tuple(a["relic"]["effects"]),
+            tuple(a["relic"]["curses"]),
+        )
+        for a in result["assignments"] if a["relic"]
+    ))
+
+
 def _preset_from_result(result: dict, character: str, *, name: str, index: int = 0):
     """A loadout preset holding exactly the relics of an optimizer result."""
     return {
@@ -91,7 +146,9 @@ class TestLoadoutRanks:
         """The whole point of the badge: the optimizer has moved on, and the
         saved setup is now the Nth suggestion rather than the first."""
         user = get_test_user(db)
-        profile = seed_profile_with_relics(db, user.id, with_hash=True)
+        profile = seed_profile_with_relics(
+            db, user.id, with_hash=True, owned=_distinct_owned_relics()
+        )
         profile_id = str(profile.id)
         build = create_build(client, normal_user_token_headers)
         results = _optimize(
@@ -99,6 +156,10 @@ class TestLoadoutRanks:
         )
         if len(results) < 2:
             pytest.skip("needs at least two distinct results to rank")
+        assert _setup_identity(results[0]) != _setup_identity(results[1]), (
+            "the top two results must be different setups for #2 to mean "
+            "anything -- identical ones both report the better rank"
+        )
 
         preset = _preset_from_result(results[1], build["character"], name="Stale")
         rows = _ranks(client, normal_user_token_headers, profile_id, [preset])
@@ -109,19 +170,58 @@ class TestLoadoutRanks:
         self, client: TestClient, normal_user_token_headers: dict[str, str],
         db: Session,
     ) -> None:
-        """A preset holding the same relics in a different (same-colour)
-        arrangement is the same setup in play, and must still match."""
+        """A preset holding the same relics in a different arrangement is the
+        same setup in play, and must still match.
+
+        Needs a result that actually places TWO relics, and two relics that can
+        trade places: same colour, different content.  Either one is legal in
+        the other's slot (a slot that accepts Red accepts every Red relic), so
+        the swap is a rearrangement the player could make in game -- and the
+        badge must still call it the same setup.
+        """
         user = get_test_user(db)
-        profile = seed_profile_with_relics(db, user.id, with_hash=True)
+        owned = [
+            OwnedRelic(
+                ga_handle=0xC0020000 + i,
+                item_id=real_id + 2147483648,
+                real_id=real_id,
+                color="Red",  # both Red: interchangeable across their slots
+                effects=[effect, EMPTY, EMPTY],
+                curses=[EMPTY, EMPTY, EMPTY],
+                is_deep=False,
+                name=f"Swappable Relic {i}",
+                tier="Delicate",
+            )
+            for i, (real_id, effect) in enumerate(((100, 100), (101, 101)))
+        ]
+        profile = seed_profile_with_relics(db, user.id, with_hash=True, owned=owned)
         profile_id = str(profile.id)
-        build = create_build(client, normal_user_token_headers)
+        # Weight both effects, so the best layouts hold both relics at once.
+        build = create_build(
+            client, normal_user_token_headers,
+            groups=[
+                {"weight": 10, "effects": [100], "families": []},
+                {"weight": 5, "effects": [101], "families": []},
+            ],
+        )
         results = _optimize(
             client, normal_user_token_headers, build["id"], profile_id
         )
         preset = _preset_from_result(
             results[0], build["character"], name="Rearranged"
         )
-        preset["ga_handles"] = list(reversed(preset["ga_handles"]))
+        handles = preset["ga_handles"]
+        placed = [i for i, h in enumerate(handles) if h]
+        assert len(placed) == 2, (
+            "a one-relic layout cannot be rearranged -- this test would pass "
+            f"without swapping anything (placed: {placed})"
+        )
+
+        i, j = placed
+        handles[i], handles[j] = handles[j], handles[i]
+        assert handles != _preset_from_result(
+            results[0], build["character"], name="x"
+        )["ga_handles"], "the two relics must differ for the swap to be real"
 
         rows = _ranks(client, normal_user_token_headers, profile_id, [preset])
         assert len(rows) == 1 and rows[0]["rank"] == 1
@@ -131,7 +231,9 @@ class TestLoadoutRanks:
         db: Session,
     ) -> None:
         user = get_test_user(db)
-        profile = seed_profile_with_relics(db, user.id, with_hash=True)
+        profile = seed_profile_with_relics(
+            db, user.id, with_hash=True, owned=_distinct_owned_relics()
+        )
         profile_id = str(profile.id)
         build = create_build(client, normal_user_token_headers)
         results = _optimize(
@@ -139,6 +241,9 @@ class TestLoadoutRanks:
         )
         if len(results) < 2:
             pytest.skip("needs at least two distinct results to rank")
+        assert _setup_identity(results[0]) != _setup_identity(results[1]), (
+            "Old and New must be different setups, or both match rank 1"
+        )
 
         presets = [
             _preset_from_result(results[1], build["character"], name="Old", index=0),

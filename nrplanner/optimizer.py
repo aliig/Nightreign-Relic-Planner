@@ -121,6 +121,10 @@ class VesselOptimizer:
         unconstrained best-effort results are returned with
         meets_requirements=False.
         """
+        # Compiled relic profiles are memoized by ga_handle, which only
+        # identifies a relic within one inventory -- see bind_inventory.
+        self.scorer.bind_inventory(inventory)
+
         slot_colors = vessel_data["Colors"]
         num_slots = 6 if build.include_deep else 3
         search_truncated = False

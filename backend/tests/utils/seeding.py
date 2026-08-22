@@ -22,7 +22,23 @@ def get_test_user(db: Session) -> User:
 
 
 def default_owned_relics() -> list[OwnedRelic]:
-    """3 one-effect relics (effect 100) in distinct colors."""
+    """3 one-effect relics (effect 100) in distinct colors.
+
+    The three share a real_id, so they are ONE relic as far as content identity
+    goes (nrplanner.changes.relic_fingerprint is real_id + effects + curses,
+    deliberately colour-free).  That is load-bearing, not incidental: only one
+    of them is ever placed, every vessel that can hold one ties at the same
+    score, and which one wins depends on the order the optimizer pool's futures
+    complete.  Because their fingerprints are equal, that race is invisible to
+    diff_results, which compares the top layout's fingerprint multiset -- give
+    them distinct real_ids and TestStagedSnapshotCache
+    ::test_review_advances_the_baseline starts reporting "reordered" instead of
+    "unchanged" on roughly a fifth of full-suite runs.
+
+    Tests that need to tell the seeded relics APART must therefore bring their
+    own inventory (see _distinct_owned_relics in test_loadout_ranks.py) rather
+    than making these distinct.
+    """
     return [
         OwnedRelic(
             ga_handle=0xC0020000 + i,
