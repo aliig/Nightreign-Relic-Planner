@@ -21,6 +21,33 @@ CHARACTER_NAMES = [
     'Revenant', 'Recluse', 'Executor', 'Scholar', 'Undertaker', 'All',
 ]
 
+# Per-Nightfarer applicability flags on AttachEffectParam. Source: datamined
+# AttachEffectParam.csv columns allowWylder..allowUndertaker (one per playable
+# character, in this exact order — positionally aligned with CHARACTER_NAMES
+# minus the trailing "All" filter entry).
+#
+# A 0 means the game greys the effect out for that Nightfarer and it does
+# nothing: either the effect is character-exclusive (e.g. "[Wylder] Character
+# Skill inflicts Blood Loss") or its ash of war is incompatible with that
+# character's starting armament (e.g. "Changes compatible armament's skill to
+# Seppuku" on Raider, who starts with a colossal weapon; the sorcery variants
+# require Recluse's staff and the incantation variants Revenant's seal).
+# Confirmed in-game: a greyed effect is inert and does not conflict with or
+# override the effects that do apply.
+#
+# The armament-skill flags follow directly from each Nightfarer's starting
+# armament (user-confirmed, and consistent with every allow* flag checked):
+#   Wylder greatsword + small shield | Guardian halberd + greatshield
+#   Ironeye bow (only Rain of Arrows qualifies) | Duchess dagger
+#   Raider colossal weapon | Revenant claws + sacred seal (incantations)
+#   Recluse staff (sorceries) | Executor katana
+#   Scholar thrusting sword (no staff → no sorceries) | Undertaker hammer
+ALLOW_COLUMNS = [
+    'allowWylder', 'allowGuardian', 'allowIroneye', 'allowDuchess',
+    'allowRaider', 'allowRevenant', 'allowRecluse', 'allowExecutor',
+    'allowScholar', 'allowUndertaker',
+]
+
 # Relic color index -> name (matches relicColor column in EquipParamAntique.csv)
 COLOR_MAP = ["Red", "Blue", "Yellow", "Green", "White"]
 

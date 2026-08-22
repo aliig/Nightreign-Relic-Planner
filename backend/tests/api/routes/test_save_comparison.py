@@ -26,13 +26,20 @@ from app.api.routes.saves import (
     _AffectedBuild,
     _builds_without_snapshots,
     _compute_relic_delta,
+    _identify_affected_builds,
     _remap_carried_handles,
     _rerun_vessel_ids,
     _restarted_slots,
     _same_account,
 )
-from app.core.game_data import game_data_version
-from app.models import Build, ParsedProfileData, ParsedRelicData, Relic
+from app.core.game_data import game_data_version, get_game_data
+from app.models import (
+    Build,
+    ParsedProfileData,
+    ParsedRelicData,
+    Profile,
+    Relic,
+)
 
 EMPTY = 4294967295
 
@@ -379,3 +386,79 @@ class TestCarriedHandleRemap:
     def test_empty_slots_are_left_alone(self) -> None:
         results = [self._result([None, None])]
         assert _remap_carried_handles(results, {}) is True
+
+
+class TestVersionStaleForcesRerun:
+    """An optimizer/game-data bump must pull a build into the upload's run.
+
+    The serve path refuses to hand out a snapshot whose version doesn't match,
+    so a build left out of the upload would show numbers it will never serve
+    until someone opens it by hand.  The relic diff alone can't notice this —
+    the inventory is identical.
+    """
+    OWNER = uuid.uuid4()
+    PROFILE_ID = uuid.uuid4()
+
+    @classmethod
+    def _unchanged_inventory(cls) -> tuple[list, list, list]:
+        """One relic, present identically before and after — an empty diff."""
+        old_relic = Relic(
+            owner_id=cls.OWNER, profile_id=cls.PROFILE_ID, ga_handle=1,
+            item_id=1, real_id=101, color="Red",
+            effect_1=1001, effect_2=EMPTY, effect_3=EMPTY,
+            curse_1=EMPTY, curse_2=EMPTY, curse_3=EMPTY,
+            is_deep=False, name="R", tier="Delicate",
+        )
+        old_profile = Profile(
+            id=cls.PROFILE_ID, owner_id=cls.OWNER,
+            save_upload_id=uuid.uuid4(), slot_index=0, name="P",
+        )
+        new_profile = ParsedProfileData(
+            slot_index=0, name="P", relic_count=1,
+            relics=[ParsedRelicData(
+                ga_handle=2, item_id=1, real_id=101, color="Red",
+                effect_1=1001, effect_2=EMPTY, effect_3=EMPTY,
+                curse_1=EMPTY, curse_2=EMPTY, curse_3=EMPTY,
+                is_deep=False, name="R", tier="Delicate",
+            )],
+        )
+        return [old_relic], [old_profile], [new_profile]
+
+    @classmethod
+    def _run(cls, **snap_over: Any) -> list:
+        build = Build(id=uuid.uuid4(), owner_id=cls.OWNER,
+                      name="B", character="Wylder")
+        fields = {
+            "build_id": build.id,
+            "slot_index": 0,
+            "optimizer_version": OPTIMIZER_VERSION,
+            "game_data_version": game_data_version(),
+        }
+        fields.update(snap_over)
+        snap = SimpleNamespace(**fields)
+        # _identify_affected_builds touches the session only to list snapshots.
+        session = SimpleNamespace(
+            exec=lambda _stmt: SimpleNamespace(all=lambda: [snap])
+        )
+        old_relics, old_profiles, new_profiles = cls._unchanged_inventory()
+        return _identify_affected_builds(
+            session, get_game_data(), cls.OWNER,
+            old_relics, old_profiles, new_profiles,
+            [build], handle_remap={},
+        )
+
+    def test_unchanged_inventory_at_current_version_is_left_alone(
+        self,
+    ) -> None:
+        assert self._run() == []
+
+    def test_optimizer_version_bump_pulls_the_build_in(self) -> None:
+        out = self._run(optimizer_version=OPTIMIZER_VERSION - 1)
+        assert len(out) == 1
+        # Vessel-level reuse would carry layouts computed by the old solver.
+        assert out[0].additions_only is False
+
+    def test_game_data_bump_pulls_the_build_in(self) -> None:
+        out = self._run(game_data_version="stale")
+        assert len(out) == 1
+        assert out[0].additions_only is False

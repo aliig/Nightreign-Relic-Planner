@@ -34,7 +34,11 @@ DEFAULT_BACKTRACK_DEADLINE_SECS = 10.0
 #     every returned loadout does; covering results rank above non-covering
 #     ones; get_effective_requirements no longer derives pseudo-requirements
 #     from the highest-weight group.
-OPTIMIZER_VERSION = 4
+# v5: effects the build's character cannot use are inert — the game greys them
+#     out, so they no longer score, occupy a stacking slot, or trip the
+#     excluded-stacking-category suppression (e.g. a Seppuku relic is fair game
+#     on Raider, who starts with a colossal weapon).
+OPTIMIZER_VERSION = 5
 
 # ---------------------------------------------------------------------------
 # Worker-process globals (set once per worker by init_optimizer_worker)
@@ -681,6 +685,7 @@ class VesselOptimizer:
             desired_compat_effects=desired_compat_effects,
             effect_limit_by_name=effect_limit_by_name,
             family_limit_map=family_limit_map,
+            character=build.character,
         )
         total_score = 0
 
@@ -812,6 +817,7 @@ class VesselOptimizer:
             desired_compat_effects=desired_compat_effs,
             effect_limit_by_name=effect_limit_by_name,
             family_limit_map=family_limit_map,
+            character=build.character,
         )
 
         for slot_idx in range(num_slots):
@@ -866,6 +872,7 @@ class VesselOptimizer:
             desired_compat_effects=desired_compat_effs,
             effect_limit_by_name=effect_limit_by_name,
             family_limit_map=family_limit_map,
+            character=build.character,
         )
         mask = req_initial_mask
 
@@ -956,6 +963,7 @@ class VesselOptimizer:
             desired_compat_effects=desired_compat_effs,
             effect_limit_by_name=effect_limit_by_name,
             family_limit_map=family_limit_map,
+            character=build.character,
         )
 
         def backtrack(slot_idx: int, current: list, used: set[int],
@@ -1083,6 +1091,9 @@ class VesselOptimizer:
         the lookup entirely).
         """
         ds = self.data_source
+        # Binds the scorer's per-build caches so _is_inert below is valid.
+        self.scorer._ensure_build_cache(build)
+        is_inert = self.scorer._is_inert
         dce = desired_compat_effs or {}
         unlocks_map: dict[int, frozenset[int]] = {}
         per_relic_neg: dict[int, set[int]] = {}
@@ -1099,6 +1110,8 @@ class VesselOptimizer:
                 if dce:
                     unlocks: set[int] = set()
                     for eff in r.all_effects:
+                        if is_inert(eff):
+                            continue  # mirrors VesselState.place
                         compat = ds.get_effect_conflict_id(eff)
                         if compat == -1 or compat not in dce:
                             continue
@@ -1117,7 +1130,7 @@ class VesselOptimizer:
                     [(e, False) for e in r.effects]
                     + [(c, True) for c in r.curses]
                 ):
-                    if eff in (EMPTY_EFFECT, 0):
+                    if eff in (EMPTY_EFFECT, 0) or is_inert(eff):
                         continue
                     cat, weight = self.scorer._resolve_category_and_weight(eff, build)
                     negative = (

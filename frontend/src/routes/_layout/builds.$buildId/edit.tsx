@@ -16,7 +16,7 @@ import {
   useSuspenseQuery,
 } from "@tanstack/react-query"
 import { createFileRoute, useNavigate, useParams } from "@tanstack/react-router"
-import { Info, Pin, Plus, Search, Trash2, X } from "lucide-react"
+import { AlertTriangle, Info, Pin, Plus, Search, Trash2, X } from "lucide-react"
 import {
   Suspense,
   useCallback,
@@ -38,6 +38,7 @@ import {
   DEEP_COLOR,
   EffectList,
   EMPTY_EFFECT,
+  isEffectUsableBy,
 } from "@/components/RelicDisplay"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -300,6 +301,10 @@ function LimitToggleButton({
   )
 }
 
+const INERT_CHIP_TITLE =
+  "This Nightfarer can't use this effect — the game greys it out, so it is " +
+  "ignored when scoring."
+
 function DraggableChip({
   dragId,
   name,
@@ -310,6 +315,8 @@ function DraggableChip({
   onLimitChange,
   limitNegative,
   limitUnsetTitle,
+  inert,
+  inertTitle,
 }: {
   dragId: string
   name: string
@@ -320,6 +327,9 @@ function DraggableChip({
   onLimitChange?: (limit: number | undefined) => void
   limitNegative?: boolean
   limitUnsetTitle?: string
+  /** Weighted but greyed out in-game for this build's Nightfarer. */
+  inert?: boolean
+  inertTitle?: string
 }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: dragId,
@@ -330,15 +340,25 @@ function DraggableChip({
       ref={setNodeRef}
       {...listeners}
       {...attributes}
-      className="group/chip inline-flex items-center gap-1 rounded-none px-2.5 py-0.5 text-xs font-medium border cursor-grab active:cursor-grabbing tracking-wide"
+      className={cn(
+        "group/chip inline-flex items-center gap-1 rounded-none px-2.5 py-0.5 text-xs font-medium border cursor-grab active:cursor-grabbing tracking-wide",
+        inert && "border-dashed",
+      )}
+      title={inert ? inertTitle : undefined}
       style={{
         borderColor: color,
         color,
-        opacity: isDragging ? 0.3 : 1,
+        opacity: isDragging ? 0.3 : inert ? 0.45 : 1,
         backgroundColor: `${color}10`,
         boxShadow: `inset 0 0 10px ${color}05`,
       }}
     >
+      {inert && (
+        <AlertTriangle
+          className="h-3 w-3 shrink-0"
+          aria-label="Has no effect for this Nightfarer"
+        />
+      )}
       {name}
       {onLimitChange && (
         <LimitToggleButton
@@ -433,11 +453,13 @@ function PinnedRelicPickerContent({
   slotIndex,
   onSelect,
   effects,
+  character,
 }: {
   profileId: string
   slotIndex: number | null
   onSelect: (relic: RelicForPicker) => void
   effects: EffectMeta[]
+  character: string
 }) {
   const { data } = useSuspenseQuery({
     queryKey: ["relics", profileId],
@@ -510,11 +532,13 @@ function PinnedRelicPickerContent({
                     effectIds={effectIds}
                     isCurse={false}
                     effectMap={effectMap}
+                    character={character}
                   />
                   <EffectList
                     effectIds={curseIds}
                     isCurse={true}
                     effectMap={effectMap}
+                    character={character}
                   />
                 </TooltipContent>
               )}
@@ -536,11 +560,13 @@ function AuthPinnedRelicDialog({
   onAdd,
   disabled,
   effects,
+  character,
 }: {
   pinnedHandles: number[]
   onAdd: (relic: RelicForPicker) => void
   disabled: boolean
   effects: EffectMeta[]
+  character: string
 }) {
   const [open, setOpen] = useState(false)
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -586,6 +612,7 @@ function AuthPinnedRelicDialog({
               profileId={selectedProfileId}
               slotIndex={selectedSlotIndex}
               effects={effects}
+              character={character}
               onSelect={(relic) => {
                 if (!pinnedHandles.includes(relic.ga_handle)) {
                   onAdd(relic)
@@ -609,11 +636,13 @@ function AnonPinnedRelicDialog({
   onAdd,
   disabled,
   effects,
+  character,
 }: {
   pinnedHandles: number[]
   onAdd: (relic: RelicForPicker) => void
   disabled: boolean
   effects: EffectMeta[]
+  character: string
 }) {
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState("")
@@ -692,11 +721,13 @@ function AnonPinnedRelicDialog({
                       effectIds={effectIds}
                       isCurse={false}
                       effectMap={effectMap}
+                      character={character}
                     />
                     <EffectList
                       effectIds={curseIds}
                       isCurse={true}
                       effectMap={effectMap}
+                      character={character}
                     />
                   </TooltipContent>
                 )}
@@ -816,6 +847,22 @@ function BuildEditorUI({
   )
 
   const effectMap = new Map(effects.map((e) => [e.id, e]))
+
+  // Effects the user weighted (Required or any priority group) that this
+  // build's Nightfarer cannot actually use. The optimizer treats them as
+  // absent, so silently scoring 0 would look like a bug — say so instead.
+  const inertWeightedEffects = useMemo(() => {
+    const ids = new Set<number>(requiredEffects)
+    for (const g of groups) for (const id of g.effects) ids.add(id)
+    const out: { id: number; name: string }[] = []
+    for (const id of ids) {
+      if (isEffectUsableBy(id, character)) continue
+      out.push({ id, name: effectMap.get(id)?.name ?? `Effect ${id}` })
+    }
+    return out.sort((a, b) => a.name.localeCompare(b.name))
+    // effectMap is rebuilt every render from `effects`; depend on that instead.
+  }, [requiredEffects, groups, character, effectMap])
+
   const familyByName = useMemo(
     () => new Map(families.map((f) => [f.name, f])),
     [families],
@@ -1205,6 +1252,7 @@ function BuildEditorUI({
                 <AuthPinnedRelicDialog
                   pinnedHandles={pinnedRelics}
                   effects={effects}
+                  character={character}
                   onAdd={(relic) => {
                     const nextMeta = new Map(pinnedRelicMeta)
                     nextMeta.set(relic.ga_handle, relic)
@@ -1219,6 +1267,7 @@ function BuildEditorUI({
                 <AnonPinnedRelicDialog
                   pinnedHandles={pinnedRelics}
                   effects={effects}
+                  character={character}
                   onAdd={(relic) => {
                     const nextMeta = new Map(pinnedRelicMeta)
                     nextMeta.set(relic.ga_handle, relic)
@@ -1339,6 +1388,30 @@ function BuildEditorUI({
           )}
         </div>
 
+        {inertWeightedEffects.length > 0 && (
+          <div className="flex gap-2 rounded-none border border-dashed border-amber-500/50 bg-amber-500/5 p-3 text-xs">
+            <AlertTriangle className="h-4 w-4 shrink-0 text-amber-500 mt-0.5" />
+            <div className="space-y-1">
+              <p className="font-medium text-amber-500">
+                {inertWeightedEffects.length === 1
+                  ? "1 weighted effect does nothing for "
+                  : `${inertWeightedEffects.length} weighted effects do nothing for `}
+                {character}
+              </p>
+              <p className="text-muted-foreground">
+                The game greys these out — {character}'s starting armament can't
+                use them — so the optimizer ignores them entirely. Remove them,
+                or switch this build's Nightfarer.
+              </p>
+              <ul className="text-muted-foreground/90 list-disc pl-4">
+                {inertWeightedEffects.map((e) => (
+                  <li key={e.id}>{e.name}</li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        )}
+
         <div className="grid lg:grid-cols-[1fr_320px] gap-6">
           {/* Priority zones */}
           <div className="space-y-5">
@@ -1415,6 +1488,8 @@ function BuildEditorUI({
                               e.source === "deep" ? `${e.name} (deep)` : e.name
                             }
                             color={REQUIRED_COLOR}
+                            inert={!isEffectUsableBy(id, character)}
+                            inertTitle={INERT_CHIP_TITLE}
                             dragData={{
                               type: "effect",
                               effectId: id,
@@ -1673,6 +1748,8 @@ function BuildEditorUI({
                                       : e.name
                                   }
                                   color={section.color}
+                                  inert={!isEffectUsableBy(id, character)}
+                                  inertTitle={INERT_CHIP_TITLE}
                                   dragData={{
                                     type: "effect",
                                     effectId: id,

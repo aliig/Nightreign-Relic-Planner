@@ -657,9 +657,11 @@ _DORMANT_GREAT_HAMMERS = 6631300
 _DORMANT_DAGGERS_INT   = 6630000
 _COMPAT_DORMANT_INT    = 6630000
 
-# All compat=300, no_stack
-_ARM_HOARFROST_STOMP_INT = 7124000
-_ARM_MAGMA_SHOT_INT      = 7361300
+# All compat=300, no_stack.  Both sorceries, so both are live for Recluse —
+# a melee ash paired with a sorcery would be inert for whichever character we
+# picked, and the suppression would (correctly) ignore it.
+_ARM_MAGMA_SHOT_INT      = 7361300  # ...sorcery to Magma Shot   (Recluse only)
+_ARM_NIGHT_SHARD_INT     = 7361200  # ...sorcery to Night Shard  (Recluse only)
 _COMPAT_ARMAMENT_INT     = 300
 
 
@@ -667,12 +669,13 @@ def _excl_compat_build(
     desired_eff: int,
     compat: int,
     weight: int = 100,
+    character: str = "Wylder",
 ) -> BuildDefinition:
     """Build that excludes a compat category with one desired exception."""
     return BuildDefinition(
         id="excl-compat-test",
         name="Excl Compat Test",
-        character="Wylder",
+        character=character,
         groups=[WeightGroup(weight=weight, effects=[desired_eff])],
         excluded_stacking_categories=[compat],
         include_deep=True,
@@ -764,21 +767,23 @@ class TestExcludedCompatPriorityEnforcement:
         armament's …).  Reproduces the user's follow-up requirement.
         """
         build = _excl_compat_build(
-            _ARM_MAGMA_SHOT_INT, _COMPAT_ARMAMENT_INT, weight=50)
+            _ARM_MAGMA_SHOT_INT, _COMPAT_ARMAMENT_INT, weight=50,
+            character="Recluse")
         relic_magma = _make_relic(
             [_ARM_MAGMA_SHOT_INT, _PHYSICAL_ATK_1, EMPTY],
             color="Yellow", is_deep=True, ga_handle=11,
         )
-        relic_hoarfrost = _make_relic(
-            [_ARM_HOARFROST_STOMP_INT, _HP_RESTORE_PLUS2, EMPTY],
+        relic_night_shard = _make_relic(
+            [_ARM_NIGHT_SHARD_INT, _HP_RESTORE_PLUS2, EMPTY],
             color="Yellow", is_deep=True, ga_handle=12,
         )
         filler = _make_relic(
             [_PHYSICAL_ATK_1, EMPTY, EMPTY], color="Yellow", ga_handle=13)
         inventory = RelicInventory.from_owned_relics(
-            [relic_magma, relic_hoarfrost, filler])
+            [relic_magma, relic_night_shard, filler])
 
-        results = optimizer.optimize_all_vessels(build, inventory, 1, top_n=10)
+        # hero_type 7 = Recluse (CHARACTER_NAMES index + 1)
+        results = optimizer.optimize_all_vessels(build, inventory, 7, top_n=10)
         self._all_results_compliant(
             results, ds, _COMPAT_ARMAMENT_INT, _ARM_MAGMA_SHOT_INT)
 

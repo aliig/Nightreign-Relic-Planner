@@ -381,6 +381,16 @@ def _identify_affected_builds(
         rel_added, rel_removed = relevant_changes(build_def, added, removed, ds)
         relevant_added, relevant_removed = len(rel_added), len(rel_removed)
 
+        # A solver or game-data version bump invalidates the stored results
+        # outright, so the build must re-run even when its relics are
+        # untouched.  Without this the snapshot would sit stale on the builds
+        # page until someone opened it (the serve path refuses to hand out a
+        # mismatched version, so the numbers shown would just be old).
+        version_stale = (
+            snap.optimizer_version != OPTIMIZER_VERSION
+            or snap.game_data_version != game_data_version()
+        )
+
         broken: list[RelicRef] = []
         for handle in build.pinned_relics or []:
             if handle in handle_remap:
@@ -390,13 +400,19 @@ def _identify_affected_builds(
                 continue
             broken.append(_relic_ref_from_db(old_relic))
 
-        if relevant_added == 0 and relevant_removed == 0 and not broken:
+        if (relevant_added == 0 and relevant_removed == 0 and not broken
+                and not version_stale):
             continue
 
         affected.append(_AffectedBuild(
             build=build, slot_index=snap.slot_index, broken_pins=broken,
             added_keys={key_of_fp[fp] for fp in rel_added if fp in key_of_fp},
-            additions_only=not rel_removed and not broken,
+            # A version bump can move any vessel, not just ones reachable from
+            # an added relic, so vessel-level reuse must stay off.  (_rerun_
+            # vessel_ids also refuses on version mismatch; this is belt and
+            # braces, and keeps the flag honest for anything reading it.)
+            additions_only=(
+                not rel_removed and not broken and not version_stale),
         ))
 
     return affected

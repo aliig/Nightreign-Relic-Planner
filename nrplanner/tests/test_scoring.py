@@ -683,9 +683,19 @@ class TestExcludedStackingCategories:
 # Effects in compat=300 (Changes compatible armament's skill/sorcery/incantation)
 # Used to verify that the same priority logic applies to the second known
 # left-wins-in-game category.
-_ARM_HOARFROST_STOMP = 7124000  # ...skill to Hoarfrost Stomp
-_ARM_MAGMA_SHOT      = 7361300  # ...sorcery to Magma Shot
+#
+# NOTE: compat=300 membership is not enough — the pair must also be live for
+# the build's character, or both effects are inert (greyed out in-game) and the
+# suppression logic correctly ignores them.  Magma Shot and Night Shard are
+# both sorceries, so Recluse (the only staff-wielder) can use both.
+_ARM_HOARFROST_STOMP = 7124000  # ...skill to Hoarfrost Stomp  (melee, not Recluse)
+_ARM_MAGMA_SHOT      = 7361300  # ...sorcery to Magma Shot     (Recluse only)
+_ARM_NIGHT_SHARD     = 7361200  # ...sorcery to Night Shard    (Recluse only)
 _ARM_GLINTBLADE      = 7122700  # ...skill to Glintblade Phalanx
+# Character-compatibility pairs (AttachEffectParam allow* flags):
+_ARM_SEPPUKU            = 7123800  # katana etc. — NOT Raider (colossal)
+_ARM_PRAYERFUL_STRIKE   = 7123400  # colossal/hammer — Raider + Undertaker only
+_ARM_POISON_MOTH_FLIGHT = 7123600  # Duchess, Executor, Scholar
 _COMPAT_ARMAMENT     = 300
 
 
@@ -759,11 +769,11 @@ class TestExcludedCategoryPositionalScoring:
         stacking category family."
         """
         build = BuildDefinition(
-            id="armament-test", name="Armament Test", character="Wylder",
+            id="armament-test", name="Armament Test", character="Recluse",
             groups=[WeightGroup(weight=20, effects=[_ARM_MAGMA_SHOT])],
             excluded_stacking_categories=[_COMPAT_ARMAMENT],
         )
-        relic = _make_relic([_ARM_HOARFROST_STOMP, EMPTY, EMPTY])
+        relic = _make_relic([_ARM_NIGHT_SHARD, EMPTY, EMPTY])
         state = VesselState(
             ds,
             desired_compat_effects=scorer.get_desired_compat_effects(build),
@@ -773,6 +783,43 @@ class TestExcludedCategoryPositionalScoring:
             f"Undesired armament-changing effect must score -20 when desired "
             f"Magma Shot not yet placed; got {score}"
         )
+
+    def test_armament_compat_ignored_when_character_cannot_use_it(
+        self, scorer: BuildScorer, ds: SourceDataHandler,
+    ) -> None:
+        """An armament skill the Nightfarer cannot use is inert, so it must
+        NOT block the desired one — Raider starts with a colossal weapon, so a
+        Seppuku relic is fair game even with compat=300 suppressed."""
+        build = BuildDefinition(
+            id="armament-inert", name="Armament Inert", character="Raider",
+            groups=[WeightGroup(weight=20, effects=[_ARM_PRAYERFUL_STRIKE])],
+            excluded_stacking_categories=[_COMPAT_ARMAMENT],
+        )
+        relic = _make_relic([_ARM_SEPPUKU, EMPTY, EMPTY])
+        dce = scorer.get_desired_compat_effects(build)
+        assert dce == {_COMPAT_ARMAMENT: {_ARM_PRAYERFUL_STRIKE}}
+        state = VesselState(ds, desired_compat_effects=dce, character="Raider")
+        assert scorer.score_relic_in_context(relic, build, state) == 0, (
+            "Seppuku cannot fire on Raider, so it must not incur the "
+            "blocking penalty for Prayerful Strike"
+        )
+        assert scorer.has_excluded_effect(relic, build, dce) is False
+
+    def test_armament_compat_still_blocks_when_character_can_use_it(
+        self, scorer: BuildScorer, ds: SourceDataHandler,
+    ) -> None:
+        """Regression guard for the inert rule: Executor wields a katana, so
+        Seppuku IS live for them and the suppression must still apply."""
+        build = BuildDefinition(
+            id="armament-live", name="Armament Live", character="Executor",
+            groups=[WeightGroup(weight=20, effects=[_ARM_SEPPUKU])],
+            excluded_stacking_categories=[_COMPAT_ARMAMENT],
+        )
+        relic = _make_relic([_ARM_POISON_MOTH_FLIGHT, EMPTY, EMPTY])
+        dce = scorer.get_desired_compat_effects(build)
+        assert dce == {_COMPAT_ARMAMENT: {_ARM_SEPPUKU}}
+        state = VesselState(ds, desired_compat_effects=dce, character="Executor")
+        assert scorer.score_relic_in_context(relic, build, state) == -20
 
     def test_excluded_category_with_no_desired_is_handled_by_prefilter(
         self, scorer: BuildScorer, ds: SourceDataHandler,
@@ -953,31 +1000,41 @@ class TestOrphanedExclCategoryEffects:
 # Default curse weight
 # ---------------------------------------------------------------------------
 
+@pytest.fixture(scope="module")
+def wylder_effects(ds: SourceDataHandler, all_effects: list[dict]) -> list[dict]:
+    """all_effects restricted to what _make_build's Wylder can actually use.
+
+    Effects belonging to another Nightfarer are inert and score 0, so tests
+    about ordinary weighting must not pick one by raw index.
+    """
+    return [e for e in all_effects if ds.is_effect_usable_by(e["id"], "Wylder")]
+
+
 class TestDefaultCurseWeight:
     """Verify the default_curse_weight fallback for unmatched curses."""
 
     def test_unmatched_curse_with_default_weight(
-        self, scorer: BuildScorer, all_effects: list[dict],
+        self, scorer: BuildScorer, wylder_effects: list[dict],
     ) -> None:
-        curse_id = all_effects[5]["id"]
+        curse_id = wylder_effects[5]["id"]
         build = _make_build()
         build = build.model_copy(update={"default_curse_weight": -5})
         relic = _make_relic([EMPTY, EMPTY, EMPTY], curses=[curse_id, EMPTY, EMPTY])
         assert scorer.score_relic(relic, build) == -5
 
     def test_unmatched_curse_default_zero_scores_zero(
-        self, scorer: BuildScorer, all_effects: list[dict],
+        self, scorer: BuildScorer, wylder_effects: list[dict],
     ) -> None:
-        curse_id = all_effects[5]["id"]
+        curse_id = wylder_effects[5]["id"]
         build = _make_build()  # default_curse_weight=0
         relic = _make_relic([EMPTY, EMPTY, EMPTY], curses=[curse_id, EMPTY, EMPTY])
         assert scorer.score_relic(relic, build) == 0
 
     def test_matched_curse_uses_group_weight(
-        self, scorer: BuildScorer, all_effects: list[dict],
+        self, scorer: BuildScorer, wylder_effects: list[dict],
     ) -> None:
         """When a curse is explicitly in a group, that weight takes precedence."""
-        curse_id = all_effects[5]["id"]
+        curse_id = wylder_effects[5]["id"]
         build = _make_build(
             groups=[WeightGroup(weight=-20, effects=[curse_id])],
         )
@@ -986,19 +1043,19 @@ class TestDefaultCurseWeight:
         assert scorer.score_relic(relic, build) == -20
 
     def test_multiple_unmatched_curses_accumulate(
-        self, scorer: BuildScorer, all_effects: list[dict],
+        self, scorer: BuildScorer, wylder_effects: list[dict],
     ) -> None:
-        c1, c2 = all_effects[5]["id"], all_effects[6]["id"]
+        c1, c2 = wylder_effects[5]["id"], wylder_effects[6]["id"]
         build = _make_build()
         build = build.model_copy(update={"default_curse_weight": -3})
         relic = _make_relic([EMPTY, EMPTY, EMPTY], curses=[c1, c2, EMPTY])
         assert scorer.score_relic(relic, build) == -6
 
     def test_default_curse_weight_in_context(
-        self, scorer: BuildScorer, all_effects: list[dict],
+        self, scorer: BuildScorer, wylder_effects: list[dict],
         ds: SourceDataHandler,
     ) -> None:
-        curse_id = all_effects[5]["id"]
+        curse_id = wylder_effects[5]["id"]
         build = _make_build()
         build = build.model_copy(update={"default_curse_weight": -5})
         relic = _make_relic([EMPTY, EMPTY, EMPTY], curses=[curse_id, EMPTY, EMPTY])
@@ -1006,9 +1063,9 @@ class TestDefaultCurseWeight:
         assert scorer.score_relic_in_context(relic, build, state) == -5
 
     def test_breakdown_shows_default_curse(
-        self, scorer: BuildScorer, all_effects: list[dict],
+        self, scorer: BuildScorer, wylder_effects: list[dict],
     ) -> None:
-        curse_id = all_effects[5]["id"]
+        curse_id = wylder_effects[5]["id"]
         build = _make_build()
         build = build.model_copy(update={"default_curse_weight": -5})
         relic = _make_relic([EMPTY, EMPTY, EMPTY], curses=[curse_id, EMPTY, EMPTY])
@@ -1020,9 +1077,9 @@ class TestDefaultCurseWeight:
         assert bd[0]["is_curse"] is True
 
     def test_breakdown_omits_default_curse_when_zero(
-        self, scorer: BuildScorer, all_effects: list[dict],
+        self, scorer: BuildScorer, wylder_effects: list[dict],
     ) -> None:
-        curse_id = all_effects[5]["id"]
+        curse_id = wylder_effects[5]["id"]
         build = _make_build()  # default_curse_weight=0
         relic = _make_relic([EMPTY, EMPTY, EMPTY], curses=[curse_id, EMPTY, EMPTY])
         bd = scorer.get_breakdown(relic, build)

@@ -363,7 +363,7 @@ class VesselState:
         'desired_conflict_weights', 'desired_compat_effects',
         # User-defined effect/family limits
         'limited_counts', 'effect_limit_by_name', 'family_limit_map',
-        'limited_names',
+        'limited_names', 'character',
     )
 
     def __init__(
@@ -373,8 +373,14 @@ class VesselState:
         desired_compat_effects: dict[int, set[int]] | None = None,
         effect_limit_by_name: dict[str, int] | None = None,
         family_limit_map: dict[str, int] | None = None,
+        character: str | None = None,
     ):
         self.data_source = data_source
+        # Active Nightfarer. Effects this character cannot use are inert
+        # in-game (greyed out), so place() skips them entirely — they must not
+        # occupy an exclusivity/compat slot that a usable effect could claim.
+        # None disables the filter (callers without a resolved character).
+        self.character = character
         self.effect_ids: set[int] = set()
         self.exclusivity_ids: set[int] = set()
         self.no_stack_exclusivity_ids: set[int] = set()
@@ -447,7 +453,10 @@ class VesselState:
         added_ns_compat: set[int] = set()
 
         ds = self.data_source
+        char = self.character
         for eff in relic.all_effects:
+            if not ds.is_effect_usable_by(eff, char):
+                continue  # greyed out for this Nightfarer — does not apply
             if eff not in self.effect_ids:
                 added_eff.add(eff)
             text_id = ds.get_effect_text_id(eff)
@@ -482,6 +491,8 @@ class VesselState:
         dce = self.desired_compat_effects
         if dce:
             for eff in relic.all_effects:
+                if not ds.is_effect_usable_by(eff, char):
+                    continue
                 compat = ds.get_effect_conflict_id(eff)
                 if compat == -1 or compat not in dce:
                     continue
@@ -497,7 +508,8 @@ class VesselState:
 
         # Curse tracking
         curse_ids = tuple(
-            c for c in relic.curses if c not in (EMPTY_EFFECT, 0)
+            c for c in relic.curses
+            if c not in (EMPTY_EFFECT, 0) and ds.is_effect_usable_by(c, char)
         )
 
         # Limit tracking — count each limited name/family once per relic
@@ -505,6 +517,8 @@ class VesselState:
         if self.limited_names:
             seen_for_limits: set[str] = set()
             for eff in relic.all_effects:
+                if not ds.is_effect_usable_by(eff, char):
+                    continue
                 eff_name = ds.get_effect_name(eff)
                 if (eff_name and eff_name in self.effect_limit_by_name
                         and eff_name not in seen_for_limits):

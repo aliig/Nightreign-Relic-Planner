@@ -133,6 +133,8 @@ class BuildScorer:
         self._resolve_memo: dict[int, tuple[str | None, int]] = {}
         self._protected_memo: dict[int, bool] = {}
         self._profile_memo: dict[int, RelicProfile] = {}
+        self._character: str | None = None
+        self._inert_memo: dict[int, bool] = {}
         self._excl_cats: frozenset[int] = frozenset()
         self._excl_names: set[str] = set()
         self._desired_cw: dict[int, int] | None = None
@@ -146,6 +148,10 @@ class BuildScorer:
     def _scoring_sig(build: BuildDefinition) -> tuple:
         """Structural signature of every field scoring resolution reads."""
         return (
+            # Character gates which effects are inert (see _is_inert), so every
+            # memo below depends on it — omitting it would leak a Raider's
+            # resolution cache into an Executor build.
+            build.character,
             tuple(build.required_effects),
             tuple(build.required_families),
             tuple(build.excluded_effects),
@@ -182,6 +188,8 @@ class BuildScorer:
         self._resolve_memo = {}
         self._protected_memo = {}
         self._profile_memo = {}
+        self._character = build.character
+        self._inert_memo = {}
         self._excl_cats = frozenset(build.excluded_stacking_categories)
         self._excl_names = {
             name for name in (
@@ -222,6 +230,27 @@ class BuildScorer:
         self._ensure_build_cache(build)
         return self._name_cache
 
+    def _is_inert(self, eff_id: int) -> bool:
+        """True if this effect does nothing for the bound build's character.
+
+        The game greys out effects that the active Nightfarer cannot use —
+        either character-exclusive effects belonging to someone else, or
+        armament-skill swaps whose ash of war is incompatible with that
+        character's starting weapon (Seppuku on colossal-wielding Raider, the
+        sorcery variants without Recluse's staff, the incantation variants
+        without Revenant's seal).  Such an effect is treated as ABSENT
+        everywhere in scoring: it earns nothing, costs nothing, and — the
+        point of this rule — never blocks a usable effect in the same
+        stacking category.
+
+        Callers must have run ``_ensure_build_cache`` first.
+        """
+        hit = self._inert_memo.get(eff_id)
+        if hit is None:
+            hit = not self.data_source.is_effect_usable_by(eff_id, self._character)
+            self._inert_memo[eff_id] = hit
+        return hit
+
     def _resolve_category_and_weight(self, eff_id: int,
                                       build: BuildDefinition) -> tuple[str | None, int]:
         """Return (category, weight) for an effect.
@@ -239,6 +268,10 @@ class BuildScorer:
         hit = self._resolve_memo.get(eff_id)
         if hit is not None:
             return hit
+        if self._is_inert(eff_id):
+            # Weighted or not, it cannot fire for this character.
+            self._resolve_memo[eff_id] = (None, 0)
+            return (None, 0)
 
         result = build.get_weight_for_effect(eff_id)
         if not result:
@@ -285,6 +318,8 @@ class BuildScorer:
         return value
 
     def _compute_protected(self, eff_id: int, build: BuildDefinition) -> bool:
+        if self._is_inert(eff_id):
+            return False  # cannot be a desired exception it can never fire
         result = build.get_weight_for_effect(eff_id)
         if result and result[0] != "excluded":
             return True
@@ -321,6 +356,9 @@ class BuildScorer:
         Even when let through here, results are post-validated by
         ``has_orphaned_excl_category_effects`` to ensure no undesired
         excluded-category effect appears without its desired counterpart.
+
+        Effects the build's character cannot use are skipped outright: the
+        game greys them out, so they exclude nothing (see ``_is_inert``).
         """
         excl_ids = set(build.excluded_effects)
         excl_families = build.excluded_families
@@ -331,6 +369,8 @@ class BuildScorer:
         excl_names = self._excl_names
         _desired = desired_compat_effects or {}
         for eff in relic.all_effects:
+            if self._is_inert(eff):
+                continue  # greyed out for this character — nothing to exclude
             if eff in excl_ids:
                 return True
             text_id = self.data_source.get_effect_text_id(eff)
@@ -415,6 +455,7 @@ class BuildScorer:
         dce = desired_compat_effects or {}
         if not dce:
             return False
+        self._ensure_build_cache(build)
         excl_cats = set(build.excluded_stacking_categories)
         for compat, desired_ids in dce.items():
             if compat not in excl_cats:
@@ -435,6 +476,8 @@ class BuildScorer:
                     for eff in slot_effects:
                         if eff in desired_expanded:
                             continue
+                        if self._is_inert(eff):
+                            continue  # greyed out — never wins the compat
                         eff_compat = self.data_source.get_effect_conflict_id(eff)
                         if eff_compat == compat:
                             leftmost_undesired = slot_idx
@@ -493,6 +536,8 @@ class BuildScorer:
         if compat == -1:
             return False
         self._ensure_build_cache(build)
+        if self._is_inert(eff_id):
+            return False  # greyed out — cannot block the desired effect
         if compat not in self._excl_cats:
             return False
         if compat not in dce:
@@ -507,15 +552,17 @@ class BuildScorer:
 
     def score_relic(self, relic: OwnedRelic, build: BuildDefinition) -> int:
         """Pre-score without stacking context (used for initial sort / pruning)."""
+        self._ensure_build_cache(build)
         score = 0
         for eff in relic.effects:
-            if eff in (EMPTY_EFFECT, 0):
+            if eff in (EMPTY_EFFECT, 0) or self._is_inert(eff):
                 continue
             cat, weight = self._resolve_category_and_weight(eff, build)
             if cat is not None and cat != "excluded":
                 score += weight
         for curse in relic.curses:
-            if curse in (EMPTY_EFFECT, 0):
+            # An inert curse costs nothing — not even default_curse_weight.
+            if curse in (EMPTY_EFFECT, 0) or self._is_inert(curse):
                 continue
             cat, weight = self._resolve_category_and_weight(curse, build)
             if cat is not None and cat != "excluded":
@@ -536,15 +583,16 @@ class BuildScorer:
         negatively-weighted duplicate dedups to 0 in context, so a net<=0
         relic can still belong to the optimum.
         """
+        self._ensure_build_cache(build)
         score = 0
         for eff in relic.effects:
-            if eff in (EMPTY_EFFECT, 0):
+            if eff in (EMPTY_EFFECT, 0) or self._is_inert(eff):
                 continue
             cat, weight = self._resolve_category_and_weight(eff, build)
             if cat is not None and cat != "excluded" and weight > 0:
                 score += weight
         for curse in relic.curses:
-            if curse in (EMPTY_EFFECT, 0):
+            if curse in (EMPTY_EFFECT, 0) or self._is_inert(curse):
                 continue
             cat, weight = self._resolve_category_and_weight(curse, build)
             if cat is not None and cat != "excluded":
@@ -676,9 +724,10 @@ class BuildScorer:
     def score_relic_in_context(self, relic: OwnedRelic, build: BuildDefinition,
                                 state: VesselState) -> int:
         """Score considering stacking state of already-assigned relics."""
+        self._ensure_build_cache(build)
         score = 0
         for eff in relic.effects:
-            if eff in (EMPTY_EFFECT, 0):
+            if eff in (EMPTY_EFFECT, 0) or self._is_inert(eff):
                 continue
             # Excluded-category positional check fires regardless of whether
             # the effect resolves to a build category. An undesired competitor
@@ -701,7 +750,7 @@ class BuildScorer:
                     continue
                 score += self._effect_stacking_score(eff, weight, state)
         for curse in relic.curses:
-            if curse in (EMPTY_EFFECT, 0):
+            if curse in (EMPTY_EFFECT, 0) or self._is_inert(curse):
                 continue
             if self._is_excl_category_effect(curse, build, state):
                 _, w_for_penalty = self._resolve_category_and_weight(curse, build)
@@ -718,7 +767,7 @@ class BuildScorer:
             elif cat is None:
                 score += build.default_curse_weight
         for curse in relic.curses:
-            if curse in (EMPTY_EFFECT, 0):
+            if curse in (EMPTY_EFFECT, 0) or self._is_inert(curse):
                 continue
             if self._curse_max_exempt(curse, build, state):
                 continue  # explicit per-curse tolerance replaces curse_max
@@ -762,7 +811,7 @@ class BuildScorer:
             [(e, False) for e in relic.effects]
             + [(c, True) for c in relic.curses]
         ):
-            if eff in (EMPTY_EFFECT, 0):
+            if eff in (EMPTY_EFFECT, 0) or self._is_inert(eff):
                 continue
 
             if self._is_excl_category_effect_static(eff, build, dce):
@@ -807,7 +856,8 @@ class BuildScorer:
                 static_score += build.default_curse_weight
 
         curse_ids = tuple(
-            c for c in relic.curses if c not in (EMPTY_EFFECT, 0))
+            c for c in relic.curses
+            if c not in (EMPTY_EFFECT, 0) and not self._is_inert(c))
         penalized_curse_ids = (
             tuple(c for c in curse_ids if c not in tolerated_curses)
             if tolerated_curses else curse_ids)
@@ -815,6 +865,8 @@ class BuildScorer:
         # place() metadata — mirrors VesselState.place per effect.
         place_ops: list[tuple] = []
         for eff in relic.all_effects:
+            if self._is_inert(eff):
+                continue  # mirrors VesselState.place's grey-out skip
             text_id = ds.get_effect_text_id(eff)
             text_add = text_id if (text_id != -1 and text_id != eff) else -1
             compat = ds.get_effect_conflict_id(eff)
@@ -857,6 +909,8 @@ class BuildScorer:
             seen: set[str] = set()
             keys: list[str] = []
             for eff in relic.all_effects:
+                if self._is_inert(eff):
+                    continue
                 name = ds.get_effect_name(eff)
                 if name and name in elbn and name not in seen:
                     seen.add(name)
@@ -895,6 +949,8 @@ class BuildScorer:
         compat = self.data_source.get_effect_conflict_id(eff_id)
         if compat == -1:
             return False
+        if self._is_inert(eff_id):
+            return False  # greyed out — cannot block the desired effect
         if compat not in self._excl_cats:
             return False
         if compat not in dce:
@@ -923,12 +979,27 @@ class BuildScorer:
                       state: VesselState | None = None,
                       ) -> list[dict]:
         """Per-effect scoring detail for UI / API display."""
+        self._ensure_build_cache(build)
         breakdown = []
         has_state = state is not None
 
         for is_curse, effs in ((False, relic.effects), (True, relic.curses)):
             for eff in effs:
                 if eff in (EMPTY_EFFECT, 0):
+                    continue
+                # Inert effects are still listed — the game shows them greyed
+                # out rather than hiding them — but contribute nothing.
+                if self._is_inert(eff):
+                    breakdown.append({
+                        "effect_id": eff,
+                        "name": self.data_source.get_effect_name(eff),
+                        "category": None,
+                        "weight": 0,
+                        "score": 0,
+                        "is_curse": is_curse,
+                        "redundant": True,
+                        "override_status": "character_incompatible",
+                    })
                     continue
                 cat, weight = self._resolve_category_and_weight(eff, build)
                 base_score = weight if (cat is not None and cat != "excluded") else 0

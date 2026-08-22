@@ -97,9 +97,13 @@ def test_profiles_match_legacy_scoring_and_place(
         elbn, flm = optimizer._prepare_limits(build)
 
         def mk_state() -> VesselState:
+            # character must match what compile_profile filters on, exactly as
+            # VesselOptimizer constructs it — otherwise place() would register
+            # effects the compiled profile treats as inert.
             return VesselState(
                 ds, desired_conflict_weights=dcw, desired_compat_effects=dce,
                 effect_limit_by_name=elbn, family_limit_map=flm,
+                character=build.character,
             )
 
         legacy, compiled = mk_state(), mk_state()

@@ -81,6 +81,20 @@ export interface OptimizeProgress {
 
 // --- Helpers ---
 
+/** Suffix explaining why a listed effect scored nothing, if it did. */
+export function breakdownNote(b: Record<string, unknown>): string {
+  if (!b.redundant) return ""
+  switch (b.override_status) {
+    case "over_limit_penalty":
+      return " (over limit)"
+    // The Nightfarer can't use it — the game greys it out, so it never fires.
+    case "character_incompatible":
+      return " (no effect)"
+    default:
+      return " (redundant)"
+  }
+}
+
 export function getBreakdownColor(
   b: Record<string, unknown>,
 ): string | undefined {
@@ -346,11 +360,7 @@ export function SlotCard({
                     style={{ color: getBreakdownColor(b) }}
                   >
                     {b.name as string}
-                    {b.redundant
-                      ? b.override_status === "over_limit_penalty"
-                        ? " (over limit)"
-                        : " (redundant)"
-                      : ""}
+                    {breakdownNote(b)}
                   </span>
                   <span className="font-mono ml-2 shrink-0">
                     {(b.score as number) >= 0 ? "+" : ""}
@@ -370,11 +380,7 @@ export function SlotCard({
                   >
                     <span className="truncate text-destructive/80">
                       {b.name as string}
-                      {b.redundant
-                        ? b.override_status === "over_limit_penalty"
-                          ? " (over limit)"
-                          : " (redundant)"
-                        : ""}
+                      {breakdownNote(b)}
                     </span>
                     <span className="font-mono ml-2 shrink-0 text-destructive/80">
                       {(b.score as number) >= 0 ? "+" : ""}

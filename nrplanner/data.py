@@ -12,8 +12,15 @@ from typing import Optional
 import pandas as pd
 
 from nrplanner.constants import (
-    COLOR_MAP, LANGUAGE_MAP, CHARACTER_NAME_ID, CHARACTER_NAMES, RELIC_GROUPS,
+    ALLOW_COLUMNS, COLOR_MAP, EMPTY_EFFECT, LANGUAGE_MAP, CHARACTER_NAME_ID,
+    CHARACTER_NAMES, RELIC_GROUPS,
 )
+
+# Bit index into the allow-mask cache, per English character name. "All" and
+# any unknown name are absent → no compatibility filtering (safe default).
+_CHARACTER_BIT = {
+    name: idx for idx, name in enumerate(CHARACTER_NAMES[:len(ALLOW_COLUMNS)])
+}
 
 
 def _longest_common_prefix(names: list[str]) -> str:
@@ -61,7 +68,8 @@ class SourceDataHandler:
 
         self.effect_params: pd.DataFrame = (
             pd.read_csv(self._param_dir / "AttachEffectParam.csv")
-            [["ID", "compatibilityId", "attachTextId", "overrideEffectId", "exclusivityId"]]
+            [["ID", "compatibilityId", "attachTextId", "overrideEffectId",
+              "exclusivityId", *ALLOW_COLUMNS]]
             .set_index("ID")
         )
         self.effect_table: pd.DataFrame = (
@@ -119,6 +127,19 @@ class SourceDataHandler:
             int(k): int(v)
             for k, v in params["exclusivityId"].items()
         }
+
+        # Per-effect applicability bitmask: bit i set == playable character i
+        # (CHARACTER_NAMES order) can actually use this effect.  Keyed on the
+        # effect's OWN row, never its attachTextId row — the two disagree for
+        # effect 15002 (Raider-only) vs its shared text row 7090300.
+        allow_cols = [params[c] for c in ALLOW_COLUMNS]
+        self._allow_mask_cache: dict[int, int] = {}
+        for pos, eff_id in enumerate(params.index):
+            mask = 0
+            for bit, col in enumerate(allow_cols):
+                if int(col.iat[pos]):
+                    mask |= 1 << bit
+            self._allow_mask_cache[int(eff_id)] = mask
 
         fmg_lookup: dict[int, str] = {}
         if self.effect_name is not None:
@@ -312,6 +333,27 @@ class SourceDataHandler:
             return -1
         return self._exclusivity_id_cache.get(effect_id, -1)
 
+    def get_effect_allow_mask(self, effect_id: int) -> int:
+        """Bitmask of playable characters this effect applies to (bit per
+        CHARACTER_NAMES index).  Unknown effects default to "usable by all"."""
+        return self._allow_mask_cache.get(effect_id, (1 << len(ALLOW_COLUMNS)) - 1)
+
+    def is_effect_usable_by(self, effect_id: int, character: str | None) -> bool:
+        """True if *effect_id* actually does something for *character*.
+
+        Mirrors the in-game grey-out: an effect whose allow flag is clear for
+        the active Nightfarer is inert — it neither applies nor conflicts with
+        the effects that do (see ALLOW_COLUMNS for provenance).  A None,
+        "All", or unrecognised character disables filtering, so callers
+        without a resolved Nightfarer keep the old permissive behaviour.
+        """
+        bit = _CHARACTER_BIT.get(character)
+        if bit is None:
+            return True
+        if effect_id in (-1, 0, EMPTY_EFFECT):
+            return True
+        return bool(self.get_effect_allow_mask(effect_id) & (1 << bit))
+
     def get_sort_id(self, effect_id: int) -> int:
         try:
             return int(self.effect_params.loc[effect_id, "overrideEffectId"])
@@ -392,11 +434,8 @@ class SourceDataHandler:
         source_override_names = self._get_source_override_names()
 
         full = pd.read_csv(self._param_dir / "AttachEffectParam.csv")
-        char_cols = ["allowWylder", "allowGuardian", "allowIroneye", "allowDuchess",
-                     "allowRaider", "allowRevenant", "allowRecluse", "allowExecutor",
-                     "allowScholar", "allowUndertaker"]
-        char_keys = ["Wylder", "Guardian", "Ironeye", "Duchess", "Raider",
-                     "Revenant", "Recluse", "Executor", "Scholar", "Undertaker"]
+        char_cols = ALLOW_COLUMNS
+        char_keys = CHARACTER_NAMES[:len(ALLOW_COLUMNS)]
         results: list[dict] = []
         seen: dict[str, int] = {}
         for _, row in full.iterrows():
