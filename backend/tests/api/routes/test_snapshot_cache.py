@@ -925,3 +925,278 @@ class TestBuildSummaries:
         )
         read = next(r for r in after.json() if r["build_id"] == build["id"])
         assert read["reviewed"] is True, "dismissal must persist on the snapshot"
+
+
+@pytest.mark.usefixtures("override_game_data")
+class TestBuildFreshness:
+    """POST /optimize/freshness — the bulk form of the snapshot-query contract.
+
+    It must answer for every build exactly what /snapshot/query answers for
+    one, without running the optimizer: that agreement is what lets the builds
+    page say "N builds out of date" and trust the number.  These tests pin the
+    agreement itself, not just the individual verdicts, so the two paths cannot
+    drift back apart.
+    """
+
+    def _freshness(
+        self,
+        client: TestClient,
+        headers: dict[str, str],
+        profile_id: str,
+        *,
+        staged_sells: list[int] | None = None,
+        staged_mints: list[dict] | None = None,
+    ) -> dict[str, bool]:
+        body: dict = {"profile_id": profile_id}
+        if staged_sells:
+            body["staged_sells"] = staged_sells
+        if staged_mints:
+            body["staged_mints"] = staged_mints
+        resp = client.post(
+            "/api/v1/optimize/freshness", json=body, headers=headers
+        )
+        assert resp.status_code == 200, resp.text
+        return {r["build_id"]: r["fresh"] for r in resp.json()}
+
+    def _run(self, client, headers, build_id, profile_id, **extra):
+        resp = client.post(
+            "/api/v1/optimize/",
+            headers=headers,
+            json={
+                "build_id": build_id,
+                "profile_id": profile_id,
+                "top_n": 5,
+                **extra,
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        return resp
+
+    def test_requires_auth(self, client: TestClient) -> None:
+        resp = client.post(
+            "/api/v1/optimize/freshness",
+            json={"profile_id": str(uuid.uuid4())},
+        )
+        assert resp.status_code in (401, 403)
+
+    def test_unknown_profile_is_404(
+        self, client: TestClient, normal_user_token_headers: dict[str, str]
+    ) -> None:
+        resp = client.post(
+            "/api/v1/optimize/freshness",
+            json={"profile_id": str(uuid.uuid4())},
+            headers=normal_user_token_headers,
+        )
+        assert resp.status_code == 404, resp.text
+
+    def test_never_optimized_build_is_not_fresh(
+        self,
+        client: TestClient,
+        normal_user_token_headers: dict[str, str],
+        db: Session,
+    ) -> None:
+        """A build with no snapshot at all must be reported — and reported as
+        stale.  /summaries omits these builds entirely, which is exactly the
+        gap that let never-optimized builds sit invisibly out of date."""
+        user = get_test_user(db)
+        profile = seed_profile_with_relics(db, user.id, with_hash=True)
+        build = create_build(client, normal_user_token_headers)
+
+        rows = self._freshness(
+            client, normal_user_token_headers, str(profile.id)
+        )
+        assert build["id"] in rows, "every owned build must appear"
+        assert rows[build["id"]] is False
+
+    def test_fresh_after_optimize_and_stale_after_build_edit(
+        self,
+        client: TestClient,
+        normal_user_token_headers: dict[str, str],
+        db: Session,
+    ) -> None:
+        user = get_test_user(db)
+        profile = seed_profile_with_relics(db, user.id, with_hash=True)
+        build = create_build(client, normal_user_token_headers)
+        self._run(
+            client, normal_user_token_headers, build["id"], str(profile.id)
+        )
+
+        rows = self._freshness(
+            client, normal_user_token_headers, str(profile.id)
+        )
+        assert rows[build["id"]] is True
+
+        upd = client.put(
+            f"/api/v1/builds/{build['id']}",
+            headers=normal_user_token_headers,
+            json={"groups": [{"weight": 7, "effects": [100], "families": []}]},
+        )
+        assert upd.status_code == 200, upd.text
+
+        rows_after = self._freshness(
+            client, normal_user_token_headers, str(profile.id)
+        )
+        assert rows_after[build["id"]] is False
+
+    def test_staged_diff_agrees_with_per_build_query(
+        self,
+        client: TestClient,
+        normal_user_token_headers: dict[str, str],
+        db: Session,
+    ) -> None:
+        """The Relic Rites case: with relics staged in-app, the bulk verdict
+        for EVERY build must equal what /snapshot/query says for that build.
+
+        Deliberately asserts agreement rather than a hardcoded fresh/stale per
+        build — whether a rolled mint is relevant to a given build depends on
+        the roll, and it is the agreement that the builds page's out-of-date
+        count depends on.
+        """
+        user = get_test_user(db)
+        profile = seed_profile_with_relics(db, user.id, with_hash=True)
+        builds = [
+            create_build(client, normal_user_token_headers),
+            create_build(client, normal_user_token_headers, name="Second"),
+        ]
+        for b in builds:
+            self._run(
+                client, normal_user_token_headers, b["id"], str(profile.id)
+            )
+
+        clean = self._freshness(
+            client, normal_user_token_headers, str(profile.id)
+        )
+        assert all(clean[b["id"]] for b in builds), (
+            "both builds are freshly optimized, so any staleness below comes "
+            "from the staged diff alone"
+        )
+
+        mint = _legal_mint()
+        staged = self._freshness(
+            client,
+            normal_user_token_headers,
+            str(profile.id),
+            staged_mints=[mint],
+        )
+        for build_id, fresh in staged.items():
+            snap = query_snapshot(
+                client,
+                normal_user_token_headers,
+                build_id,
+                str(profile.id),
+                staged_mints=[mint],
+            )
+            assert snap.status_code == 200, snap.text
+            served = snap.json() is not None
+            assert fresh is served, (
+                f"freshness ({fresh}) disagrees with snapshot/query "
+                f"({served}) for build {build_id} — the two freshness paths "
+                "have drifted"
+            )
+
+    def test_relevant_staged_sell_stales_the_build(
+        self,
+        client: TestClient,
+        normal_user_token_headers: dict[str, str],
+        db: Session,
+    ) -> None:
+        """Trashing a relic the build uses is work the builds page must show
+        as outstanding (bulk mirror of test_pure_run_not_served_to_staged_state)."""
+        user = get_test_user(db)
+        profile = seed_profile_with_relics(db, user.id, with_hash=True)
+        build = create_build(client, normal_user_token_headers)
+        self._run(
+            client, normal_user_token_headers, build["id"], str(profile.id)
+        )
+
+        rows = self._freshness(
+            client,
+            normal_user_token_headers,
+            str(profile.id),
+            staged_sells=[0xC0020000],
+        )
+        assert rows[build["id"]] is False
+
+    def test_irrelevant_staged_sell_creates_no_phantom_work(
+        self,
+        client: TestClient,
+        normal_user_token_headers: dict[str, str],
+        db: Session,
+    ) -> None:
+        """A staged edit no build can feel must NOT inflate the out-of-date
+        count — the relevant-subset gate applies to the bulk read too, or the
+        builds page nags the user into re-running work that cannot change."""
+        from tests.utils.seeding import default_owned_relics
+
+        irrelevant = OwnedRelic(
+            ga_handle=0xC0025555,
+            item_id=100 + 2147483648,
+            real_id=100,
+            color="Red",
+            effects=[999999999, EMPTY, EMPTY],
+            curses=[EMPTY, EMPTY, EMPTY],
+            is_deep=False,
+            name="Irrelevant Relic",
+            tier="Delicate",
+        )
+        user = get_test_user(db)
+        profile = seed_profile_with_relics(
+            db, user.id, with_hash=True,
+            owned=default_owned_relics() + [irrelevant],
+        )
+        build = create_build(client, normal_user_token_headers)
+        self._run(
+            client, normal_user_token_headers, build["id"], str(profile.id)
+        )
+
+        rows = self._freshness(
+            client,
+            normal_user_token_headers,
+            str(profile.id),
+            staged_sells=[irrelevant.ga_handle],
+        )
+        assert rows[build["id"]] is True
+
+    def test_agrees_with_snapshot_query_on_irrelevant_churn(
+        self,
+        client: TestClient,
+        normal_user_token_headers: dict[str, str],
+        db: Session,
+    ) -> None:
+        """The relevant-subset gate must be honored in bulk too: gaining a
+        relic the build cannot use leaves it fresh in BOTH paths."""
+        user = get_test_user(db)
+        profile = seed_profile_with_relics(db, user.id, with_hash=True)
+        build = create_build(client, normal_user_token_headers)
+        self._run(
+            client, normal_user_token_headers, build["id"], str(profile.id)
+        )
+
+        TestSnapshotCache._add_relic_and_rehash(db, profile, effect=999999999)
+
+        rows = self._freshness(
+            client, normal_user_token_headers, str(profile.id)
+        )
+        snap = query_snapshot(
+            client, normal_user_token_headers, build["id"], str(profile.id)
+        )
+        assert snap.json() is not None
+        assert rows[build["id"]] is True
+
+    def test_other_users_builds_are_never_listed(
+        self,
+        client: TestClient,
+        normal_user_token_headers: dict[str, str],
+        superuser_token_headers: dict[str, str],
+        db: Session,
+    ) -> None:
+        user = get_test_user(db)
+        profile = seed_profile_with_relics(db, user.id, with_hash=True)
+        mine = create_build(client, normal_user_token_headers)
+        theirs = create_build(client, superuser_token_headers, name="Theirs")
+
+        rows = self._freshness(
+            client, normal_user_token_headers, str(profile.id)
+        )
+        assert mine["id"] in rows
+        assert theirs["id"] not in rows

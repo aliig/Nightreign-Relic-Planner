@@ -68,7 +68,9 @@ function BuildRow({
 }
 
 /**
- * Navbar indicator for the background save re-optimization (lib/optimizeJobs).
+ * Navbar indicator for a background re-optimization (lib/optimizeJobs) — either
+ * kind: the save upload's server-driven batch, or the builds page's "optimize
+ * the builds that are out of date" run. Only the wording differs.
  *
  * Mirrors PendingExportButton: a compact trigger that opens a Sheet. Renders
  * nothing when idle. Because the job lives in a module store, this stays live as
@@ -128,13 +130,19 @@ export function OptimizeTrackerButton() {
       <Sheet open={open} onOpenChange={setOpen}>
         <SheetContent className="w-full sm:max-w-md">
           <SheetHeader>
-            <SheetTitle>Save optimization</SheetTitle>
+            <SheetTitle>
+              {job.kind === "upload"
+                ? "Save optimization"
+                : "Re-optimizing builds"}
+            </SheetTitle>
             <SheetDescription>
               {active
-                ? "Re-optimizing the builds your new save affects. This keeps running while you use the app."
+                ? job.kind === "upload"
+                  ? "Re-optimizing the builds your new save affects. This keeps running while you use the app."
+                  : "Re-optimizing your builds against your current relics. This keeps running while you use the app."
                 : job.status === "error"
-                  ? "Something went wrong while optimizing your save."
-                  : "Done — your builds are up to date with the latest save."}
+                  ? "Something went wrong while optimizing."
+                  : "Done — your builds are up to date with your current relics."}
             </SheetDescription>
           </SheetHeader>
 

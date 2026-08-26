@@ -1,16 +1,25 @@
 /**
- * Background tracker for the post-upload save re-optimization.
+ * Background tracker for whole-library re-optimization.
  *
- * Uploading a save kicks off an SSE stream that re-optimizes every build the new
- * inventory affects — up to a couple of minutes. We don't want that tied to the
- * /upload component's lifetime: the user should be free to navigate away and watch
- * progress from the navbar while it runs.
+ * Two jobs land here, because they look identical to the user — a run of builds
+ * with per-build progress, watched from the navbar:
+ *
+ * - "upload": uploading a save streams a re-optimize of every build the new
+ *   inventory affects (server-driven, one SSE stream for the whole batch);
+ * - "rebuild": the builds page's Optimize button re-runs a chosen set against
+ *   the current staged inventory (client-driven, one stream per build).
+ *
+ * Neither should be tied to the lifetime of the component that started it: the
+ * user should be free to navigate away and watch progress from the navbar.
  *
  * So the whole stream lives HERE, in module scope (mirrors lib/pendingChanges.ts):
  * one in-flight job + a listener Set + useSyncExternalStore hooks. Because the fetch
  * loop is owned by the module, not a component, it keeps reading regardless of which
- * route is mounted. State is in-memory only (NOT sessionStorage, unlike
- * pendingChanges) — an in-flight SSE can't be resumed after a full reload, so
+ * route is mounted. There is at most ONE job at a time and the latest wins:
+ * `generation` supersedes an in-flight job of either kind.
+ *
+ * State is in-memory only (NOT sessionStorage, unlike pendingChanges) — an
+ * in-flight SSE can't be resumed after a full reload, so
  * persisting a half-done job would only mislead. Builds that already finished keep
  * their server-side snapshots regardless.
  */
@@ -18,6 +27,7 @@ import { useSyncExternalStore } from "react"
 import { toast } from "sonner"
 
 import type { BuildChange } from "@/client"
+import { runOptimizeStream } from "@/lib/optimizeStream"
 import { queryClient } from "@/lib/queryClient"
 
 export interface StreamUploadProgress {
@@ -59,9 +69,14 @@ export interface BuildJobInfo {
   change?: BuildChange
 }
 
+/** Which trigger produced this job — the tracker words itself differently. */
+export type OptimizeJobKind = "upload" | "rebuild"
+
 export interface OptimizeJob {
+  kind: OptimizeJobKind
   status: "parsing" | "optimizing" | "done" | "error"
-  fileName: string
+  /** Upload jobs only. */
+  fileName?: string
   progress: StreamUploadProgress
   /** Keyed by build_id (the backend tags every optimize_* SSE event with it). */
   builds: Record<string, BuildJobInfo>
@@ -247,6 +262,7 @@ let generation = 0
 export function startUpload(file: File): Promise<void> {
   const myGen = ++generation
   setJob({
+    kind: "upload",
     status: "parsing",
     fileName: file.name,
     progress: { phase: "parsing" },
@@ -323,6 +339,137 @@ export function dismissJob(): void {
 /** Non-reactive read (for tests / imperative call sites). */
 export function getJob(): OptimizeJob | null {
   return job
+}
+
+// --- bulk re-optimization ("Optimize all" / "N builds out of date") ---
+
+/** A build the bulk job should run, in the order the user sees them. */
+export interface RebuildTarget {
+  id: string
+  name: string
+}
+
+export interface OptimizeAllParams {
+  profileId: string
+  builds: RebuildTarget[]
+  /** The staged in-app diff, straight from `stagedFields(pending)`. */
+  staged: Record<string, unknown>
+}
+
+/**
+ * Re-optimize a set of builds against the CURRENT (staged-inclusive) inventory.
+ *
+ * This is the trigger the app was missing. Uploading a save re-optimizes
+ * everything it affects, and viewing one build re-runs that build — but relics
+ * bought in Relic Rites are a staged diff that touches every build at once,
+ * with nothing to run them. Until this ran, the builds page kept showing each
+ * build's pre-purchase verdict with no sign it was out of date.
+ *
+ * Builds run one at a time through the existing per-build /optimize/stream, so
+ * this reuses the endpoint that already understands the staged diff and already
+ * writes the snapshot + BuildChange. It gives up the cross-build task prefetch
+ * the upload path has; if that turns out to matter at large build counts, the
+ * fix is a bulk server-side stream behind this same function.
+ *
+ * Because each run writes its snapshot and the baseline only advances on
+ * review, an upload followed by a Relic Rites spree composes into ONE verdict
+ * per build — which is the whole point of running them.
+ */
+export function startOptimizeAll(params: OptimizeAllParams): Promise<void> {
+  const myGen = ++generation
+  const { profileId, builds, staged } = params
+
+  setJob({
+    kind: "rebuild",
+    status: "optimizing",
+    progress: { phase: "optimizing", buildTotal: builds.length },
+    builds: {},
+  })
+
+  const run = async () => {
+    let failed = 0
+    const changes: BuildChange[] = []
+
+    for (let i = 0; i < builds.length; i++) {
+      if (myGen !== generation) return // superseded (an upload, or a re-press)
+      const build = builds[i]
+
+      patchJob({
+        progress: {
+          phase: "optimizing",
+          buildIndex: i + 1,
+          buildTotal: builds.length,
+          buildName: build.name,
+          // Clear the previous build's vessel ticks, as optimize_start does.
+          vessel: undefined,
+          vesselTotal: undefined,
+          vesselName: undefined,
+        },
+      })
+      setBuild(build.id, { status: "optimizing", name: build.name })
+
+      try {
+        let change: BuildChange | null = null
+        await runOptimizeStream(
+          { build_id: build.id, profile_id: profileId, ...staged },
+          (p) => {
+            if (myGen !== generation) return
+            patchJob({
+              progress: {
+                ...(job?.progress ?? { phase: "optimizing" }),
+                vessel: p.vessel,
+                vesselTotal: p.total,
+                vesselName: p.name,
+              },
+            })
+          },
+          (c) => {
+            change = c
+          },
+        )
+        if (myGen !== generation) return
+        setBuild(build.id, {
+          status: "done",
+          name: build.name,
+          change: change ?? undefined,
+        })
+        if (change) changes.push(change)
+      } catch {
+        // One build failing must not abandon the rest of the batch — the
+        // others are independent runs and the user still wants them current.
+        if (myGen !== generation) return
+        failed += 1
+        setBuild(build.id, { status: "error", name: build.name })
+      }
+    }
+
+    if (myGen !== generation) return
+    patchJob({ status: "done", progress: { phase: "done" } })
+
+    queryClient.invalidateQueries({ queryKey: ["builds"] })
+    queryClient.invalidateQueries({ queryKey: ["snapshot"] })
+    queryClient.invalidateQueries({ queryKey: ["build-summaries"] })
+    queryClient.invalidateQueries({ queryKey: ["build-freshness"] })
+
+    const ran = builds.length - failed
+    if (failed > 0) {
+      toast.error("Some builds failed to optimize", {
+        description: `${ran} of ${builds.length} finished.`,
+      })
+    } else {
+      const meaningful = changes.filter(
+        (c) => c.status !== "unchanged" && c.status !== "new",
+      )
+      toast.success("Builds up to date", {
+        description:
+          meaningful.length > 0
+            ? `${ran} re-optimized — ${meaningful.length} changed.`
+            : `${ran} re-optimized — nothing moved.`,
+      })
+    }
+  }
+
+  return run()
 }
 
 // --- hooks -----------------------------------------------------------------

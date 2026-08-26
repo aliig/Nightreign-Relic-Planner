@@ -3,7 +3,7 @@
 import type { CancelablePromise } from './core/CancelablePromise';
 import { OpenAPI } from './core/OpenAPI';
 import { request as __request } from './core/request';
-import type { BuildsListBuildsData, BuildsListBuildsResponse, BuildsCreateBuildData, BuildsCreateBuildResponse, BuildsListFeaturedBuildsData, BuildsListFeaturedBuildsResponse, BuildsGetBuildData, BuildsGetBuildResponse, BuildsUpdateBuildData, BuildsUpdateBuildResponse, BuildsDeleteBuildData, BuildsDeleteBuildResponse, BuildsToggleFeaturedData, BuildsToggleFeaturedResponse, BuildsCloneBuildData, BuildsCloneBuildResponse, DebugExportDebugStateData, DebugExportDebugStateResponse, GameGetEffectsResponse, GameGetFamiliesResponse, GameGetCharactersResponse, GameGetVesselsData, GameGetVesselsResponse, GameGetStackingCategoriesResponse, GameGetColorsResponse, GameCumulativeEffectsData, GameCumulativeEffectsResponse, GameRollRelicData, GameRollRelicResponse, LoginLoginAccessTokenData, LoginLoginAccessTokenResponse, LoginTestTokenResponse, LoginRecoverPasswordData, LoginRecoverPasswordResponse, LoginResetPasswordData, LoginResetPasswordResponse, LoginRecoverPasswordHtmlContentData, LoginRecoverPasswordHtmlContentResponse, OauthLoginGoogleResponse, OauthGoogleCallbackData, OauthGoogleCallbackResponse, OptimizeRunOptimizeData, OptimizeRunOptimizeResponse, OptimizeRunOptimizeStreamData, OptimizeRunOptimizeStreamResponse, OptimizeOptimizeSlotAlternativeData, OptimizeOptimizeSlotAlternativeResponse, OptimizeQuerySnapshotData, OptimizeQuerySnapshotResponse, OptimizeListBuildSummariesResponse, OptimizeMarkChangeReviewedData, OptimizeMarkChangeReviewedResponse, OptimizeListLoadoutRanksData, OptimizeListLoadoutRanksResponse, PrivateCreateUserData, PrivateCreateUserResponse, SavesUploadSaveData, SavesUploadSaveResponse, SavesUploadSaveStreamData, SavesUploadSaveStreamResponse, SavesGetSaveStatusResponse, SavesListProfilesResponse, SavesGetProfileRelicsData, SavesGetProfileRelicsResponse, SavesGetProfileLoadoutsData, SavesGetProfileLoadoutsResponse, SavesExportSaveData, SavesExportSaveResponse, SavesExportAddRelicsData, SavesExportAddRelicsResponse, SavesRitesPlanData, SavesRitesPlanResponse, SavesRitesPlanStreamData, SavesRitesPlanStreamResponse, SavesExportLoadoutsData, SavesExportLoadoutsResponse, UsersReadUsersData, UsersReadUsersResponse, UsersCreateUserData, UsersCreateUserResponse, UsersReadUserMeResponse, UsersDeleteUserMeResponse, UsersUpdateUserMeData, UsersUpdateUserMeResponse, UsersUpdatePasswordMeData, UsersUpdatePasswordMeResponse, UsersRegisterUserData, UsersRegisterUserResponse, UsersReadUserByIdData, UsersReadUserByIdResponse, UsersUpdateUserData, UsersUpdateUserResponse, UsersDeleteUserData, UsersDeleteUserResponse, UtilsTestEmailData, UtilsTestEmailResponse, UtilsHealthCheckResponse } from './types.gen';
+import type { BuildsListBuildsData, BuildsListBuildsResponse, BuildsCreateBuildData, BuildsCreateBuildResponse, BuildsListFeaturedBuildsData, BuildsListFeaturedBuildsResponse, BuildsGetBuildData, BuildsGetBuildResponse, BuildsUpdateBuildData, BuildsUpdateBuildResponse, BuildsDeleteBuildData, BuildsDeleteBuildResponse, BuildsToggleFeaturedData, BuildsToggleFeaturedResponse, BuildsCloneBuildData, BuildsCloneBuildResponse, DebugExportDebugStateData, DebugExportDebugStateResponse, GameGetEffectsResponse, GameGetFamiliesResponse, GameGetCharactersResponse, GameGetVesselsData, GameGetVesselsResponse, GameGetStackingCategoriesResponse, GameGetColorsResponse, GameCumulativeEffectsData, GameCumulativeEffectsResponse, GameRollRelicData, GameRollRelicResponse, LoginLoginAccessTokenData, LoginLoginAccessTokenResponse, LoginTestTokenResponse, LoginRecoverPasswordData, LoginRecoverPasswordResponse, LoginResetPasswordData, LoginResetPasswordResponse, LoginRecoverPasswordHtmlContentData, LoginRecoverPasswordHtmlContentResponse, OauthLoginGoogleResponse, OauthGoogleCallbackData, OauthGoogleCallbackResponse, OptimizeRunOptimizeData, OptimizeRunOptimizeResponse, OptimizeRunOptimizeStreamData, OptimizeRunOptimizeStreamResponse, OptimizeOptimizeSlotAlternativeData, OptimizeOptimizeSlotAlternativeResponse, OptimizeQuerySnapshotData, OptimizeQuerySnapshotResponse, OptimizeListBuildFreshnessData, OptimizeListBuildFreshnessResponse, OptimizeListBuildSummariesResponse, OptimizeMarkChangeReviewedData, OptimizeMarkChangeReviewedResponse, OptimizeListLoadoutRanksData, OptimizeListLoadoutRanksResponse, PrivateCreateUserData, PrivateCreateUserResponse, SavesUploadSaveData, SavesUploadSaveResponse, SavesUploadSaveStreamData, SavesUploadSaveStreamResponse, SavesGetSaveStatusResponse, SavesListProfilesResponse, SavesGetProfileRelicsData, SavesGetProfileRelicsResponse, SavesGetProfileLoadoutsData, SavesGetProfileLoadoutsResponse, SavesExportSaveData, SavesExportSaveResponse, SavesExportAddRelicsData, SavesExportAddRelicsResponse, SavesRitesPlanData, SavesRitesPlanResponse, SavesRitesPlanStreamData, SavesRitesPlanStreamResponse, SavesExportLoadoutsData, SavesExportLoadoutsResponse, UsersReadUsersData, UsersReadUsersResponse, UsersCreateUserData, UsersCreateUserResponse, UsersReadUserMeResponse, UsersDeleteUserMeResponse, UsersUpdateUserMeData, UsersUpdateUserMeResponse, UsersUpdatePasswordMeData, UsersUpdatePasswordMeResponse, UsersRegisterUserData, UsersRegisterUserResponse, UsersReadUserByIdData, UsersReadUserByIdResponse, UsersUpdateUserData, UsersUpdateUserResponse, UsersDeleteUserData, UsersDeleteUserResponse, UtilsTestEmailData, UtilsTestEmailResponse, UtilsHealthCheckResponse } from './types.gen';
 
 export class BuildsService {
     /**
@@ -575,6 +575,35 @@ export class OptimizeService {
         return __request(OpenAPI, {
             method: 'POST',
             url: '/api/v1/optimize/snapshot/query',
+            body: data.requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+    
+    /**
+     * List Build Freshness
+     * Report, per build, whether its cached optimization still stands.
+     *
+     * This is the read behind the builds page's "N builds out of date" count and
+     * the out-of-date marking on stale change rows: it answers the same question
+     * ``/optimize/snapshot/query`` answers for one build, for every build at
+     * once, WITHOUT running the optimizer — only hash comparisons.
+     *
+     * The cost is one relic load plus one staged-diff application for the whole
+     * request; per build it is a few string compares, and a relevant-subset hash
+     * only for builds whose whole-inventory hash actually moved.
+     * @param data The data for the request.
+     * @param data.requestBody
+     * @returns BuildFreshness Successful Response
+     * @throws ApiError
+     */
+    public static listBuildFreshness(data: OptimizeListBuildFreshnessData): CancelablePromise<OptimizeListBuildFreshnessResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/api/v1/optimize/freshness',
             body: data.requestBody,
             mediaType: 'application/json',
             errors: {

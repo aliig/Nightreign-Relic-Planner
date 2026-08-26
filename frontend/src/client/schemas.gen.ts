@@ -590,6 +590,25 @@ export const BuildDefinitionSchema = {
     description: 'User-defined build configuration. Stable API schema.'
 } as const;
 
+export const BuildFreshnessSchema = {
+    properties: {
+        build_id: {
+            type: 'string',
+            title: 'Build Id'
+        },
+        fresh: {
+            type: 'boolean',
+            title: 'Fresh'
+        }
+    },
+    type: 'object',
+    required: ['build_id', 'fresh'],
+    title: 'BuildFreshness',
+    description: `One build's cache verdict.  \`\`fresh=False\`\` means "re-optimizing this
+build would change what the app shows you" — including a build that has
+never been optimized at all (no snapshot to be stale).`
+} as const;
+
 export const BuildPublicSchema = {
     properties: {
         id: {
@@ -1328,6 +1347,38 @@ export const FeaturedBuildsPublicSchema = {
     type: 'object',
     required: ['data', 'count'],
     title: 'FeaturedBuildsPublic'
+} as const;
+
+export const FreshnessQuerySchema = {
+    properties: {
+        profile_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Profile Id'
+        },
+        staged_sells: {
+            items: {
+                type: 'integer'
+            },
+            type: 'array',
+            title: 'Staged Sells'
+        },
+        staged_mints: {
+            items: {
+                '$ref': '#/components/schemas/StagedMint'
+            },
+            type: 'array',
+            title: 'Staged Mints'
+        }
+    },
+    type: 'object',
+    required: ['profile_id'],
+    title: 'FreshnessQuery',
+    description: `Which of a user's builds still have up-to-date cached results.
+
+Same staged semantics as :class:\`SnapshotQuery\`, evaluated once for the
+whole request: the effective inventory is built and hashed a single time
+and every build is judged against it.`
 } as const;
 
 export const GeneratedRelicPublicSchema = {

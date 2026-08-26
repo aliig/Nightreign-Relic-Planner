@@ -1,7 +1,8 @@
 import { useSuspenseQuery } from "@tanstack/react-query"
-import { createFileRoute, Link } from "@tanstack/react-router"
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router"
 import { Check, Coins, Package, Plus, Sparkles, Trash2, X } from "lucide-react"
 import { type ReactNode, Suspense, useMemo, useRef, useState } from "react"
+import { toast } from "sonner"
 
 import { BuildsService, GameService, SavesService } from "@/client"
 import { EmptyState } from "@/components/Common/EmptyState"
@@ -573,7 +574,8 @@ function RitesTool({
   effectMap: Map<number, string>
   effectOptions: EffectOption[]
 }) {
-  const { showErrorToast, showSuccessToast } = useCustomToast()
+  const { showErrorToast } = useCustomToast()
+  const navigate = useNavigate()
   // Staged diff for this slot. Murk is emulated LIVE against it: the wallet
   // SHOWN is the save's Murk plus the staged adjustment (the committed rites
   // batch + staged-sell refunds). A new plan run, however, REPLACES the batch
@@ -744,9 +746,25 @@ function RitesTool({
       // sells it back. A re-run replaces the batch — same save state, same
       // roll stream — so exploring parameters never stacks losses.
       commitSelection(result, new Set(result.keepers.map((_, i) => i)))
-      showSuccessToast(
-        `Batch committed: bought ${result.generated} relic(s), kept ${result.kept} — see the Changes panel.`,
-      )
+      // The keepers are owned now, so every build is being scored against an
+      // inventory it has not seen. Say so and offer the way to fix it rather
+      // than re-optimizing the whole library behind the user's back — a
+      // parameter sweep would fire it on every re-roll.
+      toast.success("Success!", {
+        description:
+          `Batch committed: bought ${result.generated} relic(s), kept ` +
+          `${result.kept} — see the Changes panel.` +
+          (result.kept > 0
+            ? " Your builds haven't been optimized with them yet."
+            : ""),
+        action:
+          result.kept > 0
+            ? {
+                label: "Optimize builds",
+                onClick: () => navigate({ to: "/builds" }),
+              }
+            : undefined,
+      })
     } catch (err) {
       if ((err as Error)?.name !== "AbortError")
         showErrorToast(

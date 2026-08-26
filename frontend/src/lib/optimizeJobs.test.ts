@@ -17,7 +17,7 @@ vi.mock("sonner", () => ({
 
 import { toast } from "sonner"
 import { queryClient } from "@/lib/queryClient"
-import { getJob, startUpload } from "./optimizeJobs"
+import { getJob, startOptimizeAll, startUpload } from "./optimizeJobs"
 
 // ── helpers ────────────────────────────────────────────────────────────────
 
@@ -291,6 +291,188 @@ describe("startUpload — failures and interim state", () => {
     await flush() // let part1 process; the reader is now parked on the gate
     expect(getJob()?.status).toBe("optimizing")
     expect(getJob()?.builds.b1.status).toBe("optimizing")
+
+    release()
+    await p
+    expect(getJob()?.builds.b1.status).toBe("done")
+  })
+})
+
+// ── startOptimizeAll ───────────────────────────────────────────────────────
+
+/**
+ * A fetch stub that serves one canned /optimize/stream response per call, in
+ * order — the bulk job runs the builds sequentially, one request each.
+ */
+function fetchPerBuild(bodies: string[]) {
+  let call = 0
+  return vi.fn(async () => {
+    const body = bodies[call++] ?? ""
+    let sent = false
+    return {
+      ok: true,
+      body: {
+        getReader: () => ({
+          read: async () => {
+            if (sent) return { done: true, value: undefined }
+            sent = true
+            return { done: false, value: enc(body) }
+          },
+        }),
+      },
+    }
+  })
+}
+
+const resultEvent = (buildId: string, status: string) =>
+  sse({
+    type: "result",
+    data: [],
+    change: {
+      build_id: buildId,
+      build_name: buildId,
+      slot_index: 0,
+      status,
+      reliable: true,
+    },
+  })
+
+const targets = [
+  { id: "b1", name: "Fire Build" },
+  { id: "b2", name: "Ice Build" },
+]
+
+describe("startOptimizeAll", () => {
+  it("runs every target build and records each change", async () => {
+    vi.stubGlobal(
+      "fetch",
+      fetchPerBuild([
+        sse({ type: "progress", vessel: 1, total: 3, name: "Vessel A" }) +
+          resultEvent("b1", "improved"),
+        resultEvent("b2", "unchanged"),
+      ]),
+    )
+
+    await startOptimizeAll({
+      profileId: "p1",
+      builds: targets,
+      staged: { staged_sells: [1], staged_mints: [] },
+    })
+
+    const j = getJob()
+    expect(j?.kind).toBe("rebuild")
+    expect(j?.status).toBe("done")
+    expect(j?.builds.b1).toMatchObject({ status: "done", name: "Fire Build" })
+    expect(j?.builds.b1.change?.status).toBe("improved")
+    expect(j?.builds.b2).toMatchObject({ status: "done", name: "Ice Build" })
+  })
+
+  it("sends the staged diff with every build, so purchases are scored in", async () => {
+    const f = fetchPerBuild([resultEvent("b1", "improved")])
+    vi.stubGlobal("fetch", f)
+
+    const staged = { staged_sells: [7], staged_mints: [{ handle: -1 }] }
+    await startOptimizeAll({
+      profileId: "p1",
+      builds: [targets[0]],
+      staged,
+    })
+
+    const body = JSON.parse((f.mock.calls[0] as any[])[1].body)
+    expect(body).toMatchObject({
+      build_id: "b1",
+      profile_id: "p1",
+      staged_sells: [7],
+      staged_mints: [{ handle: -1 }],
+    })
+  })
+
+  it("keeps going when one build fails, and reports the failure", async () => {
+    // Second response has no `result` event: the reader throws "stream ended".
+    vi.stubGlobal("fetch", fetchPerBuild([resultEvent("b1", "improved"), ""]))
+
+    await startOptimizeAll({
+      profileId: "p1",
+      builds: [targets[0], targets[1]],
+      staged: {},
+    })
+
+    const j = getJob()
+    expect(j?.status).toBe("done")
+    expect(j?.builds.b1.status).toBe("done")
+    expect(j?.builds.b2.status).toBe("error")
+    expect(toast.error).toHaveBeenCalled()
+  })
+
+  it("refreshes the builds, snapshot and freshness reads on completion", async () => {
+    vi.stubGlobal("fetch", fetchPerBuild([resultEvent("b1", "improved")]))
+
+    await startOptimizeAll({
+      profileId: "p1",
+      builds: [targets[0]],
+      staged: {},
+    })
+
+    const keys = (queryClient.invalidateQueries as any).mock.calls.map(
+      (c: any[]) => c[0].queryKey[0],
+    )
+    // Without the freshness invalidation the banner would keep claiming the
+    // builds are out of date after they were just brought current.
+    expect(keys).toContain("build-freshness")
+    expect(keys).toContain("build-summaries")
+    expect(keys).toContain("snapshot")
+    expect(toast.success).toHaveBeenCalled()
+  })
+
+  it("reports live progress while a build streams", async () => {
+    // Hold the stream open so the job is genuinely mid-run when we look:
+    // completion resets progress to {phase:"done"}, which would race a plain
+    // microtask flush.
+    let release!: () => void
+    const held = new Promise<void>((r) => {
+      release = r
+    })
+    let sent = false
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        body: {
+          getReader: () => ({
+            read: async () => {
+              if (sent) return { done: true, value: undefined }
+              await held
+              sent = true
+              return {
+                done: false,
+                value: enc(
+                  sse({
+                    type: "progress",
+                    vessel: 2,
+                    total: 5,
+                    name: "Vessel B",
+                  }) + resultEvent("b1", "improved"),
+                ),
+              }
+            },
+          }),
+        },
+      })),
+    )
+
+    const p = startOptimizeAll({
+      profileId: "p1",
+      builds: [targets[0]],
+      staged: {},
+    })
+    await flush()
+
+    const mid = getJob()
+    expect(mid?.status).toBe("optimizing")
+    expect(mid?.progress.buildTotal).toBe(1)
+    expect(mid?.progress.buildIndex).toBe(1)
+    expect(mid?.progress.buildName).toBe("Fire Build")
+    expect(mid?.builds.b1.status).toBe("optimizing")
 
     release()
     await p

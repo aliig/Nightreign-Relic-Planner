@@ -73,12 +73,6 @@ export { relicKey }
 
 export type SlotAssignment = VesselResult["assignments"][number]
 
-export interface OptimizeProgress {
-  vessel: number
-  total: number
-  name: string
-}
-
 // --- Helpers ---
 
 /** Suffix explaining why a listed effect scored nothing, if it did. */
@@ -140,64 +134,10 @@ export function enteredKeys(change?: BuildChange | null): Set<string> {
 
 // --- SSE streaming ---
 
-export async function runOptimizeStream(
-  requestBody: Record<string, unknown>,
-  onProgress: (p: OptimizeProgress) => void,
-  onChange?: (change: BuildChange | null) => void,
-): Promise<VesselResult[]> {
-  const token = localStorage.getItem("access_token")
-  const headers: HeadersInit = { "Content-Type": "application/json" }
-  if (token)
-    (headers as Record<string, string>).Authorization = `Bearer ${token}`
-
-  const response = await fetch("/api/v1/optimize/stream", {
-    method: "POST",
-    headers,
-    body: JSON.stringify(requestBody),
-  })
-
-  if (!response.ok) {
-    const err = await response
-      .json()
-      .catch(() => ({ detail: "Optimization failed" }))
-    throw new Error(err.detail ?? "Optimization failed")
-  }
-
-  const reader = response.body!.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ""
-
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
-
-    // SSE events are separated by double newlines
-    const parts = buffer.split("\n\n")
-    buffer = parts.pop() ?? ""
-
-    for (const part of parts) {
-      const dataLine = part.split("\n").find((l) => l.startsWith("data: "))
-      if (!dataLine) continue
-      const payload = JSON.parse(dataLine.slice(6))
-
-      if (payload.type === "progress") {
-        onProgress({
-          vessel: payload.vessel,
-          total: payload.total,
-          name: payload.name,
-        })
-      } else if (payload.type === "result") {
-        onChange?.((payload.change ?? null) as BuildChange | null)
-        return payload.data as VesselResult[]
-      } else if (payload.type === "error") {
-        throw new Error(payload.detail ?? "Optimization failed")
-      }
-    }
-  }
-
-  throw new Error("Stream ended without a result")
-}
+// Moved to lib/optimizeStream.ts so the background bulk job can drive the same
+// reader without importing this component module; re-exported here because the
+// optimize page imports both it and the results table from this file.
+export { type OptimizeProgress, runOptimizeStream } from "@/lib/optimizeStream"
 
 // --- Single-slot re-optimization ("strike a relic") ---
 

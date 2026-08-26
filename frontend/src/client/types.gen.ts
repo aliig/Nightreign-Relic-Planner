@@ -137,6 +137,16 @@ export type BuildDefinition = {
     };
 };
 
+/**
+ * One build's cache verdict.  ``fresh=False`` means "re-optimizing this
+ * build would change what the app shows you" — including a build that has
+ * never been optimized at all (no snapshot to be stale).
+ */
+export type BuildFreshness = {
+    build_id: string;
+    fresh: boolean;
+};
+
 export type BuildPublic = {
     id: string;
     owner_id: string;
@@ -295,6 +305,19 @@ export type FeaturedBuildPublic = {
 export type FeaturedBuildsPublic = {
     data: Array<FeaturedBuildPublic>;
     count: number;
+};
+
+/**
+ * Which of a user's builds still have up-to-date cached results.
+ *
+ * Same staged semantics as :class:`SnapshotQuery`, evaluated once for the
+ * whole request: the effective inventory is built and hashed a single time
+ * and every build is judged against it.
+ */
+export type FreshnessQuery = {
+    profile_id: string;
+    staged_sells?: Array<(number)>;
+    staged_mints?: Array<StagedMint>;
 };
 
 /**
@@ -960,6 +983,12 @@ export type OptimizeQuerySnapshotData = {
 };
 
 export type OptimizeQuerySnapshotResponse = ((SnapshotResponse | null));
+
+export type OptimizeListBuildFreshnessData = {
+    requestBody: FreshnessQuery;
+};
+
+export type OptimizeListBuildFreshnessResponse = (Array<BuildFreshness>);
 
 export type OptimizeListBuildSummariesResponse = (Array<BuildSnapshotSummary>);
 

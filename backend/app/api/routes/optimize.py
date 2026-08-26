@@ -26,6 +26,7 @@ nothing and return change=null.
 """
 import json
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -602,6 +603,117 @@ def optimize_slot_alternative(
     return results[0]
 
 
+class _EffectiveInventory:
+    """The effective inventory (profile relics + staged diff) and its hashes,
+    each computed at most once.
+
+    ``query_snapshot`` judges one build and may never need the inventory at all
+    (the clean fast path below); ``list_build_freshness`` judges every build the
+    user owns against the SAME inventory, and must not re-apply the staged diff
+    or re-hash per build.  One lazy holder serves both.
+    """
+
+    def __init__(self, load: Callable[[], list[OwnedRelic]]) -> None:
+        self._load = load
+        self._owned: list[OwnedRelic] | None = None
+        self._signature: str | None = None
+        self._pairs: list[tuple[Any, int]] | None = None
+
+    @property
+    def owned(self) -> list[OwnedRelic]:
+        if self._owned is None:
+            self._owned = self._load()
+        return self._owned
+
+    @property
+    def signature(self) -> str:
+        if self._signature is None:
+            self._signature = relics_signature(self.owned)
+        return self._signature
+
+    @property
+    def pairs(self) -> list[tuple[Any, int]]:
+        """(fingerprint, ga_handle) per relic — the relevant-subset hash input."""
+        if self._pairs is None:
+            self._pairs = [(fingerprint_owned(r), r.ga_handle) for r in self.owned]
+        return self._pairs
+
+
+def _snapshot_is_fresh(
+    snap: OptimizationSnapshot | None,
+    db_build: Build,
+    profile: Profile,
+    staged: bool,
+    inventory: _EffectiveInventory,
+    ds: Any,
+) -> bool:
+    """Whether a stored snapshot still describes the live inputs.
+
+    THE freshness rule — every caller that decides "can these cached results
+    stand?" goes through here, so the served-snapshot path and the
+    out-of-date-build count can never disagree about what stale means.
+
+    Missing hashes count as stale: None == None must never read as fresh
+    (legacy rows predating hash caching, or builds/profiles written by a path
+    that skipped hash computation).  Version checks implement the model's
+    documented contract: a solver or game-data change invalidates stored
+    results even when the inputs' hashes still match.
+    """
+    if snap is None:
+        return False
+    # top_layouts is the compact diff baseline and cannot reconstruct
+    # VesselResults, so a legacy row without full_results has nothing to serve
+    # and nothing to keep — it is stale by definition (one re-optimize refills).
+    if not snap.full_results:
+        return False
+    if (
+        snap.relics_hash is None
+        or snap.build_hash is None
+        or snap.build_hash != db_build.build_hash
+        or snap.optimizer_version != OPTIMIZER_VERSION
+        or snap.game_data_version != game_data_version()
+    ):
+        return False
+
+    # Fast path only when clean AND the whole-inventory hash matches; any
+    # staged diff forces the effective-inventory compare (Profile.relics_hash
+    # is frozen at upload and can never reflect staged edits).
+    if not staged and snap.relics_hash == profile.relics_hash:
+        return True
+    if snap.relics_hash == inventory.signature:
+        return True
+
+    # Whole-inventory hash moved, but the optimum depends only on the
+    # build-RELEVANT subset (see relevant_relics_signature).  Stay fresh when
+    # that subset is unchanged; legacy rows without the stored hash are stale
+    # (one re-optimize refills them).
+    if snap.relevant_relics_hash is None:
+        return False
+    return snap.relevant_relics_hash == relevant_relics_signature(
+        build_def_from_db(db_build), inventory.pairs, ds
+    )
+
+
+def _effective_inventory(
+    session: Session,
+    profile: Profile,
+    staged_sells: list[int],
+    staged_mints: list[StagedMint],
+    ds: Any,
+) -> _EffectiveInventory:
+    """Lazy effective inventory for a profile under the client's staged diff."""
+    def _load() -> list[OwnedRelic]:
+        db_relics = session.exec(
+            select(Relic).where(Relic.profile_id == profile.id)
+        ).all()
+        return apply_staged_diff(
+            _owned_from_db(list(db_relics)),
+            staged_sells, staged_mints, ds, get_items_json(),
+        )
+
+    return _EffectiveInventory(_load)
+
+
 class SnapshotResponse(BaseModel):
     """Cached optimization results from a fresh snapshot."""
     results: list[VesselResult]
@@ -655,51 +767,13 @@ def query_snapshot(
     if snap is None:
         return None
 
-    # Treat missing hashes as stale — None == None must never count as fresh
-    # (legacy rows predating hash caching, or builds/profiles written by a
-    # path that skipped hash computation).  Version checks implement the
-    # model's documented contract: a solver or game-data change invalidates
-    # stored results even when the inputs' hashes still match.
-    if (
-        snap.relics_hash is None
-        or snap.build_hash is None
-        or snap.build_hash != db_build.build_hash
-        or snap.optimizer_version != OPTIMIZER_VERSION
-        or snap.game_data_version != game_data_version()
-    ):
-        return None
-
     staged = bool(req.staged_sells or req.staged_mints)
-    if staged or snap.relics_hash != profile.relics_hash:
-        # Fast path only when clean AND the whole-inventory hash matches; any
-        # staged diff forces the effective-inventory compare (Profile.relics_hash
-        # is frozen at upload and can never reflect staged edits).
-        db_relics = session.exec(
-            select(Relic).where(Relic.profile_id == profile.id)
-        ).all()
-        effective = apply_staged_diff(
-            _owned_from_db(list(db_relics)),
-            req.staged_sells, req.staged_mints, ds, get_items_json(),
-        )
-        if snap.relics_hash != relics_signature(effective):
-            # Whole-inventory hash moved, but the optimum depends only on the
-            # build-RELEVANT subset (see relevant_relics_signature).  Serve the
-            # snapshot when that subset is unchanged; legacy rows without the
-            # stored hash stay stale (one re-optimize refills them).
-            if snap.relevant_relics_hash is None:
-                return None
-            pairs = [(fingerprint_owned(r), r.ga_handle) for r in effective]
-            live_relevant = relevant_relics_signature(
-                build_def_from_db(db_build), pairs, ds
-            )
-            if snap.relevant_relics_hash != live_relevant:
-                return None
-
-    # Snapshot is fresh — serve the stored full results.  top_layouts is the
-    # compact diff baseline and cannot reconstruct VesselResults; legacy rows
-    # without full_results are treated as stale (one re-optimize refills).
-    if not snap.full_results:
+    inventory = _effective_inventory(
+        session, profile, req.staged_sells, req.staged_mints, ds)
+    if not _snapshot_is_fresh(snap, db_build, profile, staged, inventory, ds):
         return None
+
+    # Snapshot is fresh — serve the stored full results.
     results = [VesselResult(**layout) for layout in snap.full_results]
     _attach_cumulative(results, ds)
     last_change = BuildChange(**snap.last_change) if snap.last_change else None
@@ -709,6 +783,73 @@ def query_snapshot(
         last_change=last_change,
         computed_at=snap.computed_at.isoformat() if snap.computed_at else None,
     )
+
+
+class FreshnessQuery(BaseModel):
+    """Which of a user's builds still have up-to-date cached results.
+
+    Same staged semantics as :class:`SnapshotQuery`, evaluated once for the
+    whole request: the effective inventory is built and hashed a single time
+    and every build is judged against it.
+    """
+    profile_id: uuid.UUID
+    staged_sells: list[int] = Field(default_factory=list)
+    staged_mints: list[StagedMint] = Field(default_factory=list)
+
+
+class BuildFreshness(BaseModel):
+    """One build's cache verdict.  ``fresh=False`` means "re-optimizing this
+    build would change what the app shows you" — including a build that has
+    never been optimized at all (no snapshot to be stale)."""
+    build_id: str
+    fresh: bool
+
+
+@router.post("/freshness", response_model=list[BuildFreshness])
+def list_build_freshness(
+    req: FreshnessQuery,
+    current_user: CurrentUser,
+    session: SessionDep,
+    ds: GameDataDep,
+) -> list[BuildFreshness]:
+    """Report, per build, whether its cached optimization still stands.
+
+    This is the read behind the builds page's "N builds out of date" count and
+    the out-of-date marking on stale change rows: it answers the same question
+    ``/optimize/snapshot/query`` answers for one build, for every build at
+    once, WITHOUT running the optimizer — only hash comparisons.
+
+    The cost is one relic load plus one staged-diff application for the whole
+    request; per build it is a few string compares, and a relevant-subset hash
+    only for builds whose whole-inventory hash actually moved.
+    """
+    profile = session.get(Profile, req.profile_id)
+    if not profile or profile.owner_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Profile not found")
+
+    builds = session.exec(
+        select(Build).where(Build.owner_id == current_user.id)
+    ).all()
+    snaps = session.exec(
+        select(OptimizationSnapshot).where(
+            OptimizationSnapshot.owner_id == current_user.id,
+            OptimizationSnapshot.slot_index == profile.slot_index,
+        )
+    ).all()
+    snap_by_build = {s.build_id: s for s in snaps}
+
+    staged = bool(req.staged_sells or req.staged_mints)
+    inventory = _effective_inventory(
+        session, profile, req.staged_sells, req.staged_mints, ds)
+
+    return [
+        BuildFreshness(
+            build_id=str(b.id),
+            fresh=_snapshot_is_fresh(
+                snap_by_build.get(b.id), b, profile, staged, inventory, ds),
+        )
+        for b in builds
+    ]
 
 
 class BuildSnapshotSummary(BaseModel):

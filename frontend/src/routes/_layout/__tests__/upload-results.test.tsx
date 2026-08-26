@@ -101,6 +101,7 @@ const RESULT: StreamUploadResult = {
 
 function doneJob(): OptimizeJob {
   return {
+    kind: "upload",
     status: "done",
     fileName: "NR0000.sl2",
     progress: { phase: "done" },
