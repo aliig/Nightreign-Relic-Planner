@@ -22,12 +22,22 @@ columns where the cache-hit query needs them.
 """
 from typing import Any
 
-from nrplanner.models import ChangeCause
+from nrplanner.models import BuildChange, ChangeCause
 
 # Causes worth telling the user about.  A build edit or a game-data bump is the
 # user's own action (or ours) rather than news about their save, so a run caused
 # only by those re-baselines silently — exactly as before.
 NARRATABLE: frozenset[str] = frozenset({"relics", "staged"})
+
+# Causes that change the RULES the score is computed under, making the baseline
+# score and this run's score two measurements against different yardsticks.
+# "game_data" covers both an optimizer-version bump and a game-data bump: either
+# one can move a build's optimum on an unchanged inventory (OPTIMIZER_VERSION 4
+# made the Required row a hard constraint, which can only *lower* the optimum —
+# 11 of 38 Required builds dropped, and every one was narrated as "your save
+# made this build weaker").  The layout diff survives such a crossing intact;
+# only the score comparison does not.
+SCORE_INVALIDATING: frozenset[str] = frozenset({"game_data"})
 
 
 def snapshot_inputs(
@@ -107,6 +117,33 @@ def causes_since(
     ):
         out.append("game_data")
     return out
+
+
+def scores_comparable(causes: list[str]) -> bool:
+    """Whether a score delta across these causes means anything.
+
+    False once the scoring rules themselves moved: the delta is then exact but
+    incomparable, which is a different thing from ``BuildChange.reliable``
+    (delta may be search noise).  Callers must not render it as a percentage.
+    """
+    return not any(c in SCORE_INVALIDATING for c in causes)
+
+
+def apply_causes(
+    change: BuildChange, baseline: dict[str, Any] | None, inputs: dict[str, Any]
+) -> BuildChange:
+    """Fill in everything about a change that depends on WHY it happened.
+
+    ``diff_results`` produces the change from layouts alone — it lives in
+    nrplanner and has no notion of an input signature, so it cannot know that a
+    version moved.  That knowledge lives here, in the baseline blob.  The two
+    call sites (POST /optimize and the save-upload sweep) share this function so
+    the three derived fields cannot drift apart between them.
+    """
+    change.causes = causes_since(baseline, inputs)
+    change.cause = legacy_cause(change.causes)
+    change.comparable = scores_comparable(change.causes)
+    return change
 
 
 def is_narratable(causes: list[str]) -> bool:

@@ -69,10 +69,9 @@ from app.core.config import settings
 from app.core.db import engine
 from app.core.game_data import game_data_version, get_items_json
 from app.core.snapshot_baseline import (
+    apply_causes,
     baseline_layouts,
-    causes_since,
     is_narratable,
-    legacy_cause,
     make_baseline,
     snapshot_inputs,
 )
@@ -355,8 +354,7 @@ def _apply_snapshot(
     change.build_id = str(ctx.build_id)
     change.build_name = ctx.build_name
     change.slot_index = ctx.slot_index
-    change.causes = causes_since(baseline, inputs)
-    change.cause = legacy_cause(change.causes)
+    apply_causes(change, baseline, inputs)
     # Name the relics that are purchases-in-waiting rather than save contents.
     mark_staged_refs(
         change,

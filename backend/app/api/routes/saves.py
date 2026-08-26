@@ -95,9 +95,8 @@ from app.core.game_data import (
 )
 from app.core.optimizer_pool import prefetch_depth
 from app.core.snapshot_baseline import (
+    apply_causes,
     baseline_layouts,
-    causes_since,
-    legacy_cause,
     make_baseline,
     snapshot_inputs,
 )
@@ -997,8 +996,7 @@ def _apply_snapshot_for_stream(
     change.build_id = str(build.id)
     change.build_name = build.name
     change.slot_index = slot_index
-    change.causes = causes_since(baseline, inputs)
-    change.cause = legacy_cause(change.causes)
+    apply_causes(change, baseline, inputs)
 
     top_layouts = serialize_top_layouts(results)
     # See optimize.py: result identities in display order for the "saved as

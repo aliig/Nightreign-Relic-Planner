@@ -95,6 +95,7 @@ export type BuildChange = {
     causes?: Array<('relics' | 'staged' | 'build_edit' | 'game_data')>;
     cause?: ('relics' | 'build_edit' | 'game_data' | 'mixed' | 'staged' | null);
     reliable?: boolean;
+    comparable?: boolean;
 };
 
 export type status = 'improved' | 'degraded' | 'reordered' | 'unchanged' | 'new' | 'broken_pin' | 'potentially_affected';

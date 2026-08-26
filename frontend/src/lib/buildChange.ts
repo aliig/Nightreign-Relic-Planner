@@ -61,7 +61,9 @@ const TONE_BOX: Record<ChangeTone, string> = {
  * Relative score change vs the last save, as a percent string ("23%").
  *
  * The percent is a fair within-build comparison: the build's config and weights
- * are unchanged across saves, so only the inventory moved. Returns null when
+ * are unchanged across saves, so only the inventory moved. That holds only while
+ * the scoring rules themselves hold still — see `change.comparable`, which the
+ * caller must check before asking for a percent at all. Returns null when
  * there's no usable baseline (`best_before` missing or <= 0) or the change rounds
  * to 0% — callers fall back to a non-numeric verdict in those cases.
  */
@@ -117,6 +119,11 @@ function splitLeft(refs: RelicRef[] | undefined): {
  * Returns null for changes not worth surfacing (unchanged / first-ever optimize).
  * Callers apply their own policy on WHY the change happened — see
  * `isChangeNews`, which every narrating surface should gate on.
+ *
+ * A change the backend marked `comparable: false` keeps its relic groups but
+ * loses every score claim (percent, direction, and the raw-points tooltip): the
+ * two scores came from different optimizer/game-data versions and are not two
+ * measurements of the same thing.
  */
 export function describeBuildChange(
   change?: BuildChange | null,
@@ -127,8 +134,13 @@ export function describeBuildChange(
 
   const before = change.best_before ?? null
   const after = change.best_after ?? null
+  // Scores from two different rule sets are not two measurements of the same
+  // thing, so neither the headline percent NOR the raw-points hover may quote
+  // them against each other. The layout diff below is unaffected: those relics
+  // really did move.
+  const comparable = change.comparable !== false
   const rawScore =
-    before != null && after != null
+    comparable && before != null && after != null
       ? { before, after, delta: change.delta ?? after - before }
       : undefined
 
@@ -139,7 +151,24 @@ export function describeBuildChange(
   let note: string | undefined
   const groups: ChangeRelicGroup[] = []
 
-  if (status === "improved") {
+  if (
+    !comparable &&
+    (status === "improved" || status === "degraded" || status === "reordered")
+  ) {
+    // A cross-version comparison. All three of these statuses assert something
+    // about strength — "stronger", "weaker", and "same strength" alike — and an
+    // optimizer or game-data bump can move a build's optimum on an inventory
+    // that never changed. Report the movement, which is real, and make no claim
+    // about the direction, which is not measurable from here.
+    tone = "neutral"
+    icon = ArrowLeftRight
+    headline = "best setup changed"
+    addGroup(groups, "gone", "No longer in your save", gone)
+    addGroup(groups, "benched", "No longer used", benched)
+    addGroup(groups, "entered", "Now uses", change.entered)
+    note =
+      "scoring rules changed since your last save — the old and new scores aren't comparable"
+  } else if (status === "improved") {
     tone = "up"
     icon = TrendingUp
     const pct = percentLabel(before, after)

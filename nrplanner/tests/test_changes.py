@@ -263,6 +263,16 @@ class TestDiffResults:
         assert change.status == "improved"
         assert change.reliable is False
 
+    def test_stays_version_blind(self):
+        """``diff_results`` sees layouts, never an input signature, so it can
+        never decide the two scores share a rule set — it says "comparable" and
+        the backend (app.core.snapshot_baseline.apply_causes) overrides that
+        when the baseline's optimizer/game-data version differs.  Keeping the
+        knowledge in one place is why this function takes no version."""
+        old = serialize_top_layouts([_vessel([_relic(1, [10])], 50)])
+        change = diff_results(old, [_vessel([_relic(2, [10, 20])], 70)])
+        assert change.comparable is True
+
     def test_left_refs_carry_display_metadata(self):
         gone = _relic(1, [10], name="Stalwart Horn", color="Blue")
         gone = gone.model_copy(update={"tier": "Grand", "is_deep": True})

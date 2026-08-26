@@ -424,6 +424,11 @@ export const BuildChangeSchema = {
             type: 'boolean',
             title: 'Reliable',
             default: true
+        },
+        comparable: {
+            type: 'boolean',
+            title: 'Comparable',
+            default: true
         }
     },
     type: 'object',

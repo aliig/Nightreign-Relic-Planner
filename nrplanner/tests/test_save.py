@@ -21,21 +21,28 @@ from nrplanner import SourceDataHandler, decrypt_sl2, parse_relics
 from nrplanner.constants import ITEM_TYPE_RELIC
 from nrplanner.models import RelicInventory
 from nrplanner.save import (
+    MAX_CHARACTER_SLOTS,
     PROFILE_ENTRY_FILE,
     PROFILE_ID_OFFSET,
+    PROFILE_SLOT_FLAGS_OFFSET,
     STEAM_ID_BASE,
     STEAM_ID_MAX,
     _parse_active_handles,
     _parse_items,
+    discover_characters,
     is_steam_id,
     owner_steam_id_from_blob,
     read_owner_steam_id,
+    read_slot_occupancy,
+    slot_occupancy_from_blob,
 )
 
-FIXTURE_PATH = (
-    Path(__file__).parent.parent.parent
-    / "backend" / "tests" / "fixtures" / "NR0000.sl2"
-)
+FIXTURE_DIR = Path(__file__).parent.parent.parent / "backend" / "tests" / "fixtures"
+FIXTURE_PATH = FIXTURE_DIR / "NR0000.sl2"
+# Same save lineage as FIXTURE_PATH's account, captured while a second character
+# ("test", slot 1) was still alive — the before-side of the delete that proved
+# the occupancy flags.
+TWO_CHARACTER_FIXTURE = FIXTURE_DIR / "NR0000_pre.sl2"
 
 
 @pytest.fixture(scope="module")
@@ -201,3 +208,56 @@ def test_read_owner_steam_id_real_fixture() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         decrypt_sl2(FIXTURE_PATH, tmpdir)
         assert read_owner_steam_id(tmpdir, mode="PC") == "76561198039949473"
+
+
+class TestSlotOccupancy:
+    """Deleted characters keep their USERDATA_0x — only the profile flag clears."""
+
+    @staticmethod
+    def _blob(flags: bytes) -> bytes:
+        end = PROFILE_SLOT_FLAGS_OFFSET + MAX_CHARACTER_SLOTS
+        blob = bytearray(end)
+        blob[PROFILE_SLOT_FLAGS_OFFSET:PROFILE_SLOT_FLAGS_OFFSET + len(flags)] = flags
+        return bytes(blob)
+
+    def test_reads_flags_in_slot_order(self) -> None:
+        flags = bytes([1, 0, 1, 0, 0, 0, 0, 0, 0, 0])
+        assert slot_occupancy_from_blob(self._blob(flags)) == [
+            True, False, True, False, False, False, False, False, False, False,
+        ]
+
+    def test_short_blob_is_unknown(self) -> None:
+        assert slot_occupancy_from_blob(b"\x00" * PROFILE_SLOT_FLAGS_OFFSET) is None
+
+    def test_non_boolean_byte_is_unknown(self) -> None:
+        # A wrong offset lands on arbitrary data; refuse rather than hide slots.
+        assert slot_occupancy_from_blob(self._blob(bytes([1, 0, 47, 0, 0, 0, 0, 0, 0, 0]))) is None
+
+    def test_all_empty_is_unknown(self) -> None:
+        # A save being read has at least one character, so all-zero means the
+        # offset is wrong, not that the account is empty.
+        assert slot_occupancy_from_blob(self._blob(bytes(MAX_CHARACTER_SLOTS))) is None
+
+    def test_read_ps4_is_unknown(self, tmp_path) -> None:
+        (tmp_path / PROFILE_ENTRY_FILE).write_bytes(self._blob(bytes([1] + [0] * 9)))
+        assert read_slot_occupancy(tmp_path, mode="PS4") is None
+
+    def test_read_missing_profile_entry_is_unknown(self, tmp_path) -> None:
+        assert read_slot_occupancy(tmp_path, mode="PC") is None
+
+
+@pytest.mark.skipif(
+    not FIXTURE_PATH.exists() or not TWO_CHARACTER_FIXTURE.exists(),
+    reason="Real save fixtures not present in backend/tests/fixtures/",
+)
+def test_discover_characters_honors_slot_occupancy() -> None:
+    """The live-vs-deleted pair: same slot 1 data, opposite occupancy flags."""
+    with tempfile.TemporaryDirectory() as one_char, tempfile.TemporaryDirectory() as two_char:
+        decrypt_sl2(FIXTURE_PATH, one_char)
+        decrypt_sl2(TWO_CHARACTER_FIXTURE, two_char)
+
+        assert read_slot_occupancy(one_char)[:2] == [True, False]
+        assert read_slot_occupancy(two_char)[:2] == [True, True]
+
+        assert [name for name, _ in discover_characters(one_char)] == ["Ketaman"]
+        assert [name for name, _ in discover_characters(two_char)] == ["Facts & Logic", "test"]

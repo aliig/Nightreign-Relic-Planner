@@ -226,6 +226,114 @@ describe("describeBuildChange", () => {
     expect(d?.reliable).toBe(false)
   })
 
+  describe("cross-version comparison (comparable: false)", () => {
+    it("withdraws the % verdict, keeping the relics that moved", () => {
+      // The 2026-08-12 regression, exactly: an upload ADDED relics and also
+      // crossed the v4 -> v5 optimizer boundary, so the relics hash moved too.
+      // The relic movement is real news; the -12% is measured against a
+      // different rule set and must not be shown.
+      const d = describeBuildChange(
+        change({
+          status: "degraded",
+          best_before: 400,
+          best_after: 352,
+          delta: -48,
+          comparable: false,
+          causes: ["relics", "game_data"],
+          left: [relic("Benched Horn", 1)],
+          entered: [relic("Fresh Blade", 2)],
+        }),
+      )
+      expect(d?.headline).toBe("best setup changed")
+      expect(d?.headline).not.toMatch(/weaker|stronger|%/)
+      expect(d?.tone).toBe("neutral")
+      expect(groupNames(d, "No longer used")).toEqual(["Benched Horn"])
+      expect(groupNames(d, "Now uses")).toEqual(["Fresh Blade"])
+      expect(d?.note).toMatch(/scoring rules changed/)
+    })
+
+    it("suppresses the raw-points tooltip too", () => {
+      // The hover quoted "400 -> 352 pts", which is the same void claim.
+      const d = describeBuildChange(
+        change({
+          status: "degraded",
+          best_before: 400,
+          best_after: 352,
+          comparable: false,
+        }),
+      )
+      expect(d?.rawScore).toBeUndefined()
+      expect(rawScoreTooltip(d?.rawScore)).toBeUndefined()
+    })
+
+    it("withdraws an improvement as readily as a regression", () => {
+      const d = describeBuildChange(
+        change({
+          status: "improved",
+          best_before: 100,
+          best_after: 150,
+          comparable: false,
+        }),
+      )
+      expect(d?.headline).toBe("best setup changed")
+      expect(d?.tone).not.toBe("up")
+    })
+
+    it('withdraws "same strength", which is also a score claim', () => {
+      const d = describeBuildChange(
+        change({
+          status: "reordered",
+          best_before: 100,
+          best_after: 100,
+          comparable: false,
+        }),
+      )
+      expect(d?.headline).toBe("best setup changed")
+    })
+
+    it("leaves statuses that make no score claim alone", () => {
+      expect(
+        describeBuildChange(
+          change({
+            status: "broken_pin",
+            comparable: false,
+            pinned_removed: [relic("Pinned", 1, false)],
+          }),
+        )?.headline,
+      ).toBe("a pinned relic left your save")
+      expect(
+        describeBuildChange(
+          change({
+            status: "potentially_affected",
+            comparable: false,
+            relevant_added: 2,
+          }),
+        )?.headline,
+      ).toBe("2 new relics may help")
+      // Same layout, same relics: nothing moved, so there is nothing to say.
+      expect(
+        describeBuildChange(change({ status: "unchanged", comparable: false })),
+      ).toBeNull()
+    })
+
+    it("is still news, so the change surfaces without its percentage", () => {
+      const c = change({
+        status: "degraded",
+        comparable: false,
+        causes: ["relics", "game_data"],
+      })
+      expect(isChangeNews(c)).toBe(true)
+    })
+
+    it("defaults to comparable when the field is absent (older snapshots)", () => {
+      const d = describeBuildChange(
+        change({ status: "degraded", best_before: 400, best_after: 352 }),
+      )
+      expect(d?.headline).toBe("12% weaker")
+      expect(d?.rawScore).toEqual({ before: 400, after: 352, delta: -48 })
+    })
+  })
+
   it("changeSummaryText flattens a change for title/aria", () => {
     const d = describeBuildChange(
       change({

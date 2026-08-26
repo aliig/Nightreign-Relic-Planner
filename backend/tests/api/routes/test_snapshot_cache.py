@@ -663,6 +663,71 @@ class TestStagedSnapshotCache:
         change = _last_change()
         assert change is not None and change["causes"] == ["relics"], change
 
+    def test_cross_version_change_is_marked_incomparable(
+        self,
+        client: TestClient,
+        normal_user_token_headers: dict[str, str],
+        db: Session,
+    ) -> None:
+        """The 2026-08-12 regression, end to end.
+
+        An upload that ADDED relics also crossed an optimizer-version boundary
+        (v3 -> v4 made the Required row a hard constraint, which can only lower
+        a build's optimum).  The fresh results were then diffed against layouts
+        scored under the OLD rules, and 11 builds were narrated as "your save
+        made this weaker".
+
+        Both things really moved, so both causes are named and the change is
+        still news — but ``comparable`` is False, which is what stops the UI
+        quoting a percentage between two incomparable scores.
+        """
+        user = get_test_user(db)
+        profile = seed_profile_with_relics(db, user.id, with_hash=True)
+        build = create_build(client, normal_user_token_headers)
+
+        first = self._run(
+            client, normal_user_token_headers, build["id"], str(profile.id)
+        )
+        assert first.status_code == 200, first.text
+
+        def _snap() -> OptimizationSnapshot:
+            row = db.exec(
+                select(OptimizationSnapshot).where(
+                    OptimizationSnapshot.build_id == uuid.UUID(build["id"]),
+                )
+            ).first()
+            assert row is not None
+            db.refresh(row)
+            return row
+
+        # Age the BASELINE to a previous optimizer version, leaving the layouts
+        # it recorded in place — exactly the state a snapshot last optimized
+        # before a version bump is in.  Reassigned rather than mutated so the
+        # JSON column is seen as dirty.
+        snap = _snap()
+        baseline = dict(snap.baseline)
+        baseline["inputs"] = {**baseline["inputs"], "optimizer_version": "3"}
+        snap.baseline = baseline
+        db.add(snap)
+        db.commit()
+
+        # ...and move the inventory too, so the relics hash is genuinely newer.
+        TestSnapshotCache._add_relic_and_rehash(db, profile, effect=100)
+
+        rerun = self._run(
+            client, normal_user_token_headers, build["id"], str(profile.id)
+        )
+        assert rerun.status_code == 200, rerun.text
+        change = _snap().last_change
+        assert change is not None
+        assert change["causes"] == ["relics", "game_data"], change
+        assert change["comparable"] is False, (
+            "a delta measured across an optimizer-version boundary must not be "
+            "presented as the build getting stronger or weaker"
+        )
+        # The relics arriving is still real news the user must see.
+        assert _snap().reviewed is False
+
     def test_save_change_and_staged_purchase_compose_into_one_change(
         self,
         client: TestClient,

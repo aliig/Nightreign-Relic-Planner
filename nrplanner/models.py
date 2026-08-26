@@ -332,6 +332,14 @@ class BuildChange(BaseModel):
     causes: list[ChangeCause] = Field(default_factory=list)
     cause: Optional[Literal["relics", "build_edit", "game_data", "mixed", "staged"]] = None
     reliable: bool = True
+    # Whether the two scores were produced by the SAME scoring rules.  False
+    # when the optimizer or the game data moved between the baseline and this
+    # run: the layout diff is still exact (those relics really did change), but
+    # `delta` is then a measurement against a different yardstick and must not
+    # be narrated as the build getting stronger or weaker.  Distinct from
+    # `reliable`, which means the delta may be search noise.  Set by the
+    # backend from the cause list -- diff_results cannot know a version moved.
+    comparable: bool = True
 
 
 # ---------------------------------------------------------------------------

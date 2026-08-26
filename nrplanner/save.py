@@ -332,17 +332,80 @@ def read_char_name(data: bytes, items_end_offset: int) -> str | None:
     return name if name else None
 
 
+# --- Character slot occupancy -----------------------------------------------
+# The profile/menu entry (USERDATA_10) holds the character-select summary: a
+# 10-byte occupancy array (1 = the slot holds a character, 0 = empty) at 0x1958,
+# immediately followed by ten 0x290-byte summary entries that each begin with
+# the character's UTF-16 name. Same shape as Elden Ring's profile blob.
+#
+# Provenance: derived by diffing real Nightreign saves (2026-08-26). Deleting a
+# character in-game clears ONLY this byte — the character's USERDATA_0x is left
+# byte-for-byte intact, name and relics and all — so occupancy is the only way
+# to tell a deleted character from a live one. Validated against 7 saves; the
+# decisive pair is backend/tests/fixtures/NR0000_pre.sl2 (flags [1,1,0...], with
+# slot 1 "test" alive) versus a later save of that same lineage taken after the
+# in-game delete (flags [1,0,0...], slot 1's USERDATA_01 unchanged).
+MAX_CHARACTER_SLOTS = 10
+PROFILE_SLOT_FLAGS_OFFSET = 0x1958  # first of MAX_CHARACTER_SLOTS flag bytes
+PROFILE_SUMMARY_OFFSET = 0x1962     # first summary entry (begins with the name)
+PROFILE_SUMMARY_STRIDE = 0x290
+
+
+def slot_occupancy_from_blob(profile_blob: bytes) -> list[bool] | None:
+    """Per-slot occupancy flags from a profile/menu entry (USERDATA_10) blob.
+
+    Returns MAX_CHARACTER_SLOTS booleans, or None when the bytes there don't
+    look like an occupancy array — too short a blob, a value outside 0/1, or an
+    all-empty array (a save being read has at least one character). None means
+    "can't tell", and callers must then fall back to showing every slot: if this
+    offset is ever wrong for some save variant, silently hiding a player's real
+    characters is far worse than showing a stale deleted one.
+    """
+    end = PROFILE_SLOT_FLAGS_OFFSET + MAX_CHARACTER_SLOTS
+    if len(profile_blob) < end:
+        return None
+    flags = profile_blob[PROFILE_SLOT_FLAGS_OFFSET:end]
+    if any(flag > 1 for flag in flags) or not any(flags):
+        return None
+    return [flag == 1 for flag in flags]
+
+
+def read_slot_occupancy(decrypted_dir: str | Path,
+                        mode: str = "PC") -> list[bool] | None:
+    """Read per-slot occupancy flags from a decrypted save directory.
+
+    Returns None (meaning "can't tell", see slot_occupancy_from_blob) for PS4
+    saves, which have no profile/menu entry, and for a missing or unreadable one.
+    """
+    if mode != "PC":
+        return None  # a PS4 memory.dat split has no profile/menu entry
+    profile_path = Path(decrypted_dir) / PROFILE_ENTRY_FILE
+    if not profile_path.exists():
+        return None
+    try:
+        blob = profile_path.read_bytes()
+    except OSError:
+        return None
+    return slot_occupancy_from_blob(blob)
+
+
 def discover_characters(decrypted_dir: str | Path,
                         mode: str = "PC") -> list[tuple[str, Path]]:
     """Enumerate characters from a decrypted save directory.
 
-    Returns list of (character_name, file_path) in slot order.
+    Returns list of (character_name, file_path) in slot order. Slots the profile
+    entry marks as empty are skipped: an in-game delete leaves the character's
+    USERDATA_0x fully intact, so without that check a deleted character is
+    indistinguishable from a live one and shows up as a phantom profile.
     mode: "PC" (USERDATA_0x) or "PS4" (userdatax).
     """
     decrypted_dir = Path(decrypted_dir)
     prefix = "userdata" if mode == "PS4" else "USERDATA_0"
+    occupancy = read_slot_occupancy(decrypted_dir, mode=mode)
     results = []
-    for i in range(10):
+    for i in range(MAX_CHARACTER_SLOTS):
+        if occupancy is not None and not occupancy[i]:
+            continue
         file_path = decrypted_dir / f"{prefix}{i}"
         if not file_path.exists():
             continue
