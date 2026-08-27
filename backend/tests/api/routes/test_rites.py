@@ -70,6 +70,19 @@ class TestRitesPlanValidation:
         assert resp.status_code == 422
         assert "top_n" in resp.json()["detail"]
 
+    def test_rejects_murk_target_without_a_target(self, client: TestClient) -> None:
+        resp = client.post(
+            "/api/v1/saves/rites/plan",
+            files={"file": ("NR0000.sl2", b"BND4")},
+            data={
+                "slot_index": "0",
+                "buckets": json.dumps([{"is_deep": False, "version": "1.03"}]),
+                "stop_mode": "murk_target",
+            },
+        )
+        assert resp.status_code == 422
+        assert "target_murk" in resp.json()["detail"]
+
     def test_rejects_malformed_sold_handles(self, client: TestClient) -> None:
         resp = client.post(
             "/api/v1/saves/rites/plan",
@@ -380,10 +393,36 @@ class TestRitesStagedMurk:
             + plan_b["murk_delta"]
         )
 
+    def test_next_batch_rolls_new_relics(self, client: TestClient) -> None:
+        """Sequential purchases must buy NEW relics: the same save state at the
+        next roll epoch rolls a fresh stream (in-game, buying again rolls
+        again). Without this a 100k batch, then another, bought the same pool."""
+        prof = self._profile(client)
+        if prof["murks"] < 2500:
+            pytest.skip("fixture wallet too small")
+        batch_1 = self._spend_plan(client, prof["slot_index"], qty=3)
+        staged = {
+            "staged_mints": json.dumps(self._stage(batch_1["keepers"])),
+            "staged_murk_delta": str(batch_1["murk_delta"]),
+        }
+        args = dict(
+            buckets=json.dumps([{**self._SCENIC, "quantity": 3}]),
+            stop_mode="fixed", **staged,
+        )
+        batch_2 = self._plan(
+            client, prof["slot_index"], roll_epoch="1", **args)
+        assert sorted(map(self._fp, batch_2["keepers"])) != sorted(
+            map(self._fp, batch_1["keepers"])
+        )
+        # ...and that second batch is itself reproducible: cancelling it takes
+        # the epoch back down with it, so a retry replays it (no free re-roll).
+        replay = self._plan(client, prof["slot_index"], roll_epoch="1", **args)
+        assert replay == batch_2
+
     def test_identical_staged_state_is_deterministic(
         self, client: TestClient
     ) -> None:
-        """Spamming Find Keepers with the same staged diff changes nothing."""
+        """Spamming the buy button with the same staged diff changes nothing."""
         prof = self._profile(client)
         if prof["murks"] < 2500:
             pytest.skip("fixture wallet too small")
@@ -399,6 +438,35 @@ class TestRitesStagedMurk:
         first = self._plan(client, prof["slot_index"], **args)
         second = self._plan(client, prof["slot_index"], **args)
         assert first == second
+
+    def test_budget_mode_spends_exactly_the_budget(
+        self, client: TestClient
+    ) -> None:
+        """'Spend 3,000' spends 3,000 — the walk settles it, not an estimate."""
+        prof = self._profile(client)
+        if prof["murks"] < 5000:
+            pytest.skip("fixture wallet too small")
+        plan = self._plan(
+            client, prof["slot_index"], buckets=json.dumps([self._SCENIC]),
+            stop_mode="budget", budget="3000",
+        )
+        assert plan["murk_before"] - plan["murk_after"] == 3000
+        assert plan["limited_by"] is None
+
+    def test_murk_target_mode_spends_down_to_the_target(
+        self, client: TestClient
+    ) -> None:
+        """Spend down TO a number — the 1.7M-wallet workflow."""
+        prof = self._profile(client)
+        if prof["murks"] < 5000:
+            pytest.skip("fixture wallet too small")
+        target = prof["murks"] - 3000
+        plan = self._plan(
+            client, prof["slot_index"], buckets=json.dumps([self._SCENIC]),
+            stop_mode="murk_target", target_murk=str(target),
+        )
+        assert plan["murk_after"] == target
+        assert plan["limited_by"] is None
 
     def test_positive_staged_delta_is_clamped(self, client: TestClient) -> None:
         """A client cannot manufacture planning Murk with a positive delta."""

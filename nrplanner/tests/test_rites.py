@@ -63,12 +63,12 @@ class _StubGen:
         return r
 
 
-def _ctx(eff_ids, name="B1") -> BuildContext:
+def _ctx(eff_ids, name="B1", build_id="") -> BuildContext:
     build = BuildDefinition(
         id="b", name=name, character="Wylder", include_deep=False, curse_max=1,
         groups=[WeightGroup(weight=100, effects=list(eff_ids))],
     )
-    return BuildContext(build=build, hero_type=1, name=name)
+    return BuildContext(build=build, hero_type=1, name=name, build_id=build_id)
 
 
 @pytest.fixture(scope="module")
@@ -303,17 +303,108 @@ def test_select_cull_handles_rules_and_protection(ds, wylder_eff):
 # all_murk: chronological buy/sell-cycle walk
 # ---------------------------------------------------------------------------
 
-def test_plan_counts_all_murk_overshoots_budget_unchanged():
+def test_plan_counts_every_cycle_mode_overshoots():
+    """Every cycle mode over-generates at the max-refund net (scenic 50, deep
+    700) — the settlement walk, not this estimate, decides where spending
+    stops, so the stream can never run out before the goal."""
     scenic = PurchaseBucket(False, "1.03", 600)
     deep = PurchaseBucket(True, "1.03", 1800)
-    # all_murk: optimistic max-refund net (scenic 50, deep 700) -> overshoot.
     assert _plan_counts([scenic], "all_murk", None, 1000, 8000) == ([20], False)
     assert _plan_counts([deep], "all_murk", None, 1000, 8000) == ([1], False)
     # extra_budget extends the all_murk target.
     assert _plan_counts([scenic], "all_murk", None, 1000, 8000, 500) == ([30], False)
-    # budget keeps the mid estimate (scenic 600-350=250) and ignores extra_budget.
-    assert _plan_counts([scenic], "budget", 1000, 10**6, 8000) == ([4], False)
-    assert _plan_counts([scenic], "budget", 1000, 10**6, 8000, 500) == ([4], False)
+    # budget: the overshoot is over the BUDGET, not the whole wallet.
+    assert _plan_counts([scenic], "budget", 1000, 10**6, 8000) == ([20], False)
+    # ...and a budget bigger than the wallet is clamped to the wallet.
+    assert _plan_counts([scenic], "budget", 10**6, 1000, 8000) == ([20], False)
+    # murk_target: the overshoot is over (wallet - target).
+    assert _plan_counts([scenic], "murk_target", None, 10**6, 8000,
+                        0, 10**6 - 1000) == ([20], False)
+    # A target at or above the wallet spends nothing.
+    assert _plan_counts([scenic], "murk_target", None, 1000, 8000,
+                        0, 5000) == ([0], False)
+
+
+def test_budget_mode_spends_the_budget_not_an_estimate(ds):
+    """The reported bug: 'spend 100k' spent a fairly different number. The
+    walk stops within one relic price of the budget, whatever the rolls
+    refund."""
+    junk = _gen([EMPTY, EMPTY, EMPTY], color="Red")
+    res = bulk_acquire(
+        builds=[], owned=[], current_murk=10_000, budget=1_200,
+        buckets=[PurchaseBucket(False, "1.03", 600)],
+        generator=_StubGen([junk]), ds=ds, stop_mode="budget",
+        storage_cap_left=10, **_OPT,
+    )
+    # No builds -> every roll is kept (600 each, no refund): exactly 2 fit.
+    assert res.generated == 2 and res.kept == 2
+    assert res.murk_before - res.murk_after == 1_200
+    assert res.limited_by is None            # spent what was asked, not "limited"
+
+
+def test_budget_larger_than_the_wallet_ends_at_zero(ds):
+    junk = _gen([EMPTY, EMPTY, EMPTY], color="Red")
+    res = bulk_acquire(
+        builds=[], owned=[], current_murk=1_300, budget=10**6,
+        buckets=[PurchaseBucket(False, "1.03", 600)],
+        generator=_StubGen([junk]), ds=ds, stop_mode="budget",
+        storage_cap_left=10, **_OPT,
+    )
+    assert res.generated == 2 and res.murk_after == 100
+    assert res.limited_by == "murk"
+
+
+def test_murk_target_stops_at_the_target(ds):
+    """Spend down TO a number (the 1.7M-save workflow), the mirror of budget."""
+    junk = _gen([EMPTY, EMPTY, EMPTY], color="Red")
+    res = bulk_acquire(
+        builds=[], owned=[], current_murk=10_000, target_murk=8_900,
+        buckets=[PurchaseBucket(False, "1.03", 600)],
+        generator=_StubGen([junk]), ds=ds, stop_mode="murk_target",
+        storage_cap_left=10, **_OPT,
+    )
+    assert res.murk_after == 9_400        # one more buy would breach 8,900
+    assert res.generated == 1 and res.limited_by is None
+
+
+def test_murk_target_at_or_above_the_wallet_buys_nothing(ds):
+    junk = _gen([EMPTY, EMPTY, EMPTY], color="Red")
+    res = bulk_acquire(
+        builds=[], owned=[], current_murk=10_000, target_murk=10_000,
+        buckets=[PurchaseBucket(False, "1.03", 600)],
+        generator=_StubGen([junk]), ds=ds, stop_mode="murk_target",
+        storage_cap_left=10, **_OPT,
+    )
+    assert res.generated == 0 and res.kept == 0 and res.murk_after == 10_000
+
+
+def test_cycle_mode_reports_gen_max_only_when_rolls_run_out(ds):
+    """A scaled-down estimate is not itself a limit — running out of rolls
+    with Murk still to spend is."""
+    junk = _gen([EMPTY, EMPTY, EMPTY], color="Red")
+    res = bulk_acquire(
+        builds=[], owned=[], current_murk=10**6,
+        buckets=[PurchaseBucket(False, "1.03", 600)],
+        generator=_StubGen([junk]), ds=ds, stop_mode="all_murk",
+        storage_cap_left=10**6, gen_max=2, **_OPT,
+    )
+    assert res.generated == 2 and res.limited_by == "gen_max"
+
+
+def test_duplicate_build_names_do_not_shadow_each_other(ds, wylder_eff, all_effects):
+    """Two saved builds may share a name (the same 'Katanas' on two
+    Nightfarers). Keying usage by name dropped one build's keepers."""
+    other = next(e["id"] for e in all_effects if e["id"] != wylder_eff)
+    keeper = _gen([wylder_eff, EMPTY, EMPTY], color="Red")
+    res = bulk_acquire(
+        builds=[_ctx([wylder_eff], name="Katanas", build_id="a"),
+                _ctx([other], name="Katanas", build_id="b")],
+        owned=[], current_murk=10_000,
+        buckets=[PurchaseBucket(False, "1.03", 600, quantity=1)],
+        generator=_StubGen([keeper]), ds=ds, stop_mode="fixed",
+        storage_cap_left=10, **_OPT,
+    )
+    assert res.kept == 1, "the first build's usage was shadowed by the second"
 
 
 def test_all_murk_dud_refund_funds_next_buy(ds, wylder_eff, all_effects):

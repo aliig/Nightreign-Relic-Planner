@@ -175,6 +175,22 @@ export const Body_saves_rites_planSchema = {
             ],
             title: 'Budget'
         },
+        target_murk: {
+            anyOf: [
+                {
+                    type: 'integer'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Target Murk'
+        },
+        roll_epoch: {
+            type: 'integer',
+            title: 'Roll Epoch',
+            default: 0
+        },
         top_n: {
             type: 'integer',
             title: 'Top N',
@@ -257,6 +273,22 @@ export const Body_saves_rites_plan_streamSchema = {
                 }
             ],
             title: 'Budget'
+        },
+        target_murk: {
+            anyOf: [
+                {
+                    type: 'integer'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Target Murk'
+        },
+        roll_epoch: {
+            type: 'integer',
+            title: 'Roll Epoch',
+            default: 0
         },
         top_n: {
             type: 'integer',

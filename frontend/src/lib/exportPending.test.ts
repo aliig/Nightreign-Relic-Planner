@@ -58,6 +58,7 @@ describe("exportPendingChanges", () => {
         mints: [],
         murkDelta: 0,
         meta: {},
+        batches: [],
       },
     }
 
@@ -114,6 +115,7 @@ describe("exportPendingChanges", () => {
         ],
         murkDelta: -450,
         meta: {},
+        batches: [],
       },
     }
 
@@ -149,6 +151,7 @@ describe("exportPendingChanges", () => {
         mints: [],
         murkDelta: -4_150,
         meta: {},
+        batches: [],
       },
     }
     const summary = await exportPendingChanges(
@@ -207,6 +210,7 @@ describe("exportPendingChanges", () => {
         mints: [mint("m1", -1, 205), mint("m2", -2, 206)],
         murkDelta: -1200,
         meta: {},
+        batches: [],
       },
     }
 
@@ -241,6 +245,7 @@ describe("exportPendingChanges", () => {
         mints: [],
         murkDelta: 0,
         meta: {},
+        batches: [],
       },
     }
     await expect(
@@ -261,6 +266,7 @@ describe("exportPendingChanges", () => {
         mints: [],
         murkDelta: 0,
         meta: {},
+        batches: [],
       },
     }
     const summary = await exportPendingChanges(
@@ -288,6 +294,7 @@ describe("exportPendingChanges", () => {
         mints: [],
         murkDelta: 0,
         meta: {},
+        batches: [],
       },
     }
     await expect(

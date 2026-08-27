@@ -1,7 +1,23 @@
 import { useSuspenseQuery } from "@tanstack/react-query"
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router"
-import { Check, Coins, Package, Plus, Sparkles, Trash2, X } from "lucide-react"
-import { type ReactNode, Suspense, useMemo, useRef, useState } from "react"
+import {
+  Check,
+  ChevronRight,
+  Coins,
+  Package,
+  Plus,
+  Sparkles,
+  Trash2,
+  X,
+} from "lucide-react"
+import {
+  type ReactNode,
+  Suspense,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react"
 import { toast } from "sonner"
 
 import { BuildsService, GameService, SavesService } from "@/client"
@@ -14,7 +30,6 @@ import {
 } from "@/components/RelicDisplay"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Checkbox } from "@/components/ui/checkbox"
 import {
   Select,
   SelectContent,
@@ -35,18 +50,22 @@ import { isLoggedIn } from "@/hooks/useAuth"
 import useCustomToast from "@/hooks/useCustomToast"
 import { toInlineBuild, useLocalBuilds } from "@/hooks/useLocalBuilds"
 import {
-  clearRitesBatch,
+  appendRitesBatch,
   effectiveMurks,
   type MintSpec,
   murkAdjustment,
+  nextRollEpoch,
+  type RitesBatch,
   type RitesBatchSpec,
   readSlot,
-  replaceRitesBatch,
+  removeMint,
+  removeRitesBatch,
+  stagedFields,
   usePendingSlot,
 } from "@/lib/pendingChanges"
 import { getOriginalBackupFile } from "@/lib/saveBackup"
 import { getSaveFile } from "@/lib/saveFile"
-import { formatMurks } from "@/lib/sellValue"
+import { effectCountOf, formatMurks, sellValue } from "@/lib/sellValue"
 import { cn } from "@/lib/utils"
 
 export const Route = createFileRoute("/_layout/rites")({
@@ -56,7 +75,6 @@ export const Route = createFileRoute("/_layout/rites")({
   }),
 })
 
-const EMPTY = 4294967295
 const TIER_NAMES: Record<number, string> = {
   1: "Delicate",
   2: "Polished",
@@ -103,12 +121,35 @@ const BUCKETS: Bucket[] = [
   },
 ]
 
-type StopMode = "fixed" | "budget" | "all_murk"
+type StopMode = "fixed" | "budget" | "murk_target" | "all_murk"
 
 // Builds available to match against. The user opts in by selecting a subset (default
 // none -> rules-only, no optimizer). Auth sends build_ids; anon sends the matching inline
 // BuildDefinitions.
 type BuildOption = { id: string; name: string }
+
+/**
+ * Build names are free text and routinely collide (the same "Katanas" saved
+ * for two Nightfarers), which left the selection chips — and the keeper tags
+ * they turn into — impossible to tell apart. Qualify only the ones that
+ * actually clash, so unique names stay short. The server does the same for
+ * the names it tags keepers with (_disambiguate_names).
+ */
+function labelBuilds(
+  builds: Array<{ id: string; name: string; character?: string }>,
+): BuildOption[] {
+  const counts = new Map<string, number>()
+  for (const b of builds) counts.set(b.name, (counts.get(b.name) ?? 0) + 1)
+  const seen = new Map<string, number>()
+  return builds.map((b) => {
+    if ((counts.get(b.name) ?? 0) < 2 || !b.character)
+      return { id: b.id, name: b.name }
+    const qualified = `${b.name} (${b.character})`
+    const n = (seen.get(qualified) ?? 0) + 1
+    seen.set(qualified, n)
+    return { id: b.id, name: n === 1 ? qualified : `${qualified} ${n}` }
+  })
+}
 type BuildsForm =
   | { kind: "auth"; options: BuildOption[] }
   | {
@@ -394,58 +435,30 @@ function RuleBuilder({
   )
 }
 
-// --- Local sell-value mirror (matches nrplanner.writer.sell_value; deep x2) --
+// --- Batch presentation ------------------------------------------------------
 
-function sellValueLocal(effects: number[], isDeep: boolean): number {
-  const count = Math.min(
-    Math.max(
-      effects.filter((e) => e !== EMPTY && e !== 0 && e !== -1).length,
-      1,
-    ),
-    3,
-  )
-  const base = count === 3 ? 550 : count === 2 ? 350 : 150
-  return base * (isDeep ? 2 : 1)
-}
-
-// --- Keeper <-> staged-mint matching ----------------------------------------
-
-/** Content fingerprint shared by plan keepers and staged mints (the roll
- * stream is deterministic per save state, so identical content across a
- * re-plan IS the same roll). */
-function contentFp(r: {
-  real_id: number
-  effects: number[]
-  curses: number[]
-}): string {
-  return JSON.stringify([r.real_id, ...r.effects, ...r.curses])
-}
-
-/**
- * Claim staged mints for keeper rows by content — a multiset match, so
- * duplicate content (possible with no build filter) claims one mint per copy,
- * in row order. Returns keeper index -> the mint representing it.
- */
-function matchKeepersToMints(
-  keepers: PlanKeeper[],
-  mints: MintSpec[],
-): Map<number, MintSpec> {
-  const pool = new Map<string, MintSpec[]>()
-  for (const m of mints) {
-    const fp = contentFp(m)
-    const arr = pool.get(fp)
-    if (arr) arr.push(m)
-    else pool.set(fp, [m])
-  }
-  const out = new Map<number, MintSpec>()
-  keepers.forEach((k, i) => {
-    const m = pool.get(contentFp(k))?.shift()
-    if (m) out.set(i, m)
+/** When a batch was bought: "just now" / "14 min ago" / a clock time. */
+function formatWhen(at: number): string {
+  if (!at) return "earlier"
+  const mins = Math.floor((Date.now() - at) / 60000)
+  if (mins < 1) return "just now"
+  if (mins < 60) return `${mins} min ago`
+  return new Date(at).toLocaleString(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+    month: "short",
+    day: "numeric",
   })
-  return out
 }
 
-// --- Find Keepers progress stepper ------------------------------------------
+/** Plain-language reason a run stopped short of what was asked. */
+const LIMIT_TEXT: Record<string, string> = {
+  murk: "ran out of Murk",
+  storage: "ran out of relic storage",
+  gen_max: "hit the roll cap",
+}
+
+// --- Purchase-run progress stepper -------------------------------------------
 
 // Mirrors the SSE progress events from /saves/rites/plan/stream.
 type ProgressEvt = {
@@ -577,10 +590,10 @@ function RitesTool({
   const { showErrorToast } = useCustomToast()
   const navigate = useNavigate()
   // Staged diff for this slot. Murk is emulated LIVE against it: the wallet
-  // SHOWN is the save's Murk plus the staged adjustment (the committed rites
-  // batch + staged-sell refunds). A new plan run, however, REPLACES the batch
-  // — same save state, same roll stream — so it plans from the raw save Murk
-  // plus staged-sell refunds only.
+  // shown — and the wallet a new run spends from — is the save's Murk plus the
+  // staged adjustment (every committed rites batch + staged-sell refunds).
+  // Batches STACK, so an earlier batch's spend rides along with the request
+  // and the next one buys from what is actually left.
   const pending = usePendingSlot(slotIndex)
   const pendingSells = pending.sells
   const staged = murkAdjustment(pending)
@@ -589,6 +602,9 @@ function RitesTool({
   const [budget, setBudget] = useState<number>(
     Math.min(effMurks ?? 100000, 100000),
   )
+  // "Spend down to" target: the mirror of a budget, for wallets big enough
+  // that "how much is left" is the number you actually think in.
+  const [targetMurk, setTargetMurk] = useState<number>(0)
   const [qty, setQty] = useState<Record<string, number>>({
     n103: 50,
     d103: 0,
@@ -598,49 +614,60 @@ function RitesTool({
   const [inclusion, setInclusion] = useState<Rule[]>([])
   const [exclusion, setExclusion] = useState<Rule[]>([])
   const [busy, setBusy] = useState(false)
+  // The last run's plan — kept only for the warnings that depend on it
+  // (export capacity, storage). The PURCHASES themselves are read from the
+  // staged batches below, so they survive navigation.
   const [plan, setPlan] = useState<PlanResponse | null>(null)
-  // Which keeper rows are kept, derived from the staged batch (content-matched
-  // mints) — the batch is the single source of truth, so Changes-panel undos
-  // and other tabs stay in sync with the checkboxes automatically.
-  const keeperMints = useMemo(
-    () =>
-      plan
-        ? matchKeepersToMints(plan.keepers, pending.mints)
-        : new Map<number, MintSpec>(),
-    [plan, pending.mints],
-  )
-  const selected = useMemo(() => new Set(keeperMints.keys()), [keeperMints])
   const [selectedBuilds, setSelectedBuilds] = useState<Set<string>>(new Set())
   const [progress, setProgress] = useState<ProgressEvt | null>(null)
   // How many builds the in-flight run was started with (selection can change
   // while it runs); >0 switches the busy UI to the multi-step indicator.
   const [runBuildCount, setRunBuildCount] = useState(0)
-  // Stop mode the displayed plan was run with (the selector can change after).
-  const [planStop, setPlanStop] = useState<StopMode>("fixed")
   // Build-match depth: keep a purchase only if it lands in one of a build's
   // top-N ranked loadouts. 10 = the optimizer page's full list (widest).
   const [topN, setTopN] = useState(10)
   // Last event per phase, so completed steps keep their final N/N count.
   const seenRef = useRef<Record<string, ProgressEvt>>({})
   const abortRef = useRef<AbortController | null>(null)
+  // Refund just credited by trashing a relic, flashed on the wallet so the
+  // Murk coming back is visible where the Murk lives (the toast scrolls away).
+  const [refundFlash, setRefundFlash] = useState<number | null>(null)
+  const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(
+    () => () => {
+      if (flashTimer.current) clearTimeout(flashTimer.current)
+    },
+    [],
+  )
+
+  // Committed batches, newest first, each with the relics it still holds.
+  const batches = useMemo(() => {
+    const byBatch = new Map<string, MintSpec[]>()
+    for (const m of pending.mints) {
+      const key = m.batchId ?? ""
+      const arr = byBatch.get(key)
+      if (arr) arr.push(m)
+      else byBatch.set(key, [m])
+    }
+    return [...pending.batches]
+      .reverse()
+      .map((b) => ({ batch: b, mints: byBatch.get(b.id) ?? [] }))
+  }, [pending.mints, pending.batches])
+  const stagedKept = pending.mints.length
+  const stagedSpend = pending.batches.reduce((n, b) => n + b.murkDelta, 0)
 
   const activeBuckets = BUCKETS.filter((b) => (qty[b.key] ?? 0) > 0)
   const fixedCost = activeBuckets.reduce(
     (n, b) => n + (qty[b.key] ?? 0) * b.cost,
     0,
   )
-  // Wallet a NEW plan run starts from: raw save Murk + staged-sell refunds
-  // only. The committed rites batch is EXCLUDED — a run replaces the batch
-  // (same save state = same roll stream), un-buying its rolls first, so its
-  // spend must not double-count against affordability here.
-  const planMurks =
-    murks == null
-      ? null
-      : Math.max(0, Math.min(murks + staged - pending.murkDelta, 0xffffffff))
+  // Wallet a NEW run starts from = the live effective wallet: earlier batches
+  // have already been paid for, so they must count against affordability.
+  const planMurks = effMurks
   const overspend =
     stopMode === "fixed" && planMurks != null && fixedCost > planMurks
 
-  async function findKeepers() {
+  async function buyRelics() {
     const file = getSaveFile() ?? (await getOriginalBackupFile())
     if (!file) {
       showErrorToast(
@@ -674,15 +701,25 @@ function RitesTool({
     form.append("stop_mode", stopMode)
     form.append("top_n", String(topN))
     if (stopMode === "budget") form.append("budget", String(budget))
-    // Staged sells and bookmark toggles ride along so the plan runs against
-    // the LIVE app state: sold relics are already gone (freed storage,
-    // refunds spendable) and staged bookmarks drive the protected-sell gate
-    // (un-bookmark + trash in one session must not 422). The staged rites
-    // batch does NOT ride: this run REPLACES it — the roll stream is
-    // deterministic per save state, so a re-run re-views the same rolls, and
-    // passing the batch along would double-buy them.
+    if (stopMode === "murk_target")
+      form.append("target_murk", String(Math.max(0, targetMurk)))
+    // The whole staged diff rides along so the run happens in the world the
+    // app is actually in: sold relics are gone (slots freed, refunds
+    // spendable), earlier batches' purchases are owned (they hold storage and
+    // dedup a re-rolled copy to a dud) and already paid for, and staged
+    // bookmarks drive the protected-sell gate (un-bookmark + trash in one
+    // session must not 422).
+    const stagedDiff = stagedFields(pending)
     if (pendingSells.length)
       form.append("sold_handles", JSON.stringify(pendingSells))
+    if (stagedDiff.staged_mints.length)
+      form.append("staged_mints", JSON.stringify(stagedDiff.staged_mints))
+    if (pending.murkDelta)
+      form.append("staged_murk_delta", String(pending.murkDelta))
+    // Which batch this is. The server folds it into the roll seed, so this run
+    // buys NEW relics rather than re-viewing the last batch's stream — while
+    // re-running after cancelling a batch replays that batch exactly.
+    form.append("roll_epoch", String(nextRollEpoch(pending)))
     if (Object.keys(pending.favorites).length)
       form.append("staged_favorites", JSON.stringify(pending.favorites))
     const inc = inclusion.filter(ruleHasCondition).map(serializeRule)
@@ -739,21 +776,21 @@ function RitesTool({
       if (streamErr) throw new Error(streamErr)
       if (!result) throw new Error("No plan was returned.")
       setPlan(result)
-      setPlanStop(stopMode)
       // The roll IS the purchase: the batch commits the moment it's revealed,
       // mirroring the game, where a shop roll can't be previewed and declined.
-      // All keepers start kept (the walk the plan settled); unchecking one
-      // sells it back. A re-run replaces the batch — same save state, same
-      // roll stream — so exploring parameters never stacks losses.
-      commitSelection(result, new Set(result.keepers.map((_, i) => i)))
+      // Every keeper is kept (the walk the plan settled); trashing one sells
+      // it back. The batch is appended — running again is another trip to the
+      // shop, with its own rolls and its own bill.
+      commitBatch(result, runLabel())
       // The keepers are owned now, so every build is being scored against an
       // inventory it has not seen. Say so and offer the way to fix it rather
       // than re-optimizing the whole library behind the user's back — a
       // parameter sweep would fire it on every re-roll.
       toast.success("Success!", {
         description:
-          `Batch committed: bought ${result.generated} relic(s), kept ` +
-          `${result.kept} — see the Changes panel.` +
+          `Batch ${readSlot(slotIndex).batches.length}: bought ` +
+          `${result.generated} relic(s), kept ${result.kept}` +
+          ` for ${formatMurks(-result.murk_delta)} Murk.` +
           (result.kept > 0
             ? " Your builds haven't been optimized with them yet."
             : ""),
@@ -768,7 +805,7 @@ function RitesTool({
     } catch (err) {
       if ((err as Error)?.name !== "AbortError")
         showErrorToast(
-          err instanceof Error ? err.message : "Failed to find keepers.",
+          err instanceof Error ? err.message : "Failed to buy relics.",
         )
     } finally {
       abortRef.current = null
@@ -781,57 +818,71 @@ function RitesTool({
     abortRef.current?.abort()
   }
 
-  /**
-   * (Re-)commit the staged batch from a keeper selection: selected keepers
-   * are kept (minted), the rest are sold back — their sell value lands on top
-   * of the plan's murk_delta, which assumes ALL keepers kept (faithful
-   * buy-then-sell; staged-sell refunds of owned relics are NOT in the delta,
-   * those credit themselves through the export's sell step). Surviving mints
-   * keep their id/handle so staged loadout ops keep referencing them.
-   */
-  function commitSelection(p: PlanResponse, sel: Set<number>) {
-    const prev = matchKeepersToMints(p.keepers, readSlot(slotIndex).mints)
-    const specs: RitesBatchSpec[] = []
-    let soldBack = 0
-    p.keepers.forEach((k, i) => {
-      if (!sel.has(i)) {
-        soldBack += sellValueLocal(k.effects, k.is_deep)
-        return
-      }
-      const kept = prev.get(i)
-      specs.push({
-        real_id: k.real_id,
-        item_id: k.item_id,
-        effects: k.effects,
-        curses: k.curses,
-        name: k.name,
-        color: k.color,
-        tier: k.tier,
-        isDeep: k.is_deep,
-        // Odds are exact (relic_lots.json, derived from regulation.bin — see RE doc).
-        oddsSource: "exact",
-        builds: k.builds,
-        ...(kept ? { id: kept.id, handle: kept.handle } : {}),
-      })
-    })
-    const droppedOps = replaceRitesBatch(
-      slotIndex,
-      specs,
-      p.murk_delta + soldBack,
-    )
-    if (droppedOps.length)
-      showErrorToast(
-        `Removed staged loadout change(s) that used a sold keeper: ${droppedOps.join(", ")}`,
-      )
+  /** What this run asked for, shown on the batch receipt. */
+  function runLabel(): string {
+    const names = activeBuckets.map((b) => b.label).join(" + ") || "relics"
+    if (stopMode === "fixed") {
+      const n = activeBuckets.reduce((t, b) => t + (qty[b.key] ?? 0), 0)
+      return `Buy ${n} × ${names}`
+    }
+    if (stopMode === "budget")
+      return `Spend ${formatMurks(budget)} Murk on ${names}`
+    if (stopMode === "murk_target")
+      return `Spend down to ${formatMurks(targetMurk)} Murk on ${names}`
+    return `Spend all Murk on ${names}`
   }
 
-  function cancelBatch() {
-    const droppedOps = clearRitesBatch(slotIndex)
+  /**
+   * Commit the plan as a new batch: its keepers are minted, its net Murk is
+   * spent. The plan's murk_delta already assumes every keeper is kept
+   * (faithful buy-then-sell); trashing one later credits its sell value back.
+   * Staged-sell refunds of OWNED relics are not in the delta — those credit
+   * themselves through the export's sell step.
+   */
+  function commitBatch(p: PlanResponse, label: string) {
+    const specs: RitesBatchSpec[] = p.keepers.map((k) => ({
+      real_id: k.real_id,
+      item_id: k.item_id,
+      effects: k.effects,
+      curses: k.curses,
+      name: k.name,
+      color: k.color,
+      tier: k.tier,
+      isDeep: k.is_deep,
+      // Odds are exact (relic_lots.json, derived from regulation.bin — see RE doc).
+      oddsSource: "exact",
+      builds: k.builds,
+      buildRanks: k.build_ranks,
+      reason: k.reason,
+    }))
+    appendRitesBatch(slotIndex, specs, p.murk_delta, {
+      rolled: p.generated,
+      kept: p.kept,
+      cost: p.murk_cost,
+      refunded: p.murk_refunded,
+      label,
+      limitedBy: p.limited_by,
+    })
+  }
+
+  function cancelBatch(id: string) {
+    const droppedOps = removeRitesBatch(slotIndex, id)
     if (droppedOps.length)
       showErrorToast(
         `Removed staged loadout change(s) that used this batch: ${droppedOps.join(", ")}`,
       )
-    setPlan(null)
+  }
+
+  function trashRelic(mint: MintSpec) {
+    const refund = sellValue(effectCountOf(mint.effects), mint.isDeep)
+    removeMint(slotIndex, mint.id)
+    setRefundFlash(refund)
+    if (flashTimer.current) clearTimeout(flashTimer.current)
+    flashTimer.current = setTimeout(() => setRefundFlash(null), 2500)
+    toast.success(`Sold ${mint.name} back for ${formatMurks(refund)} Murk`, {
+      description:
+        "It was still bought, so the batch keeps the buy/sell spread.",
+    })
   }
 
   return (
@@ -840,7 +891,20 @@ function RitesTool({
       <div className="flex flex-wrap gap-4 text-sm">
         <span className="inline-flex items-center gap-1.5">
           <Coins className="h-4 w-4 text-amber-500" />
-          <strong>{effMurks != null ? formatMurks(effMurks) : "—"}</strong> Murk
+          <strong
+            className={cn(
+              "transition-colors duration-300",
+              refundFlash != null && "text-green-600 dark:text-green-500",
+            )}
+          >
+            {effMurks != null ? formatMurks(effMurks) : "—"}
+          </strong>{" "}
+          Murk
+          {refundFlash != null && (
+            <output className="animate-in fade-in slide-in-from-bottom-1 text-xs font-medium text-green-600 dark:text-green-500">
+              +{formatMurks(refundFlash)} refunded
+            </output>
+          )}
           {staged !== 0 && murks != null && (
             <span className="text-xs text-muted-foreground">
               (save {formatMurks(murks)} {staged < 0 ? "−" : "+"}{" "}
@@ -848,14 +912,12 @@ function RitesTool({
             </span>
           )}
         </span>
-        {plan && planStop === "all_murk" ? (
-          // storage_left = 1950 − owned after staged sells, so occupancy after
-          // staging the selected keepers is (1950 − storage_left) + selected.
+        {plan ? (
+          // storage_left is 1950 − owned with the staged diff applied, i.e. it
+          // already counts the purchases staged when the plan ran.
           <span className="text-muted-foreground">
             Storage:{" "}
-            <strong>
-              {(RELIC_CAP - plan.storage_left + selected.size).toLocaleString()}
-            </strong>{" "}
+            <strong>{(RELIC_CAP - plan.storage_left).toLocaleString()}</strong>{" "}
             / {RELIC_CAP.toLocaleString()}
             {plan.pending_sold > 0 &&
               ` (after ${plan.pending_sold} staged sell${plan.pending_sold === 1 ? "" : "s"})`}
@@ -863,6 +925,12 @@ function RitesTool({
         ) : (
           <span className="text-muted-foreground">
             Storage cap: {RELIC_CAP}
+          </span>
+        )}
+        {stagedKept > 0 && (
+          <span className="text-muted-foreground">
+            Staged purchases: <strong>{stagedKept}</strong> relic
+            {stagedKept === 1 ? "" : "s"}
           </span>
         )}
       </div>
@@ -992,6 +1060,9 @@ function RitesTool({
             <SelectContent>
               <SelectItem value="fixed">A fixed quantity is bought</SelectItem>
               <SelectItem value="budget">A Murk budget is spent</SelectItem>
+              <SelectItem value="murk_target">
+                Murk is down to a set amount
+              </SelectItem>
               <SelectItem value="all_murk">All Murk is spent</SelectItem>
             </SelectContent>
           </Select>
@@ -1006,12 +1077,29 @@ function RitesTool({
               aria-label="Murk budget"
             />
           )}
+          {stopMode === "murk_target" && (
+            <input
+              type="number"
+              min={0}
+              max={effMurks ?? undefined}
+              value={targetMurk}
+              onChange={(e) => setTargetMurk(Number(e.target.value))}
+              className="w-32 rounded-md border bg-background px-2 py-1 text-sm"
+              aria-label="Murk to stop at"
+            />
+          )}
         </div>
 
         {stopMode !== "fixed" && (
           <p className="text-xs text-muted-foreground">
-            Pick one flatstone type — your{" "}
-            {stopMode === "budget" ? "budget" : "Murk"} is spent entirely on it.
+            Pick one flatstone type — the buy/sell cycle runs on it until{" "}
+            {stopMode === "budget"
+              ? "the budget is spent"
+              : stopMode === "murk_target"
+                ? "your Murk is down to the amount above"
+                : "your Murk runs out"}
+            . Duds are sold back on the spot and their refunds fund the next
+            buy, exactly as at the shop.
           </p>
         )}
 
@@ -1060,19 +1148,23 @@ function RitesTool({
             {stopMode === "fixed"
               ? `Up to ${formatMurks(fixedCost)} Murk`
               : stopMode === "budget"
-                ? `Spend up to ${formatMurks(budget)} Murk`
-                : "Spend all your Murk"}
+                ? `Spend ${formatMurks(budget)} Murk`
+                : stopMode === "murk_target"
+                  ? `Spend ${formatMurks(
+                      Math.max(0, (effMurks ?? 0) - Math.max(0, targetMurk)),
+                    )} Murk (down to ${formatMurks(Math.max(0, targetMurk))})`
+                  : "Spend all your Murk"}
             {overspend && (
               <span className="ml-2 text-red-500">— more than you have</span>
             )}
           </span>
           <Button
-            onClick={findKeepers}
+            onClick={buyRelics}
             disabled={busy || overspend}
             className="gap-1.5"
           >
             <Sparkles className="h-4 w-4" />
-            {busy ? "Working…" : "Find keepers"}
+            {busy ? "Buying…" : "Buy relics"}
           </Button>
           {busy && (
             <Button variant="ghost" size="sm" onClick={cancelFind}>
@@ -1109,197 +1201,260 @@ function RitesTool({
         />
       </div>
 
-      {/* Results */}
-      {plan && (
-        <div className="space-y-4 rounded-lg border p-4">
-          <div className="flex flex-wrap items-center gap-x-6 gap-y-1 text-sm">
-            <span>
-              Rolled <strong>{plan.generated}</strong> · kept{" "}
-              <strong className="text-green-600 dark:text-green-500">
-                {plan.kept}
-              </strong>{" "}
-              · sold {plan.duds}
-              {plan.rule_sold ? ` (${plan.rule_sold} by rule)` : ""}
-            </span>
-            <span>
-              Murk: {formatMurks(plan.murk_before)} →{" "}
-              <strong>{formatMurks(plan.murk_after)}</strong>{" "}
-              <span className="text-muted-foreground">
-                (−{formatMurks(plan.murk_cost)} +
-                {formatMurks(plan.murk_refunded)}
-                {plan.pending_sold_refund > 0 &&
-                  ` +${formatMurks(plan.pending_sold_refund)} staged sells`}
-                )
+      {/* Warnings about the most recent run (they concern the NEXT export) */}
+      {plan?.limited_by === "storage" && (
+        <p className="text-xs text-muted-foreground">
+          Storage is full — trash relics from the Inventory and run again.
+          Staged sells free space for this simulation.
+        </p>
+      )}
+      {plan && plan.kept > plan.add_capacity && (
+        <p className="text-xs text-amber-600 dark:text-amber-500">
+          Your next export could mint {plan.add_capacity} more relic(s) and this
+          batch kept {plan.kept} — the server already counts staged sells (each
+          frees a slot) and earlier staged purchases (each claims one). Stage
+          more sells, or export what you have before buying more.
+        </p>
+      )}
+
+      {/* Purchases — read from the staged batches, so they survive navigation */}
+      {batches.length > 0 && (
+        <div className="space-y-3">
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <h2 className="text-sm font-medium">
+              Purchases{" "}
+              <span className="text-xs font-normal text-muted-foreground">
+                — {batches.length} batch{batches.length === 1 ? "" : "es"} on
+                this save, newest first
               </span>
+            </h2>
+            <span className="text-xs text-muted-foreground">
+              {stagedKept} relic{stagedKept === 1 ? "" : "s"} staged ·{" "}
+              {formatMurks(Math.abs(stagedSpend))} Murk{" "}
+              {stagedSpend > 0 ? "gained" : "spent"}
             </span>
-            {plan.limited_by && (
-              <Badge variant="secondary">limited by {plan.limited_by}</Badge>
-            )}
           </div>
-          {plan.limited_by === "storage" && (
-            <p className="text-xs text-muted-foreground">
-              Storage is full — trash relics from the Inventory and re-run.
-              Staged sells free space for this simulation.
-            </p>
-          )}
-          {plan.kept > plan.add_capacity && (
-            <p className="text-xs text-amber-600 dark:text-amber-500">
-              Your next export can mint {plan.add_capacity} more relic(s) — the
-              server already counts staged sells (each frees a slot) and staged
-              purchases (each claims one). Stage more sells or export in
-              batches.
-            </p>
-          )}
-
-          {plan.keepers.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              No keepers — none of the rolled relics earned a spot in a selected
-              build's top loadouts (at the chosen match depth) or matched an
-              "always keep" rule. Every purchase was sold back, and the net Murk
-              loss above is committed to your Changes — buying is binding,
-              exactly as in-game. Export and re-upload the edited save to roll a
-              fresh stream, or try a wider match depth or a rule (re-running
-              re-views these same rolls; it never re-rolls).
-            </p>
-          ) : (
-            // Same presentation as the Inventory table (RelicNameCell +
-            // EffectList), with a "Kept for" column naming each keeper's builds.
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-10">
-                    <Checkbox
-                      checked={selected.size === plan.keepers.length}
-                      onCheckedChange={() =>
-                        commitSelection(
-                          plan,
-                          selected.size === plan.keepers.length
-                            ? new Set()
-                            : new Set(plan.keepers.map((_, i) => i)),
-                        )
-                      }
-                      aria-label="Keep or sell all keepers"
-                    />
-                  </TableHead>
-                  <TableHead>Relic</TableHead>
-                  <TableHead>Effects</TableHead>
-                  <TableHead className="w-44">Kept for</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {plan.keepers.map((k, i) => {
-                  const effectsCell = EffectList({
-                    effectIds: k.effects,
-                    isCurse: false,
-                    effectMap,
-                  })
-                  const cursesCell = EffectList({
-                    effectIds: k.curses,
-                    isCurse: true,
-                    effectMap,
-                  })
-                  return (
-                    <TableRow
-                      key={`${k.item_id}-${i}`}
-                      data-state={selected.has(i) ? "selected" : undefined}
-                    >
-                      <TableCell>
-                        <Checkbox
-                          checked={selected.has(i)}
-                          onCheckedChange={() => {
-                            const n = new Set(selected)
-                            n.has(i) ? n.delete(i) : n.add(i)
-                            commitSelection(plan, n)
-                          }}
-                          aria-label={`Keep ${k.name}`}
-                        />
-                      </TableCell>
-                      <TableCell className="min-w-[180px]">
-                        <RelicNameCell
-                          name={k.name}
-                          color={k.color}
-                          tier={TIER_NAMES[Number(k.tier)] ?? String(k.tier)}
-                          isDeep={k.is_deep}
-                        />
-                      </TableCell>
-                      <TableCell>
-                        {effectsCell || cursesCell ? (
-                          <div className="flex flex-col gap-1.5">
-                            {effectsCell}
-                            {cursesCell}
-                          </div>
-                        ) : (
-                          <span className="text-xs text-muted-foreground italic">
-                            —
-                          </span>
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex flex-wrap gap-1">
-                          {k.reason === "inclusion" && (
-                            <Badge variant="default" className="text-[10px]">
-                              kept by rule
-                            </Badge>
-                          )}
-                          {k.reason === "kept" && (
-                            <Badge variant="secondary" className="text-[10px]">
-                              no build filter
-                            </Badge>
-                          )}
-                          {k.builds.map((b, bi) => {
-                            const rank = k.build_ranks?.[bi] ?? 0
-                            const isBest = rank === 1
-                            return (
-                              <Badge
-                                key={b}
-                                variant={isBest ? "default" : "outline"}
-                                className={cn(
-                                  "text-[10px]",
-                                  isBest &&
-                                    "border-transparent bg-amber-500 text-amber-950 hover:bg-amber-500",
-                                )}
-                                title={
-                                  isBest
-                                    ? `Lands in ${b}'s single best loadout`
-                                    : rank > 0
-                                      ? `Lands in ${b}'s #${rank} ranked loadout`
-                                      : undefined
-                                }
-                              >
-                                {b}
-                                {rank > 0 && (
-                                  <span
-                                    className={
-                                      isBest ? "font-bold" : "opacity-70"
-                                    }
-                                  >
-                                    {" "}
-                                    #{rank}
-                                  </span>
-                                )}
-                              </Badge>
-                            )
-                          })}
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  )
-                })}
-              </TableBody>
-            </Table>
-          )}
-
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <p className="text-xs text-muted-foreground">
-              This batch is committed to your Changes — unchecking a keeper
-              sells it back for its refund. Export, then re-upload the edited
-              save to roll a fresh stream.
-            </p>
-            <Button variant="outline" onClick={cancelBatch} className="gap-1.5">
-              Cancel batch
-            </Button>
-          </div>
+          {batches.map(({ batch, mints }, i) => (
+            <BatchCard
+              key={batch.id}
+              batch={batch}
+              number={batches.length - i}
+              mints={mints}
+              effectMap={effectMap}
+              // Only the newest batch is expanded: a long session stacks a lot
+              // of them, and the older ones are receipts you scroll past.
+              defaultOpen={i === 0}
+              onCancel={() => cancelBatch(batch.id)}
+              onTrash={trashRelic}
+            />
+          ))}
+          <p className="text-xs text-muted-foreground">
+            Every batch above is committed to your Changes — buying is binding,
+            exactly as in-game. Trashing a relic sells it back for its refund;
+            cancelling a batch un-buys the whole trip. Running again buys a new
+            batch of relics.
+          </p>
         </div>
+      )}
+    </div>
+  )
+}
+
+/** One committed purchase run: its receipt, and the relics it still holds. */
+function BatchCard({
+  batch,
+  number,
+  mints,
+  effectMap,
+  defaultOpen,
+  onCancel,
+  onTrash,
+}: {
+  batch: RitesBatch
+  number: number
+  mints: MintSpec[]
+  effectMap: Map<number, string>
+  defaultOpen: boolean
+  onCancel: () => void
+  onTrash: (m: MintSpec) => void
+}) {
+  const [open, setOpen] = useState(defaultOpen)
+  const sold = Math.max(0, batch.rolled - mints.length)
+  return (
+    <div className="space-y-3 rounded-lg border p-4">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+        <button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-left"
+          aria-expanded={open}
+        >
+          <ChevronRight
+            className={cn(
+              "h-3.5 w-3.5 self-center text-muted-foreground transition-transform",
+              open && "rotate-90",
+            )}
+          />
+          <span className="text-sm font-medium">Batch {number}</span>
+          <span className="text-xs text-muted-foreground">
+            {formatWhen(batch.at)} · {batch.label}
+          </span>
+        </button>
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
+          <span>
+            Rolled <strong>{batch.rolled}</strong> · kept{" "}
+            <strong className="text-green-600 dark:text-green-500">
+              {mints.length}
+            </strong>{" "}
+            · sold {sold}
+          </span>
+          <span>
+            <strong>
+              {batch.murkDelta > 0 ? "+" : "−"}
+              {formatMurks(Math.abs(batch.murkDelta))}
+            </strong>{" "}
+            Murk
+            {batch.cost > 0 && (
+              <span className="text-muted-foreground">
+                {" "}
+                (−{formatMurks(batch.cost)} +{formatMurks(batch.refunded)})
+              </span>
+            )}
+          </span>
+          {batch.limitedBy && (
+            <Badge variant="secondary">
+              {LIMIT_TEXT[batch.limitedBy] ?? batch.limitedBy}
+            </Badge>
+          )}
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onCancel}
+            className="h-7 gap-1.5 text-xs text-muted-foreground"
+          >
+            <X className="h-3.5 w-3.5" />
+            Cancel batch
+          </Button>
+        </div>
+      </div>
+
+      {!open ? null : mints.length === 0 ? (
+        <p className="text-sm text-muted-foreground">
+          Nothing kept — every relic this batch rolled was sold back. The
+          buy/sell spread above is committed to your Changes and exports with
+          it: rolling is buying, exactly as in-game.
+        </p>
+      ) : (
+        // Same presentation as the Inventory table (RelicNameCell +
+        // EffectList), with a "Kept for" column naming each keeper's builds.
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Relic</TableHead>
+              <TableHead>Effects</TableHead>
+              <TableHead className="w-44">Kept for</TableHead>
+              <TableHead className="w-10" />
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {mints.map((m) => {
+              const effectsCell = EffectList({
+                effectIds: m.effects,
+                isCurse: false,
+                effectMap,
+              })
+              const cursesCell = EffectList({
+                effectIds: m.curses,
+                isCurse: true,
+                effectMap,
+              })
+              return (
+                <TableRow key={m.id}>
+                  <TableCell className="min-w-[180px]">
+                    <RelicNameCell
+                      name={m.name}
+                      color={m.color}
+                      tier={m.tier}
+                      isDeep={m.isDeep}
+                    />
+                  </TableCell>
+                  <TableCell>
+                    {effectsCell || cursesCell ? (
+                      <div className="flex flex-col gap-1.5">
+                        {effectsCell}
+                        {cursesCell}
+                      </div>
+                    ) : (
+                      <span className="text-xs text-muted-foreground italic">
+                        —
+                      </span>
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex flex-wrap gap-1">
+                      {m.reason === "inclusion" && (
+                        <Badge variant="default" className="text-[10px]">
+                          kept by rule
+                        </Badge>
+                      )}
+                      {m.reason === "kept" && (
+                        <Badge variant="secondary" className="text-[10px]">
+                          no build filter
+                        </Badge>
+                      )}
+                      {(m.builds ?? []).map((b, bi) => {
+                        const rank = m.buildRanks?.[bi] ?? 0
+                        const isBest = rank === 1
+                        return (
+                          <Badge
+                            key={b}
+                            variant={isBest ? "default" : "outline"}
+                            className={cn(
+                              "text-[10px]",
+                              isBest &&
+                                "border-transparent bg-amber-500 text-amber-950 hover:bg-amber-500",
+                            )}
+                            title={
+                              isBest
+                                ? `Lands in ${b}'s single best loadout`
+                                : rank > 0
+                                  ? `Lands in ${b}'s #${rank} ranked loadout`
+                                  : undefined
+                            }
+                          >
+                            {b}
+                            {rank > 0 && (
+                              <span
+                                className={isBest ? "font-bold" : "opacity-70"}
+                              >
+                                {" "}
+                                #{rank}
+                              </span>
+                            )}
+                          </Badge>
+                        )
+                      })}
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                      onClick={() => onTrash(m)}
+                      title={`Sell ${m.name} back for ${formatMurks(
+                        sellValue(effectCountOf(m.effects), m.isDeep),
+                      )} Murk`}
+                      aria-label={`Sell ${m.name} back`}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              )
+            })}
+          </TableBody>
+        </Table>
       )}
     </div>
   )
@@ -1348,10 +1503,7 @@ function AuthRitesBody() {
   )
 
   if (!profiles.data?.length) return <NoSave />
-  const buildOptions = (builds.data ?? []).map((b) => ({
-    id: b.id,
-    name: b.name,
-  }))
+  const buildOptions = labelBuilds(builds.data ?? [])
   if (!buildOptions.length) return <NoBuilds />
 
   const selected =
@@ -1414,7 +1566,7 @@ function AnonRitesBody() {
 
   const selected =
     allProfiles.find((p) => p.slot_index === slot) ?? allProfiles[0]
-  const buildOptions = builds.map((b) => ({ id: b.id, name: b.name }))
+  const buildOptions = labelBuilds(builds)
   const inlineById = Object.fromEntries(
     builds.map((b) => [b.id, toInlineBuild(b)]),
   )

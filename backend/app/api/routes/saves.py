@@ -70,6 +70,8 @@ from nrplanner.models import (
 )
 from nrplanner.optimizer import OPTIMIZER_VERSION, VesselOptimizer
 from nrplanner.rites import (
+    CYCLE_MODES,
+    STOP_MODES,
     BuildContext,
     PurchaseBucket,
     bulk_acquire,
@@ -2100,7 +2102,28 @@ def _resolve_rites_builds(
                 name=getattr(bdef, "name", None) or f"Build {i + 1}",
             ))
 
+    _disambiguate_names(ctxs)
     return ctxs  # may be empty: no builds -> rules-only keep/cull, no optimizer runs
+
+
+def _disambiguate_names(ctxs: list[BuildContext]) -> None:
+    """Make every selected build's display name unique, in place.
+
+    Build names are free text and routinely collide (the same "Katanas" saved
+    for two Nightfarers). The name is what the keeper rows are tagged with, so
+    a collision leaves the user unable to tell which build kept a relic —
+    qualify with the character, then with an ordinal if even that ties.
+    """
+    counts: dict[str, int] = {}
+    for c in ctxs:
+        counts[c.name] = counts.get(c.name, 0) + 1
+    seen: dict[str, int] = {}
+    for c in ctxs:
+        if counts[c.name] < 2:
+            continue
+        qualified = f"{c.name} ({c.build.character})"
+        seen[qualified] = seen.get(qualified, 0) + 1
+        c.name = qualified if seen[qualified] == 1 else f"{qualified} {seen[qualified]}"
 
 
 def _resolve_buckets(buckets_raw: str) -> list[PurchaseBucket]:
@@ -2154,17 +2177,27 @@ def _parse_rules(raw: str, field_name: str) -> list[dict]:
     return val
 
 
-def _rites_roll_seed(slot_index: int, current_murk: int, owned: list) -> int:
-    """Deterministic RNG seed from the save's current purchasable state.
+def _rites_roll_seed(slot_index: int, current_murk: int, owned: list,
+                     roll_epoch: int = 0) -> int:
+    """Deterministic RNG seed from the save state plus the batch being rolled.
 
-    Anti-save-scum (1:1 fidelity, see CLAUDE.md): re-running the purchase on the SAME
-    save state reproduces the identical relics, so declining to export and retrying
-    gains nothing. A genuinely different roll requires actually CHANGING the save state
-    — exporting and re-importing, which spends the Murk and adds the relics — mirroring
-    the game, where a purchase can't be previewed-and-retried for free. Uses a stable
-    hash (not builtin hash()) so it's identical across processes/restarts.
+    Anti-save-scum (1:1 fidelity, see CLAUDE.md): re-rolling the SAME batch on the
+    same save reproduces the identical relics, so declining to export and retrying
+    gains nothing. A genuinely different roll requires actually COMMITTING a
+    purchase — mirroring the game, where a shop roll can't be previewed and
+    retried for free.
+
+    ``roll_epoch`` is how many batches the client has already committed against
+    this save (client-side staged state, same trust model as
+    ``staged_murk_delta``). It advances the stream so a SECOND batch buys new
+    relics instead of re-viewing the first batch's rolls — in-game, buying again
+    rolls again. Cancelling the newest batch takes the epoch back down with it,
+    so cancel-and-retry replays that batch exactly rather than re-rolling it.
+
+    Uses a stable hash (not builtin hash()) so it's identical across
+    processes/restarts.
     """
-    fp = f"{slot_index}|{current_murk}|{relics_signature(owned)}"
+    fp = f"{slot_index}|{current_murk}|{relics_signature(owned)}|{max(0, roll_epoch)}"
     return int.from_bytes(hashlib.sha256(fp.encode()).digest()[:8], "big")
 
 
@@ -2266,6 +2299,8 @@ def _rites_plan(
     staged_mints: list[StagedMint] | None = None,
     staged_murk_delta: int = 0,
     staged_favorites: dict[int, bool] | None = None,
+    target_murk: int | None = None,
+    roll_epoch: int = 0,
 ) -> dict:
     """Compute a bulk-purchase plan. Reads current Murk, owned relics, and
     capacity from the uploaded save (1:1 fidelity — never client-supplied). Persists
@@ -2277,14 +2312,17 @@ def _rites_plan(
     them as gone (freed storage, refunds spendable).
 
     ``staged_mints`` + ``staged_murk_delta`` are the app's live Murk emulation:
-    purchases staged in an earlier rites run but not yet exported. Mints join the
-    world state as owned content (they occupy storage and dedup re-rolled copies
-    to duds — a staged keeper can never be minted twice) and the wallet starts
-    from the spent-down value, so re-planning can never double-spend Murk the
-    app already committed. The delta is client-supplied (dud refunds from the
-    original batch cannot be reconstructed from the keepers alone — same trust
-    model as /saves/export-add-relics) but only ever LOWERS the wallet: positive
-    deltas are clamped, so a client cannot manufacture planning Murk.
+    purchases from earlier rites batches, committed in-app but not yet exported.
+    Mints join the world state as owned content (they occupy storage and dedup
+    re-rolled copies to duds — a staged keeper can never be minted twice) and
+    the wallet starts from the spent-down value, so a follow-up batch can never
+    double-spend Murk the app already committed. The delta is client-supplied
+    (dud refunds from the original batch cannot be reconstructed from the
+    keepers alone — same trust model as /saves/export-add-relics) but only ever
+    LOWERS the wallet: positive deltas are clamped, so a client cannot
+    manufacture planning Murk. ``roll_epoch`` (how many batches are already
+    committed) advances the roll stream so each batch buys NEW relics — see
+    _rites_roll_seed.
 
     With no builds selected, keeping is rules-only and NO optimizer runs (instant).
     With builds, one optimize pass runs per build. ``progress`` (if given) is called
@@ -2359,14 +2397,14 @@ def _rites_plan(
     wallet = state.wallet
     pending_sold_refund = state.pending_sold_refund
 
-    if stop_mode == "all_murk":
+    if stop_mode in CYCLE_MODES:
         # Pure in-game storage cap. The writer's ghost add-capacity is an
         # export-time concern only — the in-game buy/sell cycle is never
         # constrained by it, so neither is the simulation.
         storage_left = state.storage_left_ingame
     else:
-        # Export-time capacity also caps a fixed/budget batch (each staged
-        # sell tombstones a ghost slot; each staged mint will consume one).
+        # Export-time capacity also caps a fixed batch (each staged sell
+        # tombstones a ghost slot; each staged mint will consume one).
         storage_left = min(state.storage_left_ingame, state.ghost_capacity)
 
     scorer = BuildScorer(ds)
@@ -2394,7 +2432,7 @@ def _rites_plan(
         r = bulk_acquire(
             builds=build_ctxs, owned=owned, current_murk=wallet,
             buckets=buckets, generator=get_relic_generator(), ds=ds,
-            stop_mode=stop_mode, budget=budget,
+            stop_mode=stop_mode, budget=budget, target_murk=target_murk,
             inclusion_rules=inclusion_rules, exclusion_rules=exclusion_rules,
             storage_cap_left=storage_left,
             extra_budget=pending_sold_refund,
@@ -2403,14 +2441,13 @@ def _rites_plan(
             max_per_vessel=_RITES_MAX_PER_VESSEL,
             progress=(lambda i, t, name: _emit(
                 "matching", i, t, f"Matching build {i}/{t}: {name}", name)),
-            # Deterministic per save-state: re-running without exporting can't
-            # re-roll. Seeded from the RAW save (owned_all, save Murk) — staged
-            # sells AND staged mints are app-side state and must never perturb
-            # the roll stream (re-staging a different diff is not a free
-            # re-roll; new rolls require export/re-import). A re-run with mints
-            # staged replays the same stream: staged content dedups to duds,
-            # so it honestly buys-and-resells at a spread loss instead.
-            seed=_rites_roll_seed(slot_index, current_murk, owned_all),
+            # Deterministic per (raw save state + batch index): re-rolling the
+            # SAME batch can't re-roll it, but the next batch buys new relics.
+            # Seeded from the RAW save (owned_all, save Murk) — WHICH relics
+            # are staged must never perturb the stream (re-staging a different
+            # diff is not a free re-roll); only committing another batch
+            # advances it. See _rites_roll_seed.
+            seed=_rites_roll_seed(slot_index, current_murk, owned_all, roll_epoch),
             owned_used_fps=owned_used,
         )
         for k in r.keepers:
@@ -2463,6 +2500,8 @@ async def rites_plan(
     buckets: str = Form("[]"),
     stop_mode: str = Form("fixed"),
     budget: int | None = Form(None),
+    target_murk: int | None = Form(None),
+    roll_epoch: int = Form(0),
     top_n: int = Form(10),
     inclusion_rules: str = Form("[]"),
     exclusion_rules: str = Form("[]"),
@@ -2485,9 +2524,14 @@ async def rites_plan(
     inventory state — staged spend persists until export and can't be
     double-spent (see _rites_plan).
     """
-    if stop_mode not in ("fixed", "budget", "all_murk"):
+    if stop_mode not in STOP_MODES:
         raise HTTPException(
-            status_code=422, detail="stop_mode must be one of fixed|budget|all_murk.")
+            status_code=422,
+            detail=f"stop_mode must be one of {'|'.join(sorted(STOP_MODES))}.")
+    if stop_mode == "murk_target" and (target_murk is None or target_murk < 0):
+        raise HTTPException(
+            status_code=422,
+            detail="target_murk (>= 0) is required when stop_mode is murk_target.")
     if not 1 <= top_n <= 10:
         raise HTTPException(
             status_code=422, detail="top_n must be between 1 and 10.")
@@ -2511,7 +2555,7 @@ async def rites_plan(
         stop_mode, budget, ds, executor, top_n, incl, excl,
         snapshot_seeds=seeds, sold_handles=sold,
         staged_mints=mints, staged_murk_delta=staged_murk_delta,
-        staged_favorites=favs,
+        staged_favorites=favs, target_murk=target_murk, roll_epoch=roll_epoch,
     )
     return RitesPlanResponse(**plan)
 
@@ -2529,6 +2573,8 @@ async def rites_plan_stream(
     buckets: str = Form("[]"),
     stop_mode: str = Form("fixed"),
     budget: int | None = Form(None),
+    target_murk: int | None = Form(None),
+    roll_epoch: int = Form(0),
     top_n: int = Form(10),
     inclusion_rules: str = Form("[]"),
     exclusion_rules: str = Form("[]"),
@@ -2550,9 +2596,14 @@ async def rites_plan_stream(
     heavy plan runs in a worker thread; its per-build progress callback is bridged to the
     SSE stream through a thread-safe queue.
     """
-    if stop_mode not in ("fixed", "budget", "all_murk"):
+    if stop_mode not in STOP_MODES:
         raise HTTPException(
-            status_code=422, detail="stop_mode must be one of fixed|budget|all_murk.")
+            status_code=422,
+            detail=f"stop_mode must be one of {'|'.join(sorted(STOP_MODES))}.")
+    if stop_mode == "murk_target" and (target_murk is None or target_murk < 0):
+        raise HTTPException(
+            status_code=422,
+            detail="target_murk (>= 0) is required when stop_mode is murk_target.")
     if not 1 <= top_n <= 10:
         raise HTTPException(
             status_code=422, detail="top_n must be between 1 and 10.")
@@ -2589,7 +2640,8 @@ async def rites_plan_stream(
                     progress=_progress, snapshot_seeds=seeds, sold_handles=sold,
                     staged_mints=parsed_mints,
                     staged_murk_delta=staged_murk_delta,
-                    staged_favorites=parsed_favs)
+                    staged_favorites=parsed_favs, target_murk=target_murk,
+                    roll_epoch=roll_epoch)
             except HTTPException as exc:
                 holder["error"] = exc.detail
             except Exception as exc:  # noqa: BLE001 - surfaced as an SSE error event

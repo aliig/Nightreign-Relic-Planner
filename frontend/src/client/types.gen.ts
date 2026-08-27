@@ -37,6 +37,8 @@ export type Body_saves_rites_plan = {
     buckets?: string;
     stop_mode?: string;
     budget?: (number | null);
+    target_murk?: (number | null);
+    roll_epoch?: number;
     top_n?: number;
     inclusion_rules?: string;
     exclusion_rules?: string;
@@ -54,6 +56,8 @@ export type Body_saves_rites_plan_stream = {
     buckets?: string;
     stop_mode?: string;
     budget?: (number | null);
+    target_murk?: (number | null);
+    roll_epoch?: number;
     top_n?: number;
     inclusion_rules?: string;
     exclusion_rules?: string;

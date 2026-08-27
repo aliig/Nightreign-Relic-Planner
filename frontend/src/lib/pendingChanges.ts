@@ -93,6 +93,40 @@ export type MintSpec = {
   oddsSource: string
   /** Build names whose top-N loadouts use this relic (why it's a keeper). */
   builds?: string[]
+  /** Best 1-based loadout rank per `builds` entry (aligned; 1 = best, 0 = unknown). */
+  buildRanks?: number[]
+  /** "build" | "inclusion" | "kept" — which arm of the keep waterfall kept it. */
+  reason?: string
+  /** The rites batch that bought it (RitesBatch.id). Absent on pre-batch mints. */
+  batchId?: string
+}
+
+/**
+ * One committed Relic Rites purchase run, kept so the Rites page can show what
+ * was bought after navigating away — and so several batches read as the
+ * sequence of shop visits they are, rather than one undifferentiated pile.
+ * The relics themselves live in `mints` (linked by `batchId`); this is the
+ * receipt.
+ */
+export type RitesBatch = {
+  id: string
+  /**
+   * Roll epoch this batch was bought at — the number of batches already
+   * committed when it rolled, and an input to the server's deterministic roll
+   * seed. The next batch rolls at max(epoch) + 1, so it buys NEW relics;
+   * cancelling the newest batch takes the epoch back down with it, so a retry
+   * replays that batch instead of re-rolling it (anti-save-scum).
+   */
+  epoch: number
+  at: number // Date.now() at commit, for the batch separator
+  /** This batch's net Murk (negative = spend). Kept in sync as relics are trashed. */
+  murkDelta: number
+  rolled: number // relics bought
+  kept: number // keepers at commit time (trashing one does not rewrite history)
+  cost: number // gross Murk spent buying
+  refunded: number // Murk credited from selling the duds back
+  label: string // what was asked for, e.g. "Spend 100,000 Murk on Scenic Flatstone"
+  limitedBy?: string | null // "murk" | "storage" | "gen_max" — what cut it short
 }
 
 export type SlotPending = {
@@ -101,6 +135,8 @@ export type SlotPending = {
   loadoutOps: PendingLoadoutOp[]
   // Relics to mint (Relic Rites purchases). Applied on export via export-add-relics.
   mints: MintSpec[]
+  // Committed rites batches, oldest first (the receipts for `mints`).
+  batches: RitesBatch[]
   // Net Murk delta of the committed Relic Rites batch (negative = cost, after dud
   // sell-refunds). Applied on export alongside the mints. Stands on its own even
   // with zero mints: rolling IS buying, so an all-dud batch still costs its
@@ -125,6 +161,7 @@ function emptySlot(): SlotPending {
     favorites: {},
     loadoutOps: [],
     mints: [],
+    batches: [],
     murkDelta: 0,
     meta: {},
   }
@@ -141,10 +178,38 @@ function load(): State {
     for (const [k, v] of Object.entries(parsed)) {
       out[Number(k)] = { ...emptySlot(), ...v }
     }
-    return backfillMintHandles(out)
+    return backfillBatches(backfillMintHandles(out))
   } catch {
     return {}
   }
+}
+
+/**
+ * Give pre-batch staged mints a batch to belong to, so they still show up on
+ * the Rites page (and can be cancelled) after the upgrade. There was exactly
+ * one batch per slot back then, and its roll parameters weren't recorded.
+ */
+function backfillBatches(out: State): State {
+  for (const s of Object.values(out)) {
+    if (s.batches.length || (s.mints.length === 0 && s.murkDelta === 0))
+      continue
+    const id = `batch_legacy_${Math.random().toString(36).slice(2, 8)}`
+    for (const m of s.mints) m.batchId = id
+    s.batches = [
+      {
+        id,
+        epoch: 0,
+        at: 0, // unknown — rendered as "earlier"
+        murkDelta: s.murkDelta,
+        rolled: s.mints.length,
+        kept: s.mints.length,
+        cost: 0,
+        refunded: 0,
+        label: "Earlier purchase",
+      },
+    ]
+  }
+  return out
 }
 
 /** Assign synthetic handles to mints staged before the `handle` field existed. */
@@ -250,6 +315,7 @@ function updateSlot(slot: number, fn: (s: SlotPending) => SlotPending) {
     Object.keys(s.favorites).length === 0 &&
     s.loadoutOps.length === 0 &&
     s.mints.length === 0 &&
+    s.batches.length === 0 &&
     s.murkDelta === 0
   ) {
     delete next[slot]
@@ -259,8 +325,11 @@ function updateSlot(slot: number, fn: (s: SlotPending) => SlotPending) {
 
 let idCounter = 0
 function nextId(): string {
+  // The counter restarts every page load while ids (mints, batches, loadout
+  // ops) persist in localStorage, so the random suffix is what actually keeps
+  // them unique — a repeat id would make "remove this one" hit the wrong row.
   idCounter += 1
-  return `op_${idCounter}_${idCounter * 2654435761}`
+  return `op_${idCounter}_${Math.random().toString(36).slice(2, 10)}`
 }
 
 // --- mutators --------------------------------------------------------------
@@ -321,71 +390,120 @@ export function removeLoadoutOp(slot: number, id: string) {
   }))
 }
 
-/** A mint for the staged rites batch. `id`/`handle` are optional: pass a
- * surviving mint's values to preserve its identity across a batch refresh
- * (staged loadout ops reference mints by synthetic handle). */
-export type RitesBatchSpec = Omit<MintSpec, "id" | "handle"> &
-  Partial<Pick<MintSpec, "id" | "handle">>
+/** A relic bought in a rites batch. `handle`/`id` are assigned here. */
+export type RitesBatchSpec = Omit<MintSpec, "id" | "handle" | "batchId">
+
+/** The receipt fields a caller supplies when committing a batch. */
+export type RitesBatchSummary = Omit<
+  RitesBatch,
+  "id" | "epoch" | "at" | "murkDelta"
+>
 
 /**
- * Commit (or refresh) THE staged Relic Rites batch for a slot — there is
- * exactly one. The roll stream is deterministic per save state, so a re-run of
- * Find Keepers re-views the same stream: the batch is REPLACED, never stacked
- * (stacking would double-buy the same rolls). `murkDelta` is the batch's
- * absolute net Murk (negative = cost after dud refunds) and is committed even
- * with zero kept relics: rolling IS buying, so an all-dud batch still costs
- * its buy/sell spread — that loss must export, or previewing a bad roll would
- * be free (anti-save-scum, 1:1 fidelity).
- *
- * Staged loadout ops referencing a mint that did not survive the refresh are
- * dropped (they could never export); their labels are returned so callers can
- * warn the user.
+ * The roll epoch the NEXT batch buys at: one past the newest live batch (0 on
+ * a clean slot). Send it with the plan request — the server folds it into the
+ * roll seed, so each committed batch buys new relics while re-rolling a
+ * cancelled batch replays it exactly. Derived, never stored, so cancelling the
+ * newest batch automatically takes the epoch back down with it.
  */
-export function replaceRitesBatch(
+export function nextRollEpoch(s: SlotPending): number {
+  return s.batches.reduce((n, b) => Math.max(n, b.epoch + 1), 0)
+}
+
+/**
+ * Commit a Relic Rites batch: its keepers are minted, its net Murk is spent.
+ * Batches STACK — a second run is a second trip to the shop and buys its own
+ * relics (see nextRollEpoch), so it is appended, never merged into the last
+ * one. `murkDelta` is the batch's absolute net Murk (negative = cost after dud
+ * refunds) and is committed even with zero keepers: rolling IS buying, so an
+ * all-dud batch still costs its buy/sell spread — that loss must export, or
+ * previewing a bad roll would be free (anti-save-scum, 1:1 fidelity).
+ */
+export function appendRitesBatch(
   slot: number,
   specs: RitesBatchSpec[],
   murkDelta: number,
-): string[] {
-  const dropped: string[] = []
-  // Fresh handles go below the global minimum, which already accounts for the
-  // preserved handles (they exist in the current state being replaced).
+  summary: RitesBatchSummary,
+): string {
+  // A run that bought nothing (target already met, nothing affordable) is not
+  // a shop visit: there is no loss to commit and nothing to show.
+  if (!specs.length && !murkDelta && !summary.rolled) return ""
+  const batchId = nextId()
   let nextHandle = nextMintHandle()
+  updateSlot(slot, (s) => ({
+    ...s,
+    mints: [
+      ...s.mints,
+      ...specs.map((spec) => ({
+        ...spec,
+        id: nextId(),
+        handle: nextHandle--,
+        batchId,
+      })),
+    ],
+    batches: [
+      ...s.batches,
+      {
+        ...summary,
+        id: batchId,
+        epoch: nextRollEpoch(s),
+        at: Date.now(),
+        murkDelta,
+      },
+    ],
+    murkDelta: s.murkDelta + murkDelta,
+  }))
+  return batchId
+}
+
+/**
+ * Cancel one committed batch outright: its mints, its Murk delta, and any
+ * staged loadout ops referencing its relics. This is the deliberate escape
+ * hatch (misclick, changed mind before export) — the default path keeps a
+ * rolled batch committed. Cancelling the newest batch also frees its roll
+ * epoch, so re-running replays that same batch rather than re-rolling it.
+ * Returns the labels of any dropped loadout ops so callers can warn.
+ */
+export function removeRitesBatch(slot: number, batchId: string): string[] {
+  const dropped: string[] = []
   updateSlot(slot, (s) => {
-    const mints = specs.map((spec) => ({
-      ...spec,
-      id: spec.id ?? nextId(),
-      handle: spec.handle ?? nextHandle--,
-    }))
-    const surviving = new Set(mints.map((m) => m.handle))
-    const loadoutOps = s.loadoutOps.filter((o) => {
-      if (!("ga_handles" in o)) return true
-      // Synthetic (negative) handles are mint refs; real handles always survive.
-      const ok = o.ga_handles.every((h) => h >= 0 || surviving.has(h))
-      if (!ok)
-        dropped.push(
-          o.kind === "add"
-            ? `Add loadout "${o.name}"`
-            : `Replace "${o.targetName || "loadout"}"`,
-        )
-      return ok
-    })
-    return { ...s, mints, loadoutOps, murkDelta }
+    const batch = s.batches.find((b) => b.id === batchId)
+    if (!batch) return s
+    const gone = new Set(
+      s.mints.filter((m) => m.batchId === batchId).map((m) => m.handle),
+    )
+    return {
+      ...s,
+      mints: s.mints.filter((m) => m.batchId !== batchId),
+      batches: s.batches.filter((b) => b.id !== batchId),
+      murkDelta: s.murkDelta - batch.murkDelta,
+      loadoutOps: s.loadoutOps.filter((o) => {
+        if (!("ga_handles" in o)) return true
+        const ok = o.ga_handles.every((h) => !gone.has(h))
+        if (!ok)
+          dropped.push(
+            o.kind === "add"
+              ? `Add loadout "${o.name}"`
+              : `Replace "${o.targetName || "loadout"}"`,
+          )
+        return ok
+      }),
+    }
   })
   return dropped
 }
 
 /**
- * Cancel the slot's staged rites batch outright: mints, the batch Murk delta,
- * and any staged loadout ops referencing the batch's synthetic handles. This
- * is the deliberate escape hatch (misclicks, changed mind before export) — the
- * default path keeps the rolled batch committed. Returns the labels of any
- * dropped loadout ops so callers can warn.
+ * Cancel EVERY committed batch for a slot (the Changes panel's "undo all
+ * purchases"): mints, the batches and their Murk, and any staged loadout op
+ * that used a purchased relic. Returns the dropped ops' labels.
  */
 export function clearRitesBatch(slot: number): string[] {
   const dropped: string[] = []
   updateSlot(slot, (s) => ({
     ...s,
     mints: [],
+    batches: [],
     murkDelta: 0,
     loadoutOps: s.loadoutOps.filter((o) => {
       if (!("ga_handles" in o && o.ga_handles.some((h) => h < 0))) return true
@@ -401,30 +519,28 @@ export function clearRitesBatch(slot: number): string[] {
 }
 
 /**
- * Un-stage one minted relic. Faithful buy-then-sell: the relic was still
- * bought in the batch, so removing it credits its SELL value back into the
- * batch's Murk delta (exactly like unchecking it on the Rites page). The
- * batch itself stands — removing every mint leaves the all-sold spread loss,
- * not a clean slate (use clearRitesBatch to cancel the batch).
+ * Un-stage one minted relic (the Rites page's trash button). Faithful
+ * buy-then-sell: the relic was still bought in its batch, so removing it
+ * credits its SELL value back — to the slot AND to that batch's receipt. The
+ * batch itself stands: trashing every relic it bought leaves the all-sold
+ * spread loss, not a clean slate (use removeRitesBatch to cancel the batch).
  */
 export function removeMint(slot: number, id: string): void {
   updateSlot(slot, (s) => {
     const removed = s.mints.find((m) => m.id === id)
     if (!removed) return s
+    const refund = sellValue(effectCountOf(removed.effects), removed.isDeep)
     const mints = s.mints.filter((m) => m.id !== id)
+    const batches = s.batches.map((b) =>
+      b.id === removed.batchId ? { ...b, murkDelta: b.murkDelta + refund } : b,
+    )
     // Cascade: staged loadout ops referencing the mint's synthetic handle can
     // never export (the relic will not exist), so they go with it. Callers
     // confirm with the user first when mintReferences() is non-empty.
     const loadoutOps = s.loadoutOps.filter(
       (o) => !("ga_handles" in o && o.ga_handles.includes(removed.handle)),
     )
-    return {
-      ...s,
-      mints,
-      loadoutOps,
-      murkDelta:
-        s.murkDelta + sellValue(effectCountOf(removed.effects), removed.isDeep),
-    }
+    return { ...s, mints, batches, loadoutOps, murkDelta: s.murkDelta + refund }
   })
 }
 

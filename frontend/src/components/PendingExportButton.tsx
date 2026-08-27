@@ -104,8 +104,9 @@ export function PendingExportButton() {
     setMintConfirm({ slot, mintIds, refNames: [...refNames] })
   }
 
-  // Cancel the whole rites batch: every kept mint AND the committed Murk loss
-  // (a batch with zero mints is still a real committed loss — the all-dud case).
+  // Cancel EVERY rites batch for the slot: every kept mint AND the committed
+  // Murk loss (a batch with zero mints is still a real committed loss — the
+  // all-dud case). Per-batch cancelling lives on the Rites page.
   function undoBatch(slot: number) {
     const s = readAll()[slot]
     if (!s) return
@@ -181,6 +182,7 @@ export function PendingExportButton() {
         label:
           s.murkDelta < 0
             ? `Spend ${formatMurks(-s.murkDelta)} Murk on purchases` +
+              (s.batches.length > 1 ? ` (${s.batches.length} batches)` : "") +
               (s.mints.length === 0 ? " (all sold back)" : "")
             : `Net +${formatMurks(s.murkDelta)} Murk from purchases`,
         undo: () => undoBatch(slot),

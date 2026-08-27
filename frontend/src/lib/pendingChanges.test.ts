@@ -12,6 +12,15 @@ async function freshStore(): Promise<PendingModule> {
   return import("./pendingChanges")
 }
 
+/** A stand-in rites receipt for tests that only care about the staged relics. */
+const RECEIPT = {
+  rolled: 1,
+  kept: 1,
+  cost: 600,
+  refunded: 0,
+  label: "Test batch",
+}
+
 describe("pendingChanges staleness guard", () => {
   beforeEach(() => {
     localStorage.clear()
@@ -85,7 +94,7 @@ describe("pendingChanges staleness guard", () => {
   })
 })
 
-describe("pendingChanges mints (Relic Rites)", () => {
+describe("pendingChanges rites batches", () => {
   beforeEach(() => {
     localStorage.clear()
   })
@@ -102,80 +111,66 @@ describe("pendingChanges mints (Relic Rites)", () => {
     oddsSource: "exact",
   })
 
-  it("commits the batch with stable ids and its absolute murk delta", async () => {
+  const receipt = (over: Record<string, unknown> = {}) => ({
+    rolled: 2,
+    kept: 2,
+    cost: 1200,
+    refunded: 0,
+    label: "Buy 2 Scenic Flatstone",
+    ...over,
+  })
+
+  it("commits the batch with its relics and its absolute murk delta", async () => {
     const pc = await freshStore()
-    pc.replaceRitesBatch(0, [spec(200), spec(201)], -1200)
+    pc.appendRitesBatch(0, [spec(200), spec(201)], -1200, receipt())
     const s = pc.readSlot(0)
     expect(s.mints).toHaveLength(2)
     expect(s.mints[0].id).toBeTruthy()
     expect(s.mints[0].real_id).toBe(200)
     expect(s.murkDelta).toBe(-1200)
+    expect(s.batches).toHaveLength(1)
+    expect(s.batches[0]).toMatchObject({ epoch: 0, murkDelta: -1200, kept: 2 })
+    // Every relic is linked to the batch that bought it.
+    expect(s.mints.every((m) => m.batchId === s.batches[0].id)).toBe(true)
   })
 
-  it("a re-run REPLACES the batch (same stream re-viewed, never stacked)", async () => {
+  it("batches STACK — a second run is a second trip to the shop", async () => {
     const pc = await freshStore()
-    pc.replaceRitesBatch(0, [spec(200), spec(201)], -1200)
-    pc.replaceRitesBatch(0, [spec(202)], -600)
-    expect(pc.readSlot(0).mints.map((m) => m.real_id)).toEqual([202])
+    pc.appendRitesBatch(0, [spec(200), spec(201)], -1200, receipt())
+    pc.appendRitesBatch(0, [spec(202)], -600, receipt({ rolled: 1, kept: 1 }))
+    const s = pc.readSlot(0)
+    expect(s.mints.map((m) => m.real_id)).toEqual([200, 201, 202])
+    expect(s.murkDelta).toBe(-1800)
+    expect(s.batches.map((b) => b.epoch)).toEqual([0, 1])
+  })
+
+  it("the next roll epoch advances per batch and rewinds with a cancel", async () => {
+    const pc = await freshStore()
+    expect(pc.nextRollEpoch(pc.readSlot(0))).toBe(0)
+    pc.appendRitesBatch(0, [spec(200)], -600, receipt())
+    expect(pc.nextRollEpoch(pc.readSlot(0))).toBe(1)
+    const second = pc.appendRitesBatch(0, [spec(201)], -600, receipt())
+    expect(pc.nextRollEpoch(pc.readSlot(0))).toBe(2)
+    // Cancelling the newest batch frees its epoch, so a retry REPLAYS it
+    // rather than re-rolling it (anti-save-scum).
+    pc.removeRitesBatch(0, second)
+    expect(pc.nextRollEpoch(pc.readSlot(0))).toBe(1)
+  })
+
+  it("cancelling an older batch does not free the newest epoch", async () => {
+    const pc = await freshStore()
+    const first = pc.appendRitesBatch(0, [spec(200)], -600, receipt())
+    pc.appendRitesBatch(0, [spec(201)], -600, receipt())
+    pc.removeRitesBatch(0, first)
+    expect(pc.nextRollEpoch(pc.readSlot(0))).toBe(2)
+    expect(pc.readSlot(0).mints.map((m) => m.real_id)).toEqual([201])
     expect(pc.readSlot(0).murkDelta).toBe(-600)
   })
 
-  it("preserves a surviving mint's id/handle across a batch refresh", async () => {
+  it("removeRitesBatch drops only that batch's mints and loadout ops", async () => {
     const pc = await freshStore()
-    pc.replaceRitesBatch(0, [spec(200), spec(201)], -1200)
-    const kept = pc.readSlot(0).mints[0]
-    pc.replaceRitesBatch(
-      0,
-      [{ ...spec(200), id: kept.id, handle: kept.handle }, spec(202)],
-      -1800,
-    )
-    const after = pc.readSlot(0).mints
-    expect(after).toHaveLength(2)
-    expect(after[0]).toMatchObject({ id: kept.id, handle: kept.handle })
-    expect(after[1].handle).toBeLessThan(0)
-    expect(after[1].handle).not.toBe(kept.handle)
-  })
-
-  it("keeps the all-sold loss when every mint is removed (batch still stands)", async () => {
-    const pc = await freshStore()
-    pc.replaceRitesBatch(0, [spec(200), spec(201)], -1200)
-    pc.removeMint(0, pc.readSlot(0).mints[0].id)
-    pc.removeMint(0, pc.readSlot(0).mints[0].id)
-    // Both 3-effect normal relics sold back for 550 each; the buy/sell spread
-    // stays committed — removing keepers never un-buys the batch.
-    expect(pc.readSlot(0).mints).toHaveLength(0)
-    expect(pc.readSlot(0).murkDelta).toBe(-1200 + 550 + 550)
-  })
-
-  it("credits the removed keeper's sell value into the murk delta", async () => {
-    const pc = await freshStore()
-    pc.replaceRitesBatch(0, [spec(200), spec(201)], -1200)
-    const firstId = pc.readSlot(0).mints[0].id
-    pc.removeMint(0, firstId)
-    // spec() is a 3-effect normal relic -> sold back for 550 (buy-then-sell).
-    expect(pc.readSlot(0).murkDelta).toBe(-1200 + 550)
-  })
-
-  it("an empty batch with no delta stages nothing", async () => {
-    const pc = await freshStore()
-    pc.replaceRitesBatch(0, [], 0)
-    expect(pc.readAll()[0]).toBeUndefined()
-  })
-
-  it("an all-dud batch stages a pure loss (no mints, negative delta)", async () => {
-    const pc = await freshStore()
-    pc.replaceRitesBatch(0, [], -3_000)
-    expect(pc.readSlot(0).mints).toHaveLength(0)
-    expect(pc.readSlot(0).murkDelta).toBe(-3_000)
-    expect(pc.murkAdjustment(pc.readSlot(0))).toBe(-3_000)
-    // clearRitesBatch is the only way back to a clean slate.
-    pc.clearRitesBatch(0)
-    expect(pc.readAll()[0]).toBeUndefined()
-  })
-
-  it("replaceRitesBatch prunes loadout ops referencing dropped mints", async () => {
-    const pc = await freshStore()
-    pc.replaceRitesBatch(0, [spec(200), spec(201)], -1200)
+    const first = pc.appendRitesBatch(0, [spec(200)], -600, receipt())
+    pc.appendRitesBatch(0, [spec(201)], -600, receipt())
     const [a, b] = pc.readSlot(0).mints
     pc.addLoadoutOp(0, {
       kind: "add",
@@ -191,21 +186,55 @@ describe("pendingChanges mints (Relic Rites)", () => {
       ga_handles: [b.handle],
       name: "Uses B",
     })
-    // Refresh keeps only mint B.
-    const dropped = pc.replaceRitesBatch(
-      0,
-      [{ ...spec(201), id: b.id, handle: b.handle }],
-      -600,
-    )
+    const dropped = pc.removeRitesBatch(0, first)
     expect(dropped).toEqual(['Add loadout "Uses A"'])
     expect(
       pc.readSlot(0).loadoutOps.map((o) => o.kind === "add" && o.name),
     ).toEqual(["Uses B"])
   })
 
-  it("clearRitesBatch cancels mints, delta, and batch-referencing ops", async () => {
+  it("keeps the all-sold loss when every relic is trashed (batch stands)", async () => {
     const pc = await freshStore()
-    pc.replaceRitesBatch(0, [spec(200)], -600)
+    pc.appendRitesBatch(0, [spec(200), spec(201)], -1200, receipt())
+    pc.removeMint(0, pc.readSlot(0).mints[0].id)
+    pc.removeMint(0, pc.readSlot(0).mints[0].id)
+    // Both 3-effect normal relics sold back for 550 each; the buy/sell spread
+    // stays committed — trashing keepers never un-buys the batch.
+    expect(pc.readSlot(0).mints).toHaveLength(0)
+    expect(pc.readSlot(0).murkDelta).toBe(-1200 + 550 + 550)
+    expect(pc.readSlot(0).batches).toHaveLength(1)
+  })
+
+  it("credits a trashed keeper's sell value to the slot AND its batch", async () => {
+    const pc = await freshStore()
+    pc.appendRitesBatch(0, [spec(200), spec(201)], -1200, receipt())
+    pc.removeMint(0, pc.readSlot(0).mints[0].id)
+    // spec() is a 3-effect normal relic -> sold back for 550 (buy-then-sell).
+    expect(pc.readSlot(0).murkDelta).toBe(-1200 + 550)
+    expect(pc.readSlot(0).batches[0].murkDelta).toBe(-1200 + 550)
+  })
+
+  it("a run that bought nothing stages nothing", async () => {
+    const pc = await freshStore()
+    pc.appendRitesBatch(0, [], 0, receipt({ rolled: 0, kept: 0, cost: 0 }))
+    expect(pc.readAll()[0]).toBeUndefined()
+  })
+
+  it("an all-dud batch stages a pure loss (no mints, negative delta)", async () => {
+    const pc = await freshStore()
+    pc.appendRitesBatch(0, [], -3_000, receipt({ rolled: 5, kept: 0 }))
+    expect(pc.readSlot(0).mints).toHaveLength(0)
+    expect(pc.readSlot(0).murkDelta).toBe(-3_000)
+    expect(pc.murkAdjustment(pc.readSlot(0))).toBe(-3_000)
+    // Cancelling the batch is the only way back to a clean slate.
+    pc.clearRitesBatch(0)
+    expect(pc.readAll()[0]).toBeUndefined()
+  })
+
+  it("clearRitesBatch cancels every batch, its delta, and its ops", async () => {
+    const pc = await freshStore()
+    pc.appendRitesBatch(0, [spec(200)], -600, receipt())
+    pc.appendRitesBatch(0, [spec(201)], -600, receipt())
     const m = pc.readSlot(0).mints[0]
     pc.addLoadoutOp(0, {
       kind: "add",
@@ -219,22 +248,24 @@ describe("pendingChanges mints (Relic Rites)", () => {
     expect(dropped).toEqual(['Add loadout "Uses Mint"'])
     const s = pc.readSlot(0)
     expect(s.mints).toHaveLength(0)
+    expect(s.batches).toHaveLength(0)
     expect(s.murkDelta).toBe(0)
     expect(s.loadoutOps).toHaveLength(1)
+    expect(pc.nextRollEpoch(s)).toBe(0)
   })
 
   it("clears staged mints on a re-upload (stale save)", async () => {
     const pc = await freshStore()
     pc.noteSlotBase(0, "profA")
-    pc.replaceRitesBatch(0, [spec(200)], -600)
+    pc.appendRitesBatch(0, [spec(200)], -600, receipt())
     expect(pc.noteSlotBase(0, "profB")).toBe(true)
     expect(pc.readAll()[0]).toBeUndefined()
   })
 
   it("assigns unique negative synthetic handles across slots", async () => {
     const pc = await freshStore()
-    pc.replaceRitesBatch(0, [spec(200), spec(201)], -1200)
-    pc.replaceRitesBatch(1, [spec(202)], -600)
+    pc.appendRitesBatch(0, [spec(200), spec(201)], -1200, receipt())
+    pc.appendRitesBatch(1, [spec(202)], -600, receipt())
     const all = [
       ...pc.readSlot(0).mints.map((m) => m.handle),
       ...pc.readSlot(1).mints.map((m) => m.handle),
@@ -245,7 +276,7 @@ describe("pendingChanges mints (Relic Rites)", () => {
 
   it("keeps handles stable across a reload", async () => {
     const pc = await freshStore()
-    pc.replaceRitesBatch(0, [spec(200), spec(201)], -1200)
+    pc.appendRitesBatch(0, [spec(200), spec(201)], -1200, receipt())
     const before = pc.readSlot(0).mints.map((m) => m.handle)
     vi.resetModules()
     const reloaded: PendingModule = await import("./pendingChanges")
@@ -276,6 +307,32 @@ describe("pendingChanges mints (Relic Rites)", () => {
     const handles = pc.readSlot(0).mints.map((m) => m.handle)
     expect(handles.every((h) => h < 0)).toBe(true)
     expect(new Set(handles).size).toBe(2)
+  })
+
+  it("adopts pre-batch staged mints into one legacy batch", async () => {
+    localStorage.clear()
+    localStorage.setItem(
+      "pendingChanges",
+      JSON.stringify({
+        0: {
+          sells: [],
+          favorites: {},
+          loadoutOps: [],
+          mints: [{ ...spec(200), id: "op_legacy_1", handle: -1 }],
+          murkDelta: -600,
+          meta: {},
+        },
+      }),
+    )
+    vi.resetModules()
+    const pc: PendingModule = await import("./pendingChanges")
+    const s = pc.readSlot(0)
+    expect(s.batches).toHaveLength(1)
+    expect(s.mints[0].batchId).toBe(s.batches[0].id)
+    expect(s.batches[0].murkDelta).toBe(-600)
+    // ...and the adopted batch is cancellable like any other.
+    pc.removeRitesBatch(0, s.batches[0].id)
+    expect(pc.readAll()[0]).toBeUndefined()
   })
 })
 
@@ -311,14 +368,14 @@ describe("pendingChanges staged-diff views", () => {
     pc.setFavorite(0, 3, true)
     expect(pc.stagedKey(pc.readSlot(0))).toBe(a)
     // A mint changes it.
-    pc.replaceRitesBatch(0, [spec(200)], -600)
+    pc.appendRitesBatch(0, [spec(200)], -600, RECEIPT)
     expect(pc.stagedKey(pc.readSlot(0))).not.toBe(a)
   })
 
   it("stagedFields maps to the backend wire shape", async () => {
     const pc = await freshStore()
     pc.toggleSell(0, 42)
-    pc.replaceRitesBatch(0, [spec(200)], -600)
+    pc.appendRitesBatch(0, [spec(200)], -600, RECEIPT)
     const s = pc.readSlot(0)
     const fields = pc.stagedFields(s)
     expect(fields.staged_sells).toEqual([42])
@@ -333,7 +390,7 @@ describe("pendingChanges staged-diff views", () => {
 
   it("removeMint cascades staged loadout ops referencing the mint", async () => {
     const pc = await freshStore()
-    pc.replaceRitesBatch(0, [spec(200), spec(201)], -1200)
+    pc.appendRitesBatch(0, [spec(200), spec(201)], -1200, RECEIPT)
     const [minted, other] = pc.readSlot(0).mints
     pc.addLoadoutOp(0, {
       kind: "add",
@@ -368,7 +425,7 @@ describe("pendingChanges staged-diff views", () => {
     const pc = await freshStore()
     pc.toggleSell(0, 1, { name: "R1", murk: 150 })
     pc.toggleSell(0, 2, { name: "R2", murk: 550 })
-    pc.replaceRitesBatch(0, [spec(200)], -600)
+    pc.appendRitesBatch(0, [spec(200)], -600, RECEIPT)
     pc.setFavorite(1, 9, true)
     const rows = pc.summarizePending(pc.readAll())
     expect(rows).toHaveLength(2)
@@ -408,7 +465,7 @@ describe("live Murk emulation (murkAdjustment / effectiveMurks)", () => {
     // User journey: spend 87,600 Murk in rites, stage the keepers, come back —
     // every surface must show the spent-down wallet, not the save's raw value.
     const pc = await freshStore()
-    pc.replaceRitesBatch(0, [spec(200), spec(201)], -87_600)
+    pc.appendRitesBatch(0, [spec(200), spec(201)], -87_600, RECEIPT)
     expect(pc.murkAdjustment(pc.readSlot(0))).toBe(-87_600)
     expect(pc.effectiveMurks(100_000, pc.readSlot(0))).toBe(12_400)
   })
@@ -417,7 +474,7 @@ describe("live Murk emulation (murkAdjustment / effectiveMurks)", () => {
     // The other reported bug: rolling a batch with no matches must still cost
     // its buy/sell spread — a free preview would be save-scumming.
     const pc = await freshStore()
-    pc.replaceRitesBatch(0, [], -4_150)
+    pc.appendRitesBatch(0, [], -4_150, RECEIPT)
     expect(pc.murkAdjustment(pc.readSlot(0))).toBe(-4_150)
     expect(pc.effectiveMurks(100_000, pc.readSlot(0))).toBe(95_850)
   })
@@ -434,7 +491,7 @@ describe("live Murk emulation (murkAdjustment / effectiveMurks)", () => {
     // Export applies sells first (credit), then the mint delta — the live
     // number must equal what the exported save will actually hold.
     const pc = await freshStore()
-    pc.replaceRitesBatch(0, [spec(200)], -1_200)
+    pc.appendRitesBatch(0, [spec(200)], -1_200, RECEIPT)
     pc.toggleSell(0, 11, { name: "R1", murk: 350 })
     expect(pc.murkAdjustment(pc.readSlot(0))).toBe(-850)
     expect(pc.effectiveMurks(10_000, pc.readSlot(0))).toBe(9_150)
@@ -448,7 +505,7 @@ describe("live Murk emulation (murkAdjustment / effectiveMurks)", () => {
 
   it("removing a mint credits its sell value; the batch loss stands", async () => {
     const pc = await freshStore()
-    pc.replaceRitesBatch(0, [spec(200), spec(201)], -1_200)
+    pc.appendRitesBatch(0, [spec(200), spec(201)], -1_200, RECEIPT)
     const first = pc.readSlot(0).mints[0]
     pc.removeMint(0, first.id)
     // 3-effect normal relic sells for 550 (faithful buy-then-sell).
@@ -458,16 +515,16 @@ describe("live Murk emulation (murkAdjustment / effectiveMurks)", () => {
     expect(pc.murkAdjustment(pc.readSlot(0))).toBe(-1_200 + 550 + 550)
   })
 
-  it("a re-run replaces the batch's delta rather than accumulating", async () => {
+  it("a second batch adds its spend to the first", async () => {
     const pc = await freshStore()
-    pc.replaceRitesBatch(0, [spec(200)], -600)
-    pc.replaceRitesBatch(0, [spec(201)], -1_800)
-    expect(pc.murkAdjustment(pc.readSlot(0))).toBe(-1_800)
+    pc.appendRitesBatch(0, [spec(200)], -600, RECEIPT)
+    pc.appendRitesBatch(0, [spec(201)], -1_800, RECEIPT)
+    expect(pc.murkAdjustment(pc.readSlot(0))).toBe(-2_400)
   })
 
   it("clamps to the save field's range [0, u32]", async () => {
     const pc = await freshStore()
-    pc.replaceRitesBatch(0, [spec(200)], -1_200)
+    pc.appendRitesBatch(0, [spec(200)], -1_200, RECEIPT)
     expect(pc.effectiveMurks(500, pc.readSlot(0))).toBe(0)
     pc.toggleSell(1, 11, { name: "R1", murk: 550 })
     expect(pc.effectiveMurks(0xffffffff, pc.readSlot(1))).toBe(0xffffffff)
@@ -475,7 +532,7 @@ describe("live Murk emulation (murkAdjustment / effectiveMurks)", () => {
 
   it("tracks slots independently", async () => {
     const pc = await freshStore()
-    pc.replaceRitesBatch(0, [spec(200)], -600)
+    pc.appendRitesBatch(0, [spec(200)], -600, RECEIPT)
     expect(pc.murkAdjustment(pc.readSlot(1))).toBe(0)
     expect(pc.effectiveMurks(5_000, pc.readSlot(1))).toBe(5_000)
   })
@@ -497,7 +554,7 @@ describe("effective-state composition selectors", () => {
   it("effectiveRelicRows drops staged sells and appends mint rows", async () => {
     const pc = await freshStore()
     pc.toggleSell(0, 111)
-    pc.replaceRitesBatch(0, [spec(300)], -1800)
+    pc.appendRitesBatch(0, [spec(300)], -1800, RECEIPT)
     const base = [
       { ga_handle: 111, name: "Sold" },
       { ga_handle: 222, name: "Kept" },
@@ -522,7 +579,7 @@ describe("effective-state composition selectors", () => {
 
   it("stagedMintByHandle resolves across slots", async () => {
     const pc = await freshStore()
-    pc.replaceRitesBatch(2, [spec(300)], -1800)
+    pc.appendRitesBatch(2, [spec(300)], -1800, RECEIPT)
     const handle = pc.readSlot(2).mints[0].handle
     expect(pc.stagedMintByHandle(handle)?.real_id).toBe(300)
     expect(pc.stagedMintByHandle(-999_999)).toBeUndefined()

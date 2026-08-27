@@ -1,12 +1,13 @@
 /**
  * Live Murk emulation + auto-committed batches on the Relic Rites page.
  *
- * The model under test: rolling IS buying. A completed Find Keepers run
+ * The model under test: rolling IS buying. A completed purchase run
  * immediately commits its batch (keepers minted, duds sold, net delta spent) —
  * there is no separate "stage" step, so even an all-dud batch costs its
- * buy/sell spread. A re-run REPLACES the committed batch (the roll stream is
- * deterministic per save state, so re-planning re-views the same rolls and
- * must not stack losses or ride the old batch along as staged state).
+ * buy/sell spread. Batches STACK: running again is another trip to the shop,
+ * so it rides the earlier batches along as staged state, advances the roll
+ * epoch (new rolls, not a re-view of the last stream), and appends its own
+ * receipt. Purchases live in the staged diff, so they survive navigation.
  *
  * Strategy mirrors builds-editor.test.tsx: mock createFileRoute to reach the
  * page component, force the anonymous path (sessionStorage profile + local
@@ -25,9 +26,9 @@ import React from "react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import {
+  appendRitesBatch,
   clearAll,
   readSlot,
-  replaceRitesBatch,
   setFavorite,
   toggleSell,
 } from "@/lib/pendingChanges"
@@ -130,6 +131,14 @@ const MINT_SPEC = {
   oddsSource: "exact",
 }
 
+const RECEIPT = {
+  rolled: 10,
+  kept: 1,
+  cost: 6_000,
+  refunded: 1_000,
+  label: "Test batch",
+}
+
 /** A PlanResponse the page can render, with the given keepers + delta. */
 function planPayload(
   keepers: Array<Record<string, unknown>>,
@@ -217,7 +226,7 @@ afterEach(cleanup)
 
 describe("Rites page — live Murk emulation", () => {
   it("shows the spent-down wallet while a rites batch is committed", () => {
-    replaceRitesBatch(SLOT, [MINT_SPEC], -87_600)
+    appendRitesBatch(SLOT, [MINT_SPEC], -87_600, RECEIPT)
     renderRites()
     // Header shows the effective wallet, with the save/staged breakdown.
     expect(screen.getByText(formatMurks(12_400))).toBeInTheDocument()
@@ -236,28 +245,27 @@ describe("Rites page — live Murk emulation", () => {
     expect(screen.queryByText(/staged/)).not.toBeInTheDocument()
   })
 
-  it("does NOT gate the overspend guard on the committed batch (a re-run replaces it)", () => {
-    // Default fixed order = 50 scenics = 30,000 Murk. The committed batch
-    // spends the DISPLAY wallet down to 12,400, but a new run un-buys the
-    // batch first (same save state = same stream), so 30,000 against the raw
-    // 100,000 is affordable and the button stays live.
-    replaceRitesBatch(SLOT, [MINT_SPEC], -87_600)
+  it("gates the overspend guard on the LIVE wallet (batches are paid for)", () => {
+    // Default fixed order = 50 scenics = 30,000 Murk. The committed batch has
+    // already spent the wallet down to 12,400, and the next batch buys from
+    // what is left — so the order is now unaffordable.
+    appendRitesBatch(SLOT, [MINT_SPEC], -87_600, RECEIPT)
     renderRites()
-    expect(screen.queryByText(/more than you have/)).not.toBeInTheDocument()
-    expect(screen.getByRole("button", { name: /find keepers/i })).toBeEnabled()
+    expect(screen.getByText(/more than you have/)).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: /buy relics/i })).toBeDisabled()
   })
 
-  it("gates the overspend guard on the raw re-plan wallet", () => {
+  it("gates the overspend guard on a small save wallet", () => {
     // 50 scenics = 30,000 Murk against a save holding only 20,000.
     sessionStorage.clear()
     seedProfile(20_000)
     renderRites()
     expect(screen.getByText(/more than you have/)).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: /find keepers/i })).toBeDisabled()
+    expect(screen.getByRole("button", { name: /buy relics/i })).toBeDisabled()
   })
 
-  it("sends sells + favorites with a re-run but NEVER the rites batch", async () => {
-    replaceRitesBatch(SLOT, [MINT_SPEC], -5_000)
+  it("sends sells, favorites AND the committed batches with the next run", async () => {
+    appendRitesBatch(SLOT, [MINT_SPEC], -5_000, RECEIPT)
     toggleSell(SLOT, 777, { name: "Old Relic", murk: 350 })
     setFavorite(SLOT, 888, false)
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue({
@@ -267,7 +275,7 @@ describe("Rites page — live Murk emulation", () => {
     } as unknown as Response)
 
     renderRites()
-    fireEvent.click(screen.getByRole("button", { name: /find keepers/i }))
+    fireEvent.click(screen.getByRole("button", { name: /buy relics/i }))
     await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1))
 
     const body = fetchSpy.mock.calls[0][1]?.body as FormData
@@ -276,10 +284,12 @@ describe("Rites page — live Murk emulation", () => {
     expect(body.get("sold_handles")).toBe(JSON.stringify([777]))
     // ...and staged bookmark toggles drive the server's protected-sell gate.
     expect(body.get("staged_favorites")).toBe(JSON.stringify({ 888: false }))
-    // The committed batch must NOT ride along: this run replaces it, and
-    // passing it would dedup its own rolls to duds / double-spend the wallet.
-    expect(body.get("staged_mints")).toBeNull()
-    expect(body.get("staged_murk_delta")).toBeNull()
+    // The earlier batch is part of the world now: its relics are owned and
+    // its Murk is spent, so both ride along...
+    expect(JSON.parse(String(body.get("staged_mints")))).toHaveLength(1)
+    expect(body.get("staged_murk_delta")).toBe("-5000")
+    // ...and this is the SECOND batch, so it rolls a fresh stream.
+    expect(body.get("roll_epoch")).toBe("1")
     fetchSpy.mockRestore()
   })
 
@@ -291,7 +301,7 @@ describe("Rites page — live Murk emulation", () => {
     } as unknown as Response)
 
     renderRites()
-    fireEvent.click(screen.getByRole("button", { name: /find keepers/i }))
+    fireEvent.click(screen.getByRole("button", { name: /buy relics/i }))
     await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1))
 
     const body = fetchSpy.mock.calls[0][1]?.body as FormData
@@ -299,30 +309,58 @@ describe("Rites page — live Murk emulation", () => {
     expect(body.get("staged_mints")).toBeNull()
     expect(body.get("staged_murk_delta")).toBeNull()
     expect(body.get("staged_favorites")).toBeNull()
+    expect(body.get("roll_epoch")).toBe("0")
+    fetchSpy.mockRestore()
+  })
+
+  it("sends the target when spending down to a set amount", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: false,
+      body: null,
+      json: async () => ({ detail: "boom" }),
+    } as unknown as Response)
+
+    renderRites()
+    // The stop-mode picker is a Radix Select; drive the page through it.
+    fireEvent.click(screen.getByRole("combobox", { name: "" }))
+    fireEvent.click(screen.getByText("Murk is down to a set amount"))
+    fireEvent.change(screen.getByLabelText("Murk to stop at"), {
+      target: { value: "40000" },
+    })
+    fireEvent.click(screen.getByRole("button", { name: /buy relics/i }))
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1))
+
+    const body = fetchSpy.mock.calls[0][1]?.body as FormData
+    expect(body.get("stop_mode")).toBe("murk_target")
+    expect(body.get("target_murk")).toBe("40000")
     fetchSpy.mockRestore()
   })
 })
 
 describe("Rites page — auto-committed batches (roll = purchase)", () => {
-  it("commits the batch the moment a plan completes; unchecking sells back", async () => {
+  it("commits the batch the moment a plan completes; trashing sells back", async () => {
     const fetchSpy = vi
       .spyOn(globalThis, "fetch")
       .mockResolvedValue(
         sseResponse([{ type: "result", data: planPayload([KEEPER], -5_000) }]),
       )
     renderRites()
-    fireEvent.click(screen.getByRole("button", { name: /find keepers/i }))
+    fireEvent.click(screen.getByRole("button", { name: /buy relics/i }))
 
     // Completion alone staged the keeper AND spent the delta — no extra click.
     await waitFor(() => expect(readSlot(SLOT).mints).toHaveLength(1))
     expect(readSlot(SLOT).mints[0].real_id).toBe(200)
     expect(readSlot(SLOT).murkDelta).toBe(-5_000)
+    expect(readSlot(SLOT).batches).toHaveLength(1)
 
-    // Unchecking the keeper sells it back: mint gone, sell value credited
+    // Trashing the relic sells it back: mint gone, sell value credited
     // (1-effect normal relic -> 150), the batch itself still committed.
-    fireEvent.click(screen.getByRole("checkbox", { name: /keep test relic/i }))
+    fireEvent.click(
+      await screen.findByRole("button", { name: /sell test relic back/i }),
+    )
     await waitFor(() => expect(readSlot(SLOT).mints).toHaveLength(0))
     expect(readSlot(SLOT).murkDelta).toBe(-5_000 + 150)
+    expect(readSlot(SLOT).batches).toHaveLength(1)
     fetchSpy.mockRestore()
   })
 
@@ -333,28 +371,49 @@ describe("Rites page — auto-committed batches (roll = purchase)", () => {
         sseResponse([{ type: "result", data: planPayload([], -4_150) }]),
       )
     renderRites()
-    fireEvent.click(screen.getByRole("button", { name: /find keepers/i }))
+    fireEvent.click(screen.getByRole("button", { name: /buy relics/i }))
 
     // Nothing to keep, but the buy/sell spread is spent all the same.
     await waitFor(() => expect(readSlot(SLOT).murkDelta).toBe(-4_150))
     expect(readSlot(SLOT).mints).toHaveLength(0)
-    expect(screen.getByText(/No keepers/)).toBeInTheDocument()
+    expect(await screen.findByText(/Nothing kept/)).toBeInTheDocument()
     fetchSpy.mockRestore()
   })
 
-  it("a re-run replaces the committed batch instead of stacking it", async () => {
-    // A prior all-dud batch is staged; the new run's outcome supersedes it.
-    replaceRitesBatch(SLOT, [], -4_150)
+  it("a second run stacks a new batch instead of replacing the first", async () => {
+    appendRitesBatch(SLOT, [], -4_150, { ...RECEIPT, kept: 0 })
     const fetchSpy = vi
       .spyOn(globalThis, "fetch")
       .mockResolvedValue(
         sseResponse([{ type: "result", data: planPayload([KEEPER], -5_000) }]),
       )
     renderRites()
-    fireEvent.click(screen.getByRole("button", { name: /find keepers/i }))
+    fireEvent.click(screen.getByRole("button", { name: /buy relics/i }))
 
     await waitFor(() => expect(readSlot(SLOT).mints).toHaveLength(1))
-    expect(readSlot(SLOT).murkDelta).toBe(-5_000)
+    // Both trips to the shop are paid for.
+    expect(readSlot(SLOT).murkDelta).toBe(-9_150)
+    expect(readSlot(SLOT).batches).toHaveLength(2)
     fetchSpy.mockRestore()
+  })
+
+  it("shows committed purchases without re-running (they survive navigation)", () => {
+    // A batch staged in an earlier visit renders straight from the diff.
+    appendRitesBatch(SLOT, [MINT_SPEC], -5_000, RECEIPT)
+    renderRites()
+    expect(screen.getByText("Test Relic")).toBeInTheDocument()
+    expect(screen.getByText("Batch 1")).toBeInTheDocument()
+    expect(
+      screen.getByRole("button", { name: /sell test relic back/i }),
+    ).toBeInTheDocument()
+  })
+
+  it("cancelling a batch un-buys it and frees its roll epoch", async () => {
+    appendRitesBatch(SLOT, [MINT_SPEC], -5_000, RECEIPT)
+    renderRites()
+    fireEvent.click(screen.getByRole("button", { name: /cancel batch/i }))
+    await waitFor(() => expect(readSlot(SLOT).batches).toHaveLength(0))
+    expect(readSlot(SLOT).mints).toHaveLength(0)
+    expect(readSlot(SLOT).murkDelta).toBe(0)
   })
 })

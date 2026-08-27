@@ -99,7 +99,27 @@ class PurchaseBucket:
     is_deep: bool
     version: str            # "1.03" | "1.02"
     buy_cost: int           # Murk per relic
-    quantity: int | None = None   # fixed-mode count (ignored in budget/all_murk modes)
+    quantity: int | None = None   # fixed-mode count (ignored in the cycle modes)
+
+
+# Stop modes settled by the chronological buy/sell cycle walk, which stops the
+# moment the next purchase would push the wallet below a floor:
+#   all_murk    floor 0            — spend everything
+#   budget      floor wallet−N     — spend N
+#   murk_target floor N            — spend down TO N
+# ``fixed`` is the odd one out: it buys an exact count and settles statically.
+CYCLE_MODES = frozenset({"all_murk", "budget", "murk_target"})
+STOP_MODES = frozenset({"fixed"}) | CYCLE_MODES
+
+
+def murk_floor(stop_mode: str, wallet: int, budget: int | None,
+               target_murk: int | None) -> int:
+    """Wallet level a cycle walk stops at (never below 0, never above `wallet`)."""
+    if stop_mode == "budget":
+        return max(0, wallet - max(0, budget or 0))
+    if stop_mode == "murk_target":
+        return max(0, min(int(target_murk or 0), wallet))
+    return 0            # all_murk
 
 
 @dataclass
@@ -116,14 +136,19 @@ class Keeper:
 @dataclass
 class BulkResult:
     keepers: list[Keeper]
-    generated: int          # relics actually bought (all_murk: the affordable prefix)
+    generated: int          # relics actually bought (cycle modes: the walked prefix)
     kept: int
     duds: int
     murk_before: int        # the caller's wallet base (never includes extra_budget)
     murk_after: int         # >= 0; includes extra_budget (staged-sell refunds)
     murk_gross_cost: int    # total spent buying everything bought
     murk_refunded: int      # total credited from selling the duds (excludes extra_budget)
-    limited_by: str | None  # "murk" | "storage" | "gen_max" | None
+    # What ENDED the run early, or None when it stopped exactly where asked
+    # (budget spent / target Murk reached / fixed quantity bought):
+    #   "murk"     the wallet ran dry (all_murk always ends here)
+    #   "storage"  no free relic slot to buy into
+    #   "gen_max"  the roll cap was hit before the goal
+    limited_by: str | None
 
 
 def _tier_for(effect_count: int) -> str:
@@ -164,28 +189,25 @@ def _reserve_handles(count: int, taken: set[int]) -> list[int]:
 
 def _plan_counts(buckets: list[PurchaseBucket], stop_mode: str, budget: int | None,
                  current_murk: int, gen_max: int,
-                 extra_budget: int = 0) -> tuple[list[int], bool]:
+                 extra_budget: int = 0,
+                 target_murk: int | None = None) -> tuple[list[int], bool]:
     """How many relics to generate per bucket. Approximate — exact Murk is settled later."""
     if stop_mode == "fixed":
         counts = [max(0, b.quantity or 0) for b in buckets]
     else:
-        if stop_mode == "budget" and budget is not None:
-            target = budget
-        else:
-            target = current_murk + extra_budget
-        target = max(0, target)
+        wallet = max(0, current_murk + extra_budget)
+        # How much Murk the walk is allowed to consume before it stops.
+        target = wallet - murk_floor(stop_mode, wallet, budget, target_murk)
         share = target / len(buckets) if buckets else 0
         counts = []
         for b in buckets:
-            if stop_mode == "all_murk":
-                # Overshoot on purpose: assume every roll is a max-refund dud
-                # (sell_value(3): scenic 600−550=50, deep 1800−1100=700) so the
-                # settlement walk — not this estimate — decides where spending
-                # stops, and refunds are never left unspent. gen_max caps rolls.
-                net_per = max(1, b.buy_cost - sell_value(3, b.is_deep))
-            else:
-                # Estimate net cost per relic (most get sold back); mid refund estimate.
-                net_per = max(1, b.buy_cost - sell_value(2, b.is_deep))
+            # Overshoot on purpose: assume every roll is a max-refund dud
+            # (sell_value(3): scenic 600−550=50, deep 1800−1100=700) so the
+            # settlement walk — not this estimate — decides where spending
+            # stops, and refunds are never left unspent. The all-duds prefix
+            # pass below trims the overshoot back before anything is scored,
+            # and gen_max caps the rolls.
+            net_per = max(1, b.buy_cost - sell_value(3, b.is_deep))
             counts.append(int(share // net_per))
     total = sum(counts)
     gen_max_hit = False
@@ -194,6 +216,31 @@ def _plan_counts(buckets: list[PurchaseBucket], stop_mode: str, budget: int | No
         counts = [int(c * scale) for c in counts]
         gen_max_hit = True
     return counts, gen_max_hit
+
+
+def _all_duds_prefix(generated: list[OwnedRelic], buy_cost_of: dict[int, int],
+                     wallet: int, floor: int) -> int:
+    """How many rolls the cycle walk could buy at most, if every roll were a dud.
+
+    A dud refunds its sell value and releases its storage slot; a keeper refunds
+    nothing and holds a slot. So the all-duds walk drains the wallet the slowest
+    and never fills storage — its stop point is an upper bound on the real
+    walk's, whatever the keepers turn out to be. Trimming the generated stream
+    to this prefix keeps rolls that could never be bought out of the build
+    match (they would otherwise compete for the top-N and cost optimizer time).
+
+    Storage is deliberately ignored here: the real walk reports "storage" from
+    the first unbuyable roll, which needs that roll to still be in the stream.
+    """
+    murk = wallet
+    n = 0
+    for o in generated:
+        cost = buy_cost_of[o.ga_handle]
+        if murk - cost < floor:
+            break
+        murk -= cost - sell_value(o.effect_count, o.is_deep)
+        n += 1
+    return n
 
 
 def _used_fps_from_results(results) -> set:
@@ -277,6 +324,7 @@ def bulk_acquire(*, builds: list[BuildContext], owned: list[OwnedRelic],
                  current_murk: int, buckets: list[PurchaseBucket],
                  generator: RelicGenerator, ds,
                  stop_mode: str = "fixed", budget: int | None = None,
+                 target_murk: int | None = None,
                  inclusion_rules: list[dict] | None = None,
                  exclusion_rules: list[dict] | None = None,
                  storage_cap_left: int = 10**9,
@@ -296,21 +344,28 @@ def bulk_acquire(*, builds: list[BuildContext], owned: list[OwnedRelic],
 
     Settlement depends on ``stop_mode``:
 
-    * ``fixed`` / ``budget`` — one static settlement: ``storage_cap_left`` bounds
-      keepers added (lowest priority trimmed first), then keepers/duds are
-      dropped to fit the Murk you have (``current_murk + extra_budget`` — a
-      staged sell's refund is spendable in every mode, since in-game the
-      player can sell at the shop before buying).
-    * ``all_murk`` — a chronological per-relic walk that emulates the in-game
-      buy/sell cycle: each roll is bought in stream order (needs Murk and one
-      free storage slot), keepers consume a slot, duds are sold back on the spot
-      and their refunds fund further buying. ``storage_cap_left`` here means
-      free slots under the pure in-game 1950 cap. ``extra_budget`` (refund value
-      of the caller's already-staged sells of owned relics) is credited before
-      the first buy; it is excluded from ``murk_gross_cost``/``murk_refunded``
-      but included in ``murk_after``. ``owned`` must already exclude those
-      staged-sold relics; pass their handles via ``extra_reserved_handles`` so
-      synthetic handles cannot collide with them.
+    * ``fixed`` — one static settlement of an exact per-bucket quantity:
+      ``storage_cap_left`` bounds keepers added (lowest priority trimmed
+      first), then keepers/duds are dropped to fit the Murk you have
+      (``current_murk + extra_budget`` — a staged sell's refund is spendable in
+      every mode, since in-game the player can sell at the shop before buying).
+    * ``all_murk`` / ``budget`` / ``murk_target`` (the CYCLE modes) — a
+      chronological per-relic walk that emulates the in-game buy/sell cycle:
+      each roll is bought in stream order (needs Murk and one free storage
+      slot), keepers consume a slot, duds are sold back on the spot and their
+      refunds fund further buying. The walk stops at the first roll that would
+      push the wallet below ``murk_floor`` — 0 for ``all_murk``, ``wallet −
+      budget`` for ``budget``, ``target_murk`` for ``murk_target`` — so the net
+      spend lands within one relic's price of what was asked for (an estimate
+      up front could not: how much a roll really costs depends on the refund it
+      earns, and keepers cost their full price). ``storage_cap_left`` here
+      means free slots under the pure in-game 1950 cap. ``extra_budget``
+      (refund value of the caller's already-staged sells of owned relics) is
+      credited before the first buy; it is excluded from
+      ``murk_gross_cost``/``murk_refunded`` but included in ``murk_after``.
+      ``owned`` must already exclude those staged-sold relics; pass their
+      handles via ``extra_reserved_handles`` so synthetic handles cannot
+      collide with them.
 
     ``owned_used_fps`` is the per-plan owned-only solve cache (see
     ``_owned_used_fps``): builds for which NO generated relic can score are
@@ -335,7 +390,7 @@ def bulk_acquire(*, builds: list[BuildContext], owned: list[OwnedRelic],
 
     # 1. plan + 2. generate ------------------------------------------------------
     counts, gen_max_hit = _plan_counts(
-        buckets, stop_mode, budget, current_murk, gen_max, extra_budget)
+        buckets, stop_mode, budget, current_murk, gen_max, extra_budget, target_murk)
     taken = {o.ga_handle for o in owned} | set(extra_reserved_handles or ())
     handles = _reserve_handles(sum(counts), taken)
 
@@ -355,11 +410,22 @@ def bulk_acquire(*, builds: list[BuildContext], owned: list[OwnedRelic],
     def refund(o: OwnedRelic) -> int:
         return sell_value(o.effect_count, o.is_deep)
 
+    wallet_start = current_murk + extra_budget
+    floor = murk_floor(stop_mode, max(0, wallet_start), budget, target_murk)
+    if stop_mode in CYCLE_MODES:
+        # Trim the deliberate overshoot before anything is scored: rolls past
+        # the all-duds stop point can never be bought (see _all_duds_prefix).
+        generated = generated[
+            :_all_duds_prefix(generated, buy_cost_of, wallet_start, floor)]
+
     # 3. classify (waterfall): inclusion keep > exclusion sell > build-aware/keep --
     owned_fps = {fingerprint_owned(o) for o in owned}
     pre_by_handle: dict[int, int] = {}
     keepers: list[Keeper] = []
-    limited: str | None = "gen_max" if gen_max_hit else None
+    # Cycle modes decide "gen_max" in the walk (running out of rolls before the
+    # floor); for a fixed quantity, a scaled-down estimate IS the limit.
+    limited: str | None = (
+        "gen_max" if gen_max_hit and stop_mode not in CYCLE_MODES else None)
 
     if builds:
         # Build-aware path: rules override; otherwise keep only content a build's top-N
@@ -430,13 +496,17 @@ def bulk_acquire(*, builds: list[BuildContext], owned: list[OwnedRelic],
         # Solved builds map fp -> best loadout rank; skipped builds keep the
         # owned-only fp SET from the shared cache (a candidate fp can never
         # appear there — candidates are new content, owned dups are duds).
+        # Keyed by _ctx_key, NEVER by name: two saved builds may share a name
+        # (the same "Katanas" for two Nightfarers) and keying by it silently
+        # dropped one build's usage — its keepers became duds.
         build_used: dict[str, dict | set] = {}
         total_builds = len(builds)
         for i, b in enumerate(builds):
+            key = _ctx_key(b)
             if progress is not None:
                 progress(i + 1, total_builds, b.name)
             if not solve_flags[i]:
-                build_used[b.name] = _owned_used_fps(
+                build_used[key] = _owned_used_fps(
                     b, owned, optimizer, executor, top_n, max_per_vessel,
                     deadline_secs, owned_used_fps)
                 continue
@@ -450,12 +520,12 @@ def bulk_acquire(*, builds: list[BuildContext], owned: list[OwnedRelic],
                     executor=executor, deadline_secs=deadline_secs)
             _prefetch_after(i)
             if futures is not None:
-                build_used[b.name] = _used_fp_ranks(
+                build_used[key] = _used_fp_ranks(
                     optimizer.collect_all_vessels(
                         b.build, b.hero_type, futures, top_n=top_n,
                         n_relics=len(inv)))
             else:
-                build_used[b.name] = _used_fp_ranks(
+                build_used[key] = _used_fp_ranks(
                     optimizer.optimize_all_vessels(
                         b.build, inv, b.hero_type, top_n=top_n,
                         max_per_vessel=max_per_vessel, executor=executor,
@@ -479,9 +549,10 @@ def bulk_acquire(*, builds: list[BuildContext], owned: list[OwnedRelic],
             seen_fp.add(fp)
             names: list[str] = []
             ranks: list[int] = []
-            for name, used in build_used.items():
+            for b in builds:
+                used = build_used[_ctx_key(b)]
                 if fp in used:
-                    names.append(name)
+                    names.append(b.name)
                     ranks.append(used[fp] if isinstance(used, dict) else 0)
             keepers.append(Keeper(relic=o, builds=names, ranks=ranks,
                                   reason="build"))
@@ -505,28 +576,34 @@ def bulk_acquire(*, builds: list[BuildContext], owned: list[OwnedRelic],
 
     keepers.sort(key=_keep_priority, reverse=True)
 
-    if stop_mode == "all_murk":
-        # 6b. (all_murk) Chronological settlement walk — emulates the in-game
+    if stop_mode in CYCLE_MODES:
+        # 6b. (cycle modes) Chronological settlement walk — emulates the in-game
         #     buy/sell cycle at the shop: buy one relic (needs Murk AND one free
         #     storage slot, even if immediately resold), keep it (slot consumed)
         #     or sell it back on the spot (refund credited, slot released).
-        #     Stops at the first unaffordable or unfittable roll; every later
-        #     roll is un-bought entirely. Duds never occupy storage and their
-        #     refunds immediately fund further buying — all legal in-game
-        #     (purchase quantity 1-10 is selectable and selling is available at
-        #     the shop), just smoother. Pre-owned relics are never sold here.
+        #     Stops at the first roll that is unfittable, or that would push the
+        #     wallet below `floor` (0 for all_murk); every later roll is
+        #     un-bought entirely. Duds never occupy storage and their refunds
+        #     immediately fund further buying — all legal in-game (purchase
+        #     quantity 1-10 is selectable and selling is available at the shop),
+        #     just smoother. Pre-owned relics are never sold here.
         keeper_handles = {k.relic.ga_handle for k in keepers}
         murk = current_murk + extra_budget  # staged-sell refunds land first
         slots_free = max(0, storage_cap_left)
         settled = gross = refunds = 0
         kept_handles: set[int] = set()
+        stopped = False
         for o in generated:                 # generation order == roll order
             cost = buy_cost_of[o.ga_handle]
             if slots_free <= 0:             # buying transits storage even if resold
                 limited = "storage"
+                stopped = True
                 break
-            if murk - cost < 0:             # buying may not overdraw the wallet
-                limited = "murk"
+            if murk - cost < floor:         # the goal: wallet may not go under it
+                # floor 0 means "spend it all", so stopping there is the wallet
+                # running dry; any other floor is the budget/target being met.
+                limited = "murk" if floor <= 0 else None
+                stopped = True
                 break
             murk -= cost
             gross += cost
@@ -538,6 +615,16 @@ def bulk_acquire(*, builds: list[BuildContext], owned: list[OwnedRelic],
                 r = refund(o)
                 murk += r
                 refunds += r
+        if not stopped:
+            # Ran out of rolls. Either the wallet is spent down to the goal
+            # anyway (nothing left to buy) or the roll cap cut the run short.
+            cheapest = min((b.buy_cost for b in buckets), default=0)
+            if slots_free <= 0:
+                limited = "storage"
+            elif murk - cheapest >= floor:
+                limited = "gen_max"
+            elif floor <= 0:
+                limited = "murk"
         # Filtering the priority-sorted list keeps presentation order.
         keepers = [k for k in keepers if k.relic.ga_handle in kept_handles]
         return BulkResult(
@@ -552,7 +639,7 @@ def bulk_acquire(*, builds: list[BuildContext], owned: list[OwnedRelic],
             limited_by=limited,
         )
 
-    # 6. storage cap (fixed/budget: drop lowest-priority keepers first) ----------
+    # 6. storage cap (fixed: drop lowest-priority keepers first) -----------------
     if storage_cap_left is not None and len(keepers) > storage_cap_left:
         keepers = keepers[:max(0, storage_cap_left)]
         limited = "storage"
