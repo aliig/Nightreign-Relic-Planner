@@ -143,14 +143,18 @@ const RECEIPT = {
 function planPayload(
   keepers: Array<Record<string, unknown>>,
   murkDelta: number,
+  // The server plans from the EFFECTIVE wallet: the save's Murk spent down by
+  // whatever is already staged. Tests with a prior batch must say so, or the
+  // page rightly reads the plan as computed from a different save file.
+  murkBefore: number = SAVE_MURKS,
 ) {
   return {
     keepers,
     generated: 10,
     kept: keepers.length,
     duds: 10 - keepers.length,
-    murk_before: SAVE_MURKS,
-    murk_after: SAVE_MURKS + murkDelta,
+    murk_before: murkBefore,
+    murk_after: murkBefore + murkDelta,
     murk_cost: 6_000,
     murk_refunded: 6_000 + murkDelta,
     murk_delta: murkDelta,
@@ -313,6 +317,25 @@ describe("Rites page — live Murk emulation", () => {
     fetchSpy.mockRestore()
   })
 
+  it("blocks a spend-down target that is already at or under the wallet", async () => {
+    // THE reported bug: "spend down to 800k" while holding less bought nothing,
+    // after minutes of solving, and still reported success. It can't be started
+    // now — there is no Murk between the wallet and the target.
+    const fetchSpy = vi.spyOn(globalThis, "fetch")
+    renderRites()
+    fireEvent.click(screen.getByRole("combobox", { name: "" }))
+    fireEvent.click(screen.getByText("Murk is down to a set amount"))
+    fireEvent.change(screen.getByLabelText("Murk to stop at"), {
+      target: { value: String(SAVE_MURKS + 1) },
+    })
+    expect(screen.getByText(/you already have less than/i)).toBeInTheDocument()
+    const buy = screen.getByRole("button", { name: /buy relics/i })
+    expect(buy).toBeDisabled()
+    fireEvent.click(buy)
+    expect(fetchSpy).not.toHaveBeenCalled()
+    fetchSpy.mockRestore()
+  })
+
   it("sends the target when spending down to a set amount", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue({
       ok: false,
@@ -382,11 +405,15 @@ describe("Rites page — auto-committed batches (roll = purchase)", () => {
 
   it("a second run stacks a new batch instead of replacing the first", async () => {
     appendRitesBatch(SLOT, [], -4_150, { ...RECEIPT, kept: 0 })
-    const fetchSpy = vi
-      .spyOn(globalThis, "fetch")
-      .mockResolvedValue(
-        sseResponse([{ type: "result", data: planPayload([KEEPER], -5_000) }]),
-      )
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      sseResponse([
+        // The first batch's spend has already come off the wallet server-side.
+        {
+          type: "result",
+          data: planPayload([KEEPER], -5_000, SAVE_MURKS - 4_150),
+        },
+      ]),
+    )
     renderRites()
     fireEvent.click(screen.getByRole("button", { name: /buy relics/i }))
 
@@ -394,6 +421,29 @@ describe("Rites page — auto-committed batches (roll = purchase)", () => {
     // Both trips to the shop are paid for.
     expect(readSlot(SLOT).murkDelta).toBe(-9_150)
     expect(readSlot(SLOT).batches).toHaveLength(2)
+    fetchSpy.mockRestore()
+  })
+
+  it("refuses a plan computed from a different save file", async () => {
+    // The plan reads the FILE; the page shows the uploaded profile. When a
+    // reload drops the in-session file, the durable recovery backup stands in
+    // — and if that is another save, every number in the plan belongs to it.
+    // Staging those purchases would attach relics to the wrong save.
+    const wrongSave = {
+      ...planPayload([KEEPER], -5_000),
+      murk_before: SAVE_MURKS - 900_000,
+    }
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(sseResponse([{ type: "result", data: wrongSave }]))
+    renderRites()
+    fireEvent.click(screen.getByRole("button", { name: /buy relics/i }))
+
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1))
+    // Nothing staged: no mints, no batch, no Murk spent.
+    await waitFor(() => expect(readSlot(SLOT).batches).toHaveLength(0))
+    expect(readSlot(SLOT).mints).toHaveLength(0)
+    expect(readSlot(SLOT).murkDelta).toBe(0)
     fetchSpy.mockRestore()
   })
 

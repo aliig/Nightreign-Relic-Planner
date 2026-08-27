@@ -391,6 +391,18 @@ def bulk_acquire(*, builds: list[BuildContext], owned: list[OwnedRelic],
     # 1. plan + 2. generate ------------------------------------------------------
     counts, gen_max_hit = _plan_counts(
         buckets, stop_mode, budget, current_murk, gen_max, extra_budget, target_murk)
+    if sum(counts) <= 0:
+        # Nothing will be rolled: a zero quantity, or a budget/target that
+        # leaves nothing to spend (asking to spend down TO more Murk than you
+        # hold). Return before any optimizer pass — with no purchases there is
+        # nothing a build could keep, and solving every build for an empty
+        # result costs minutes on a large inventory.
+        return BulkResult(
+            keepers=[], generated=0, kept=0, duds=0,
+            murk_before=current_murk, murk_after=current_murk + extra_budget,
+            murk_gross_cost=0, murk_refunded=0, limited_by=None,
+        )
+
     taken = {o.ga_handle for o in owned} | set(extra_reserved_handles or ())
     handles = _reserve_handles(sum(counts), taken)
 

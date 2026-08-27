@@ -378,6 +378,46 @@ def test_murk_target_at_or_above_the_wallet_buys_nothing(ds):
     assert res.generated == 0 and res.kept == 0 and res.murk_after == 10_000
 
 
+class _NoSolveOptimizer:
+    """Fails the test if anything tries to optimize."""
+    def optimize_all_vessels(self, *a, **kw):
+        raise AssertionError("optimized for a run that buys nothing")
+
+    def submit_all_vessels(self, *a, **kw):
+        raise AssertionError("optimized for a run that buys nothing")
+
+    def collect_all_vessels(self, *a, **kw):
+        raise AssertionError("optimized for a run that buys nothing")
+
+
+def test_nothing_to_roll_skips_every_solve(ds, wylder_eff):
+    """A target above the wallet (the reported bug: 'spend down to 800k' while
+    holding less) must return instantly. It used to solve every selected build
+    for an empty result — minutes of work on a large inventory, then a
+    'success' with nothing in it."""
+    junk = _gen([EMPTY, EMPTY, EMPTY], color="Red")
+    res = bulk_acquire(
+        builds=[_ctx([wylder_eff]), _ctx([wylder_eff], name="B2", build_id="b2")],
+        owned=[_owned([wylder_eff])], current_murk=10_000, target_murk=50_000,
+        buckets=[PurchaseBucket(False, "1.03", 600)],
+        generator=_StubGen([junk]), ds=ds, stop_mode="murk_target",
+        storage_cap_left=10, optimizer=_NoSolveOptimizer(), **_OPT,
+    )
+    assert res.generated == 0 and res.kept == 0
+    assert res.murk_after == 10_000 and res.limited_by is None
+
+
+def test_zero_fixed_quantity_skips_every_solve(ds, wylder_eff):
+    res = bulk_acquire(
+        builds=[_ctx([wylder_eff])], owned=[], current_murk=10_000,
+        buckets=[PurchaseBucket(False, "1.03", 600, quantity=0)],
+        generator=_StubGen([_gen([EMPTY, EMPTY, EMPTY])]), ds=ds,
+        stop_mode="fixed", storage_cap_left=10,
+        optimizer=_NoSolveOptimizer(), **_OPT,
+    )
+    assert res.generated == 0 and res.kept == 0
+
+
 def test_cycle_mode_reports_gen_max_only_when_rolls_run_out(ds):
     """A scaled-down estimate is not itself a limit — running out of rolls
     with Murk still to spend is."""

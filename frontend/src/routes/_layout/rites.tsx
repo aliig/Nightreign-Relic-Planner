@@ -666,6 +666,30 @@ function RitesTool({
   const planMurks = effMurks
   const overspend =
     stopMode === "fixed" && planMurks != null && fixedCost > planMurks
+  // What a cycle run is actually allowed to spend, and the cheapest relic it
+  // could spend it on. Less than one relic's price means the run can only ever
+  // buy nothing — most easily hit by asking to spend down TO more Murk than
+  // you hold, which is a no-op, not a purchase.
+  const cheapestCost = activeBuckets.reduce(
+    (n, b) => Math.min(n, b.cost),
+    Number.POSITIVE_INFINITY,
+  )
+  const spendable =
+    stopMode === "budget"
+      ? Math.max(0, budget)
+      : stopMode === "murk_target"
+        ? Math.max(0, (effMurks ?? 0) - Math.max(0, targetMurk))
+        : (effMurks ?? 0)
+  const nothingToSpend =
+    stopMode !== "fixed" && activeBuckets.length > 0 && spendable < cheapestCost
+  const nothingToSpendWhy =
+    stopMode === "murk_target"
+      ? (effMurks ?? 0) <= Math.max(0, targetMurk)
+        ? `— you already have less than ${formatMurks(Math.max(0, targetMurk))} Murk`
+        : "— not enough above the target to buy even one relic"
+      : stopMode === "budget"
+        ? "— the budget is under one relic's price"
+        : "— not enough Murk for a single relic"
 
   async function buyRelics() {
     const file = getSaveFile() ?? (await getOriginalBackupFile())
@@ -775,6 +799,28 @@ function RitesTool({
       }
       if (streamErr) throw new Error(streamErr)
       if (!result) throw new Error("No plan was returned.")
+      // The plan is computed from the FILE we sent; every number on this page
+      // comes from the uploaded save's profile. `murk_before` is the server's
+      // effective wallet — max(0, save Murk + the staged batch delta) — so if
+      // it disagrees with what this profile holds, the file being read is NOT
+      // this save. That happens when the in-session file is gone (a reload)
+      // and the durable recovery backup stands in for it, or when an older
+      // file is still selected: the run then silently plans against a
+      // different save's Murk and inventory, and staging its purchases would
+      // attach relics to the wrong save. Refuse rather than guess.
+      const expectedBefore =
+        murks == null
+          ? null
+          : Math.max(0, murks + Math.min(0, pending.murkDelta))
+      if (expectedBefore != null && result.murk_before !== expectedBefore) {
+        showErrorToast(
+          `The save file being read holds ${formatMurks(result.murk_before)} ` +
+            `Murk, but this save has ${formatMurks(expectedBefore)} — it is ` +
+            "not the save shown here. Re-upload your save, then buy again. " +
+            "Nothing was bought or staged.",
+        )
+        return
+      }
       setPlan(result)
       // The roll IS the purchase: the batch commits the moment it's revealed,
       // mirroring the game, where a shop roll can't be previewed and declined.
@@ -786,6 +832,23 @@ function RitesTool({
       // inventory it has not seen. Say so and offer the way to fix it rather
       // than re-optimizing the whole library behind the user's back — a
       // parameter sweep would fire it on every re-roll.
+      if (result.generated === 0) {
+        // Nothing was bought, so there is no batch and no cost — say why
+        // rather than reporting a success with an empty result.
+        toast.warning("Nothing was bought", {
+          description:
+            result.limited_by === "storage"
+              ? "Relic storage is full — trash relics from the Inventory (or stage sells) and run again."
+              : `There was nothing to spend at these settings${
+                  stopMode === "murk_target"
+                    ? `: your Murk is already at or below ${formatMurks(
+                        Math.max(0, targetMurk),
+                      )}.`
+                    : "."
+                }`,
+        })
+        return
+      }
       toast.success("Success!", {
         description:
           `Batch ${readSlot(slotIndex).batches.length}: bought ` +
@@ -1078,15 +1141,20 @@ function RitesTool({
             />
           )}
           {stopMode === "murk_target" && (
-            <input
-              type="number"
-              min={0}
-              max={effMurks ?? undefined}
-              value={targetMurk}
-              onChange={(e) => setTargetMurk(Number(e.target.value))}
-              className="w-32 rounded-md border bg-background px-2 py-1 text-sm"
-              aria-label="Murk to stop at"
-            />
+            <>
+              <input
+                type="number"
+                min={0}
+                max={effMurks ?? undefined}
+                value={targetMurk}
+                onChange={(e) => setTargetMurk(Number(e.target.value))}
+                className="w-32 rounded-md border bg-background px-2 py-1 text-sm"
+                aria-label="Murk to stop at"
+              />
+              <span className="text-xs text-muted-foreground">
+                Murk left (not the amount to spend)
+              </span>
+            </>
           )}
         </div>
 
@@ -1157,10 +1225,15 @@ function RitesTool({
             {overspend && (
               <span className="ml-2 text-red-500">— more than you have</span>
             )}
+            {nothingToSpend && (
+              <span className="ml-2 text-amber-600 dark:text-amber-500">
+                {nothingToSpendWhy}
+              </span>
+            )}
           </span>
           <Button
             onClick={buyRelics}
-            disabled={busy || overspend}
+            disabled={busy || overspend || nothingToSpend}
             className="gap-1.5"
           >
             <Sparkles className="h-4 w-4" />
