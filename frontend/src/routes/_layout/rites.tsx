@@ -49,6 +49,7 @@ import {
 import { isLoggedIn } from "@/hooks/useAuth"
 import useCustomToast from "@/hooks/useCustomToast"
 import { toInlineBuild, useLocalBuilds } from "@/hooks/useLocalBuilds"
+import { CHARACTER_NAMES } from "@/lib/constants"
 import {
   appendRitesBatch,
   effectiveMurks,
@@ -126,7 +127,7 @@ type StopMode = "fixed" | "budget" | "murk_target" | "all_murk"
 // Builds available to match against. The user opts in by selecting a subset (default
 // none -> rules-only, no optimizer). Auth sends build_ids; anon sends the matching inline
 // BuildDefinitions.
-type BuildOption = { id: string; name: string }
+type BuildOption = { id: string; name: string; character: string }
 
 /**
  * Build names are free text and routinely collide (the same "Katanas" saved
@@ -142,13 +143,46 @@ function labelBuilds(
   for (const b of builds) counts.set(b.name, (counts.get(b.name) ?? 0) + 1)
   const seen = new Map<string, number>()
   return builds.map((b) => {
+    const character = b.character ?? ""
     if ((counts.get(b.name) ?? 0) < 2 || !b.character)
-      return { id: b.id, name: b.name }
+      return { id: b.id, name: b.name, character }
     const qualified = `${b.name} (${b.character})`
     const n = (seen.get(qualified) ?? 0) + 1
     seen.set(qualified, n)
-    return { id: b.id, name: n === 1 ? qualified : `${qualified} ${n}` }
+    return {
+      id: b.id,
+      name: n === 1 ? qualified : `${qualified} ${n}`,
+      character,
+    }
   })
+}
+
+/**
+ * Group the selection chips by Nightfarer so a long build list reads as one
+ * block per character instead of an undifferentiated wrap of names. Roster
+ * order (CHARACTER_NAMES) first, then any unrecognized character name, then
+ * builds with no character at all; alphabetical by build name within a group.
+ */
+function groupBuildsByCharacter(
+  options: BuildOption[],
+): Array<{ character: string; builds: BuildOption[] }> {
+  const byCharacter = new Map<string, BuildOption[]>()
+  for (const b of options) {
+    const list = byCharacter.get(b.character)
+    if (list) list.push(b)
+    else byCharacter.set(b.character, [b])
+  }
+  const rank = (character: string) => {
+    if (!character) return CHARACTER_NAMES.length + 1
+    const i = CHARACTER_NAMES.indexOf(character)
+    return i === -1 ? CHARACTER_NAMES.length : i
+  }
+  return [...byCharacter.entries()]
+    .sort(([a], [b]) => rank(a) - rank(b) || a.localeCompare(b))
+    .map(([character, builds]) => ({
+      character,
+      builds: [...builds].sort((a, b) => a.name.localeCompare(b.name)),
+    }))
 }
 type BuildsForm =
   | { kind: "auth"; options: BuildOption[] }
@@ -619,6 +653,10 @@ function RitesTool({
   // staged batches below, so they survive navigation.
   const [plan, setPlan] = useState<PlanResponse | null>(null)
   const [selectedBuilds, setSelectedBuilds] = useState<Set<string>>(new Set())
+  const buildGroups = useMemo(
+    () => groupBuildsByCharacter(buildsForm.options),
+    [buildsForm.options],
+  )
   const [progress, setProgress] = useState<ProgressEvt | null>(null)
   // How many builds the in-flight run was started with (selection can change
   // while it runs); >0 switches the busy UI to the multi-step indicator.
@@ -1038,32 +1076,41 @@ function RitesTool({
             to keep relics your builds would actually use.
           </p>
         ) : (
-          <div className="flex flex-wrap gap-1.5">
-            {buildsForm.options.map((b) => {
-              const on = selectedBuilds.has(b.id)
-              return (
-                <button
-                  key={b.id}
-                  type="button"
-                  onClick={() =>
-                    setSelectedBuilds((s) => {
-                      const n = new Set(s)
-                      if (n.has(b.id)) n.delete(b.id)
-                      else n.add(b.id)
-                      return n
-                    })
-                  }
-                  className={cn(
-                    "rounded-full border px-2.5 py-1 text-xs transition-colors",
-                    on
-                      ? "border-primary bg-primary text-primary-foreground"
-                      : "border-muted-foreground/30 text-muted-foreground hover:border-foreground",
-                  )}
-                >
-                  {b.name}
-                </button>
-              )
-            })}
+          <div className="space-y-2">
+            {buildGroups.map((g) => (
+              <div key={g.character || "__none__"} className="space-y-1">
+                <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                  {g.character || "No character"}
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {g.builds.map((b) => {
+                    const on = selectedBuilds.has(b.id)
+                    return (
+                      <button
+                        key={b.id}
+                        type="button"
+                        onClick={() =>
+                          setSelectedBuilds((s) => {
+                            const n = new Set(s)
+                            if (n.has(b.id)) n.delete(b.id)
+                            else n.add(b.id)
+                            return n
+                          })
+                        }
+                        className={cn(
+                          "rounded-full border px-2.5 py-1 text-xs transition-colors",
+                          on
+                            ? "border-primary bg-primary text-primary-foreground"
+                            : "border-muted-foreground/30 text-muted-foreground hover:border-foreground",
+                        )}
+                      >
+                        {b.name}
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+            ))}
           </div>
         )}
         {selectedBuilds.size > 0 && (
