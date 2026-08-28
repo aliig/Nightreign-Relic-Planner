@@ -23,17 +23,31 @@ Layer-1 record with no Layer-2 row, the exact shape the game itself leaves
 after a run session (ghost resurrection in-game validated 2026-07-14) — so
 ``add_relics`` can reuse it: every sell raises ``add_capacity`` by one.
 
-Adding beyond the ghost supply mints into the arena's virgin tail: the last
-records of the 5120-slot ItemState arena are untouched 8-byte empties, and
-converting one to an 80-byte relic record grows the arena by 72 bytes,
-shifting everything after it. This mirrors the game's own acquisition write:
-each USERDATA slot is a fixed 1,048,608-byte envelope whose serialized data
-is items_end-relative, and diffing one account's real saves (2026-07-15 /
+Adding beyond the ghost supply mints into ANY canonical empty slot of the
+5120-slot ItemState arena (tail-most first, so the fewest bytes move):
+converting an 8-byte empty to an 80-byte relic record grows the arena by 72
+bytes, shifting everything after it. This mirrors the game's own acquisition
+write: each USERDATA slot is a fixed 1,048,608-byte envelope whose serialized
+data is items_end-relative, and diffing one account's real saves (2026-07-15 /
 07-28 / 08-01 snapshots) showed the game itself grew the arena +2,320/+432/
 +14,016 bytes between saves, shifting the whole tail and letting the final
 bytes fall off; the last ~380 KiB of the envelope churns 100% between saves
 (stale serializer residue, never read back). ``_MAX_TAIL_SHIFT`` keeps our
 shift orders of magnitude inside that observed slack.
+
+Minting is deliberately position-independent. Diffing two *game-produced*
+saves of the same character (2026-08-26, Aug 22 vs Aug 26) showed the game
+reserializes the WHOLE arena on every save: net +17 relics but ~1,000 slots
+changed identity, only 2 slots kept the same relic, and new relics appeared
+at slots as low as index 7 — slot position carries no meaning, and a
+mid-arena mint is exactly what the game itself writes. The same diff showed
+the arena grew by exactly 17 x 72 bytes (size is a pure function of content),
+every ga_handle renumbered as a sliding block, and 86% of the trailing 384
+KiB differing between the pair (common suffix before the trailer: 3 bytes).
+Earlier code minted only from a contiguous run of empties at the arena's END;
+real post-session saves park the game's own weapon/armor ghost records there,
+which collapsed capacity to the ghost count (measured 2026-08-26: 12 on a
+save holding 3,292 otherwise-mintable canonical empties).
 """
 import hashlib
 import os
@@ -59,6 +73,17 @@ _ENTRY_COUNT_REL_OFFSET = 0x94 + 0x5B8  # ItemEntry count (u32), then records
 _TRAILER_LEN = 0x1C                   # 28-byte trailer: md5(16) + padding(12)
 _U32_MAX = 0xFFFFFFFF
 
+# Next-acquisition-id counter (u32), 106 bytes past the end of the ItemEntry
+# table. Datamined 2026-08-27 by surveying every save on hand: this field is
+# exactly max(ItemEntry.acquisition_id) + 1 in 11 of 11 game-written saves,
+# across two accounts, four characters and item counts from 736 to 1645 — so
+# it is items_end-relative, not a fixed file offset. The game reads it to
+# stamp the next item it hands the player; leaving it BEHIND the highest id
+# already in the table makes the next acquisitions collide with existing rows.
+_NEXT_ACQ_ID_REL_OFFSET = (
+    _ENTRY_COUNT_REL_OFFSET + 4 + _ITEM_ENTRY_SLOT_COUNT * _ITEM_ENTRY_SIZE + 106
+)
+
 # --- BND4 container constants (mirror save.decrypt_sl2) --------------------
 _BND4_HEADER_LEN = 64
 _BND4_ENTRY_HEADER_LEN = 32
@@ -82,12 +107,12 @@ class AddResult:
     entry_count_before: int = 0
     entry_count_after: int = 0
     ghosts_available: int = 0
-    minted_handles: list[int] = field(default_factory=list)  # subset minted into the virgin tail
+    minted_handles: list[int] = field(default_factory=list)  # subset minted into empty slots
     tail_shift: int = 0  # bytes the post-arena tail moved (72 per minted relic)
 
 
 class AddCapacityError(ValueError):
-    """Not enough ghost records + virgin tail slots / free ItemEntry rows for the add."""
+    """Not enough ghost records + empty arena slots / free ItemEntry rows for the add."""
 
 
 @dataclass
@@ -269,11 +294,13 @@ def delete_relics(blob: bytes, ga_handles, murk_credit: int = 0) -> tuple[bytes,
 
 _RELIC_STATE_SIZE = 80  # full relic ItemState record (see save.Item.from_bytes)
 
-# --- arena-tail minting ------------------------------------------------------
+# --- empty-slot minting ------------------------------------------------------
 _EMPTY_RECORD_SIZE = 8  # untouched arena slot: gaitem_handle(4) + item_id(4)
 # Canonical empty-slot encoding: handle 0, item_id 0xFFFFFFFF. Observed
 # uniformly on every dead slot (4,484 + 3,821 records across two accounts'
 # saves, 2026-08-01 arena survey) — never zero-padded, never stale ids.
+# Re-confirmed 2026-08-26: 0 deviant encodings across ~10,000 empties in three
+# more saves, two of them pristine game-produced ones.
 _EMPTY_SLOT_SENTINEL = b"\x00\x00\x00\x00\xff\xff\xff\xff"
 _MINT_GROWTH = _RELIC_STATE_SIZE - _EMPTY_RECORD_SIZE  # 72 bytes per minted relic
 # Per-export tail-shift budget. The envelope's final ~380 KiB is stale
@@ -284,22 +311,19 @@ _MINT_GROWTH = _RELIC_STATE_SIZE - _EMPTY_RECORD_SIZE  # 72 bytes per minted rel
 _MAX_TAIL_SHIFT = 0x10000
 
 
-def _virgin_tail_slots(data, items) -> list:
-    """Trailing arena records that are canonical empty slots (see sentinel).
+def _empty_slots(data, items) -> list:
+    """Every arena record that is a canonical empty slot (see sentinel), arena order.
 
-    Returned in arena order; these are always the LAST records of the arena.
-    Only this contiguous run is mintable — converting the tail-most empties
-    keeps every live record's offset unchanged and needs a single tail move.
+    Position-independent on purpose: the game-produced save-pair diff of
+    2026-08-26 (same character, Aug 22 vs Aug 26) showed the game reserializes
+    the whole arena every save and puts new relics into empties anywhere
+    (observed as low as slot 7), so any canonical empty is mintable — not just
+    a trailing run. ``add_relics`` still consumes the TAIL-MOST empties first,
+    which only minimizes how many bytes have to move.
     """
-    run = []
-    for item in reversed(items):
-        if item.gaitem_handle != 0 or item.size != _EMPTY_RECORD_SIZE:
-            break
-        if data[item.offset:item.offset + _EMPTY_RECORD_SIZE] != _EMPTY_SLOT_SENTINEL:
-            break
-        run.append(item)
-    run.reverse()
-    return run
+    return [it for it in items
+            if it.gaitem_handle == 0 and it.size == _EMPTY_RECORD_SIZE
+            and data[it.offset:it.offset + _EMPTY_RECORD_SIZE] == _EMPTY_SLOT_SENTINEL]
 
 
 def _fresh_relic_handles(items, count: int) -> list[int]:
@@ -322,12 +346,19 @@ def _fresh_relic_handles(items, count: int) -> list[int]:
 def build_relic_record(real_id: int, effects, curses, template: bytes) -> bytes:
     """Build an 80-byte relic ItemState record from a spec + a real donor template.
 
-    Every byte except item_id (0x04), the three effects (0x10/0x14/0x18) and the three
-    curses (0x38/0x3C/0x40) is copied verbatim from ``template`` — a real 80-byte relic
-    record taken from a save of the same game/patch. That preserves durability, the
-    unknown fields, the 28-byte padding, and the 8 trailing bytes (0x48..0x4F) that
-    ``save.Item.from_bytes`` never parses. The leading ga_handle (0x00) is left as-is; it
-    is a placeholder that ``add_relics`` overwrites with a ghost's game-allocated handle.
+    Every byte except item_id (0x04 AND its mirror at 0x08), the three effects
+    (0x10/0x14/0x18) and the three curses (0x38/0x3C/0x40) is copied verbatim from
+    ``template`` — a real 80-byte relic record taken from a save of the same
+    game/patch. That preserves the unknown fields, the 28-byte padding, and the 8
+    trailing bytes (0x48..0x4F) that ``save.Item.from_bytes`` never parses. The leading
+    ga_handle (0x00) is left as-is; it is a placeholder that ``add_relics`` overwrites
+    with a ghost's game-allocated handle.
+
+    0x08 — the field ``save.Item.from_bytes`` calls ``durability`` — is a second copy of
+    item_id, not an independent value: it mirrors 0x04 in 1101 of 1101 game-written
+    relic records (2026-08-27 survey). Patching only 0x04 left the DONOR's item_id at
+    0x08, an app fingerprint that accumulated across exports (46 -> 57 -> 62 such
+    records on one save) and that the game preserves across a load/save cycle.
 
     Args:
         real_id: the EquipParamAntique row id; stored as ``real_id + 0x80000000``.
@@ -344,7 +375,9 @@ def build_relic_record(real_id: int, effects, curses, template: bytes) -> bytes:
     cur = (list(curses) + [EMPTY_EFFECT] * 3)[:3]
 
     rec = bytearray(template)
-    struct.pack_into("<I", rec, 0x04, (real_id + 0x80000000) & _U32_MAX)
+    item_id = (real_id + 0x80000000) & _U32_MAX
+    struct.pack_into("<I", rec, 0x04, item_id)
+    struct.pack_into("<I", rec, 0x08, item_id)  # 0x08 mirrors item_id (see docstring)
     struct.pack_into("<III", rec, 0x10, *(e & _U32_MAX for e in eff))
     struct.pack_into("<III", rec, 0x38, *(c & _U32_MAX for c in cur))
     return bytes(rec)
@@ -369,11 +402,12 @@ def adjust_murks(blob: bytes, delta: int) -> tuple[bytes, int, int]:
 def add_capacity(blob: bytes) -> int:
     """Max relics addable to this character blob in one ``add_relics`` pass.
 
-    Two mechanisms, applied in order: resurrecting ghost relic records
-    (in-place) and minting into the arena's virgin tail (72-byte grow per
-    relic, budgeted by ``_MAX_TAIL_SHIFT``). Every added relic also needs a
-    free ItemEntry row. Read-only. The in-game 1950 storage cap is the
-    caller's check — this is the blob's structural limit only.
+    Two mechanisms, consumed in order: resurrecting ghost relic records
+    (in-place) and minting into any canonical empty arena slot, tail-most
+    first (72-byte grow per relic, budgeted by ``_MAX_TAIL_SHIFT``). Every
+    added relic also needs a free ItemEntry row. Read-only. The in-game 1950
+    storage cap is the caller's check — this is the blob's structural limit
+    only.
     """
     data = bytearray(blob)
     items, items_end = _parse_items(data, start_offset=0x14, slot_count=5120)
@@ -384,7 +418,7 @@ def add_capacity(blob: bytes) -> int:
         and item.size == _RELIC_STATE_SIZE
         and item.gaitem_handle not in active
     )
-    mintable = min(len(_virgin_tail_slots(data, items)),
+    mintable = min(len(_empty_slots(data, items)),
                    _MAX_TAIL_SHIFT // _MINT_GROWTH)
 
     count_off = items_end + _ENTRY_COUNT_REL_OFFSET
@@ -400,7 +434,7 @@ def add_capacity(blob: bytes) -> int:
 
 
 def add_relics(blob: bytes, records) -> tuple[bytes, AddResult]:
-    """Add relics: resurrect ghost ItemState records, then mint into the tail.
+    """Add relics: resurrect ghost ItemState records, then mint into empty slots.
 
     ``records`` is an iterable of raw 80-byte relic ItemState records (e.g.
     sliced from another save via RawRelic.offset/size). Unknown fields
@@ -412,14 +446,16 @@ def add_relics(blob: bytes, records) -> tuple[bytes, AddResult]:
     no Layer 2 (ItemEntry) row. The new relic overwrites it in place, keeping
     the ghost's game-allocated ga_handle. Zero bytes move.
 
-    Mechanism 2 — virgin-tail mint: beyond the ghost supply, each new relic
-    converts one of the arena's trailing all-zero 8-byte empty records into
-    an 80-byte relic record and shifts the post-arena tail right by 72 bytes
-    — the same items_end-relative grow the game performs on every item
-    acquisition (see the module docstring for the real-save snapshot
-    evidence). The trailing 72 bytes per mint fall off the end of the
-    envelope's stale-residue region; total blob length never changes. Minted
-    records get fresh unique handles, renumbered by the game on next save.
+    Mechanism 2 — empty-slot mint: beyond the ghost supply, each new relic
+    converts one of the arena's canonical 8-byte empty records into an
+    80-byte relic record and shifts everything after it right by 72 bytes —
+    the same items_end-relative grow the game performs on every item
+    acquisition, at the same arbitrary arena positions the game uses (see the
+    module docstring for the real-save evidence). The tail-most empties are
+    consumed first, purely to move the fewest bytes. The trailing 72 bytes
+    per mint fall off the end of the envelope's stale-residue region; total
+    blob length never changes. Minted records get fresh unique handles,
+    renumbered by the game on next save.
 
     Raises AddCapacityError beyond capacity (nothing written), and ValueError
     on a malformed input record.
@@ -449,12 +485,12 @@ def add_relics(blob: bytes, records) -> tuple[bytes, AddResult]:
 
     n_ghost = min(len(records), len(ghosts))
     n_mint = len(records) - n_ghost
-    virgin = _virgin_tail_slots(data, items)
-    mint_budget = min(len(virgin), _MAX_TAIL_SHIFT // _MINT_GROWTH)
+    empties = _empty_slots(data, items)
+    mint_budget = min(len(empties), _MAX_TAIL_SHIFT // _MINT_GROWTH)
     if n_mint > mint_budget:
         raise AddCapacityError(
             f"need {len(records)} addable relic slots, save has "
-            f"{len(ghosts)} ghost records + {mint_budget} mintable tail slots")
+            f"{len(ghosts)} ghost records + {mint_budget} mintable empty slots")
 
     # --- ItemEntry table: free row indices + acquisition_id watermark -------
     # Scanned pre-shift; the table moves as one block, so row INDICES stay
@@ -476,38 +512,43 @@ def add_relics(blob: bytes, records) -> tuple[bytes, AddResult]:
         raise AddCapacityError(
             f"need {len(records)} free ItemEntry slots, save has {len(free_rows)}")
 
-    # --- mechanism 2: grow the arena over the virgin run's FIRST slots ------
-    # Consuming the head of the run keeps the surviving empties tail-most, so
-    # a minted blob stays mintable on later passes.
-    shift = n_mint * _MINT_GROWTH
-    minted_handles: list[int] = []
-    if n_mint:
-        minted_handles = _fresh_relic_handles(items, n_mint)
-        mint_zone = virgin[0].offset
-        move_src = mint_zone + n_mint * _EMPTY_RECORD_SIZE
-        body_end = len(data) - _TRAILER_LEN
-        # Shift everything after the consumed empties right by `shift`; the
-        # trailing `shift` bytes of the body (stale residue) fall away. The
-        # RHS slice copies before assignment, so the overlapping move is safe.
-        data[mint_zone + n_mint * _RELIC_STATE_SIZE:body_end] = \
-            data[move_src:body_end - shift]
-        # The minted records tile [mint_zone, mint_zone + 80*n_mint) exactly
-        # over the consumed empties (8*n_mint bytes) plus the opened gap.
-        for i in range(n_mint):
-            rec = bytearray(records[n_ghost + i])
-            struct.pack_into("<I", rec, 0, minted_handles[i])
-            off = mint_zone + i * _RELIC_STATE_SIZE
-            data[off:off + _RELIC_STATE_SIZE] = rec
-    items_end += shift
-    result.minted_handles = minted_handles
-    result.tail_shift = shift
-
-    # --- mechanism 1: overwrite ghosts in place (offsets precede the tail) --
+    # --- mechanism 1: overwrite ghosts in place -----------------------------
+    # Done BEFORE the arena rebuild: a mint can now land anywhere, so a ghost's
+    # offset is only guaranteed valid while the arena still has its old layout.
     for i in range(n_ghost):
         ghost = ghosts[i]
         patched = bytearray(records[i])
         struct.pack_into("<I", patched, 0, ghost.gaitem_handle)
         data[ghost.offset:ghost.offset + _RELIC_STATE_SIZE] = patched
+
+    # --- mechanism 2: grow the arena over the TAIL-MOST empty slots ----------
+    # Tail-most only minimizes how many bytes move; any canonical empty would
+    # be correct (see _empty_slots). The body is rebuilt as: everything before
+    # the first chosen slot, then, per chosen slot, its new 80-byte record
+    # followed by the untouched span up to the next chosen slot. The last span
+    # stops `shift` bytes early, so the stale residue at the end of the body
+    # absorbs the growth: each consumed 8-byte sentinel becomes an 80-byte
+    # record (+72) and 72 bytes of residue fall off per mint, which is why the
+    # blob length never changes.
+    shift = n_mint * _MINT_GROWTH
+    minted_handles: list[int] = []
+    if n_mint:
+        minted_handles = _fresh_relic_handles(items, n_mint)
+        chosen = empties[-n_mint:]  # ascending offset
+        body_end = len(data) - _TRAILER_LEN
+        parts = [bytes(data[:chosen[0].offset])]
+        for i, slot in enumerate(chosen):
+            rec = bytearray(records[n_ghost + i])
+            struct.pack_into("<I", rec, 0, minted_handles[i])
+            parts.append(bytes(rec))
+            seg_end = chosen[i + 1].offset if i + 1 < n_mint else body_end - shift
+            parts.append(bytes(data[slot.offset + _EMPTY_RECORD_SIZE:seg_end]))
+        parts.append(bytes(data[body_end:]))  # the 28-byte trailer stays put
+        data = bytearray(b"".join(parts))
+        assert len(data) == len(blob), f"length changed: {len(blob)} -> {len(data)}"
+    items_end += shift
+    result.minted_handles = minted_handles
+    result.tail_shift = shift
 
     result.added_handles = [g.gaitem_handle for g in ghosts[:n_ghost]] + minted_handles
 
@@ -518,6 +559,17 @@ def add_relics(blob: bytes, records) -> tuple[bytes, AddResult]:
         off = entries_start + free_rows[i] * _ITEM_ENTRY_SIZE
         # ItemEntry row: amount=1, next acquisition ordinal, not favorite/new.
         struct.pack_into("<IIIBB", data, off, handle, 1, max_acq + 1 + i, 0, 0)
+
+    # Keep the save's next-acquisition-id counter ahead of every id we just
+    # handed out, exactly as the game does (see _NEXT_ACQ_ID_REL_OFFSET). Only
+    # ever advance it: an export that leaves it behind makes the game reissue
+    # ids already in the table. max() also preserves the harmless case where
+    # the stored counter is already further ahead than our own watermark.
+    if result.added_handles:
+        acq_off = items_end + _NEXT_ACQ_ID_REL_OFFSET
+        stored_next = struct.unpack_from("<I", data, acq_off)[0]
+        struct.pack_into("<I", data, acq_off,
+                         max(stored_next, max_acq + len(result.added_handles) + 1))
 
     entry_count_before = struct.unpack_from("<I", data, count_off)[0]
     entry_count_after = entry_count_before + len(records)

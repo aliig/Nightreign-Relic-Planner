@@ -15,7 +15,7 @@ import pytest
 from nrplanner import decrypt_sl2, parse_relics
 from nrplanner.constants import EMPTY_EFFECT
 from nrplanner.models import RelicInventory
-from nrplanner.save import _parse_items
+from nrplanner.save import _parse_items, read_char_name
 from nrplanner.vessel import LoadoutHandler
 from nrplanner.writer import (
     AddCapacityError,
@@ -75,8 +75,9 @@ def test_patch_slot_checksum_roundtrip():
 class TestBuildRelicRecord:
     """build_relic_record offset math — no save fixture needed."""
 
-    # item_id(0x04), effects(0x10/0x14/0x18), curses(0x38/0x3C/0x40).
-    _WRITTEN = set(range(0x04, 0x08)) | set(range(0x10, 0x1C)) | set(range(0x38, 0x44))
+    # item_id(0x04) + its mirror(0x08), effects(0x10/0x14/0x18), curses(0x38/0x3C/0x40).
+    _WRITTEN = (set(range(0x04, 0x0C)) | set(range(0x10, 0x1C))
+                | set(range(0x38, 0x44)))
 
     def test_writes_fields_and_preserves_all_other_bytes(self):
         template = bytearray(i & 0xFF for i in range(80))  # distinct filler
@@ -89,6 +90,8 @@ class TestBuildRelicRecord:
 
         assert len(rec) == 80
         assert struct.unpack_from("<I", rec, 0x04)[0] == real_id + 0x80000000
+        # 0x08 mirrors item_id — must NOT keep the donor template's id.
+        assert struct.unpack_from("<I", rec, 0x08)[0] == real_id + 0x80000000
         assert list(struct.unpack_from("<III", rec, 0x10)) == [310000, 320000, EMPTY_EFFECT]
         assert list(struct.unpack_from("<III", rec, 0x38)) == [EMPTY_EFFECT] * 3
         # Handle left as-is (add_relics rewrites it); everything else preserved.
@@ -147,6 +150,21 @@ def _read_murks(blob: bytes) -> int:
 def _read_entry_count(blob: bytes) -> int:
     _, items_end = _parse_items(blob, start_offset=0x14, slot_count=5120)
     return struct.unpack_from("<I", blob, items_end + 0x94 + 0x5B8)[0]
+
+
+def _read_next_acq_id(blob: bytes) -> int:
+    """The save's next-acquisition-id counter (see writer._NEXT_ACQ_ID_REL_OFFSET)."""
+    from nrplanner.writer import _NEXT_ACQ_ID_REL_OFFSET
+
+    _, items_end = _parse_items(blob, start_offset=0x14, slot_count=5120)
+    return struct.unpack_from("<I", blob, items_end + _NEXT_ACQ_ID_REL_OFFSET)[0]
+
+
+def _max_acq_id(blob: bytes) -> int:
+    from nrplanner.writer import read_acquisition_ids
+
+    _, items_end = _parse_items(blob, start_offset=0x14, slot_count=5120)
+    return max(read_acquisition_ids(blob, items_end).values(), default=0)
 
 
 def _pick_deletable(userdata, items_json, ds) -> object:
@@ -225,7 +243,7 @@ class TestRoundTrip:
         new_blob, res = add_relics(sold_blob, [record] * cap)
         assert res.entry_count_after == res.entry_count_before + cap
         # Capacity is per-pass: the tail-shift budget renews each export, so a
-        # follow-up pass keeps minting from whatever virgin run remains.
+        # follow-up pass keeps minting from whatever empty slots remain.
         _, res2 = add_relics(new_blob, [record])
         assert res2.ghosts_available == 0
         assert len(res2.minted_handles) == 1
@@ -311,6 +329,76 @@ def _ghost_relics(blob: bytes):
 
 
 @requires_fixture
+class TestGameWrittenInvariants:
+    """Invariants the GAME maintains, which every export must also maintain.
+
+    Both were found by diffing a failing export against real saves (2026-08-27);
+    the fixture is a game-written save, so it must satisfy them untouched.
+    """
+
+    def test_next_acq_counter_is_one_past_the_highest_id(self, userdata):
+        # Held in 11 of 11 game-written saves surveyed — this is what pins
+        # _NEXT_ACQ_ID_REL_OFFSET to the right field.
+        assert _read_next_acq_id(userdata) == _max_acq_id(userdata) + 1
+
+    def test_relic_records_mirror_item_id_at_0x08(self, userdata):
+        relics, _ = parse_relics(userdata)
+        assert relics, "fixture should contain relics"
+        for r in relics:
+            if r.size != 80:
+                continue
+            item_id, mirror = struct.unpack_from("<II", userdata, r.offset + 0x04)
+            assert mirror == item_id, (
+                f"relic {r.ga_handle:#x} at {r.offset}: 0x08={mirror:#x} "
+                f"does not mirror item_id={item_id:#x}")
+
+
+@requires_fixture
+class TestNextAcquisitionCounter:
+    """add_relics must leave the counter ahead of every id it hands out."""
+
+    def test_counter_advances_past_every_new_row(self, userdata):
+        record = _clone_relic_record(userdata)
+        before = _read_next_acq_id(userdata)
+        max_before = _max_acq_id(userdata)
+
+        new_blob, result = add_relics(userdata, [record] * 3)
+
+        assert len(result.added_handles) == 3
+        after_max = _max_acq_id(new_blob)
+        assert after_max == max_before + 3          # ids handed out contiguously
+        assert _read_next_acq_id(new_blob) > after_max
+        assert _read_next_acq_id(new_blob) > before
+
+    def test_counter_never_moves_backwards(self, userdata):
+        # A counter already further ahead than our watermark must be preserved,
+        # not clobbered down to max+1.
+        from nrplanner.writer import _NEXT_ACQ_ID_REL_OFFSET
+
+        blob = bytearray(userdata)
+        _, items_end = _parse_items(blob, start_offset=0x14, slot_count=5120)
+        far_ahead = _max_acq_id(bytes(blob)) + 10_000
+        struct.pack_into("<I", blob, items_end + _NEXT_ACQ_ID_REL_OFFSET, far_ahead)
+
+        new_blob, _ = add_relics(bytes(blob), [_clone_relic_record(userdata)])
+
+        assert _read_next_acq_id(new_blob) == far_ahead
+
+    def test_no_adds_leaves_the_counter_untouched(self, userdata):
+        before = _read_next_acq_id(userdata)
+        new_blob, result = add_relics(userdata, [])
+        assert result.added_handles == []
+        assert _read_next_acq_id(new_blob) == before
+
+
+def _clone_relic_record(blob: bytes) -> bytes:
+    """An owned relic's raw 80-byte ItemState record, as realistic add input."""
+    relics, _ = parse_relics(blob)
+    source = next(r for r in relics if r.size == 80)
+    return blob[source.offset:source.offset + 80]
+
+
+@requires_fixture
 class TestAddRelics:
     def test_add_cloned_relic_full_roundtrip(self, raw_save, userdata):
         ghosts = _ghost_relics(userdata)
@@ -352,7 +440,7 @@ class TestAddRelics:
 
     def test_add_beyond_ghost_capacity_mints(self, userdata):
         """Beyond the ghost supply adds no longer fail — the excess is minted
-        into the arena's virgin tail (mechanism 2)."""
+        into the arena's empty slots (mechanism 2)."""
         ghosts = _ghost_relics(userdata)
         relics, _ = parse_relics(userdata)
         record = userdata[relics[0].offset:relics[0].offset + 80]
@@ -419,11 +507,12 @@ class TestAddRelics:
         assert (added.sec_effect1, added.sec_effect2, added.sec_effect3) == relic.curses
 
 
-def _virgin_tail_count(blob: bytes) -> int:
-    from nrplanner.writer import _virgin_tail_slots
+def _empty_slot_count(blob: bytes) -> int:
+    """Canonical empty arena slots ANYWHERE in the arena (the mintable pool)."""
+    from nrplanner.writer import _empty_slots
 
     items, _ = _parse_items(blob, start_offset=0x14, slot_count=5120)
-    return len(_virgin_tail_slots(blob, items))
+    return len(_empty_slots(blob, items))
 
 
 def _free_entry_rows(blob: bytes) -> int:
@@ -437,11 +526,35 @@ def _free_entry_rows(blob: bytes) -> int:
     )
 
 
+def _live_entry_rows(blob: bytes) -> int:
+    from nrplanner.save import _ITEM_ENTRY_SLOT_COUNT
+
+    return _ITEM_ENTRY_SLOT_COUNT - _free_entry_rows(blob)
+
+
+def _trailing_empty_run(blob: bytes) -> int:
+    """Canonical empties in a CONTIGUOUS run at the arena's end.
+
+    Replicates the pre-2026-08-27 mint rule so the regression test can show it
+    is 0 exactly where minting must still work.
+    """
+    from nrplanner.writer import _EMPTY_SLOT_SENTINEL
+
+    items, _ = _parse_items(blob, start_offset=0x14, slot_count=5120)
+    run = 0
+    for it in reversed(items):
+        if (it.gaitem_handle != 0 or it.size != 8
+                or blob[it.offset:it.offset + 8] != _EMPTY_SLOT_SENTINEL):
+            break
+        run += 1
+    return run
+
+
 @requires_fixture
 class TestMintRelics:
-    """Virgin-tail minting: adds beyond the ghost supply grow the arena in
-    place, shifting the items_end-relative tail exactly like the game's own
-    acquisition write."""
+    """Empty-slot minting: adds beyond the ghost supply convert canonical empty
+    arena records (tail-most first) into 80-byte relic records, shifting the
+    items_end-relative tail exactly like the game's own acquisition write."""
 
     def test_mint_full_roundtrip_preserves_everything(self, raw_save, userdata, ds):
         from nrplanner.constants import ITEM_TYPE_RELIC
@@ -457,7 +570,7 @@ class TestMintRelics:
         murks_before = _read_murks(userdata)
         count_before = _read_entry_count(userdata)
         favs_before = read_favorite_handles(userdata, items_end_before)
-        virgin_before = _virgin_tail_count(userdata)
+        empties_before = _empty_slot_count(userdata)
         old_items, _ = _parse_items(userdata, start_offset=0x14, slot_count=5120)
         old_handles = {it.gaitem_handle for it in old_items if it.gaitem_handle}
         loadout_before = LoadoutHandler(ds)
@@ -476,11 +589,11 @@ class TestMintRelics:
             assert (h & 0xF0000000) == ITEM_TYPE_RELIC
             assert h not in old_handles
 
-        # Minted records occupy the arena's former virgin tail, tiling exactly.
+        # Each mint consumed exactly one canonical empty slot.
         _, items_end_after_direct = _parse_items(new_blob, start_offset=0x14,
                                                  slot_count=5120)
         assert items_end_after_direct == items_end_before + n_mint * 72
-        assert _virgin_tail_count(new_blob) == virgin_before - n_mint
+        assert _empty_slot_count(new_blob) == empties_before - n_mint
 
         # Survives a full repack/re-decrypt.
         repacked = repack_sl2(raw_save, {0: new_blob})
@@ -508,6 +621,17 @@ class TestMintRelics:
                 == loadout_before.parser.base_offset + n_mint * 72)
         assert loadout_after.relic_ga_hero_map == loadout_before.relic_ga_hero_map
 
+        # Layer 1 / Layer 2 stay consistent: the stored ItemEntry count still
+        # equals the live row count, and no two arena records share a handle.
+        assert _read_entry_count(rt) == _live_entry_rows(rt)
+        rt_items, _ = _parse_items(rt, start_offset=0x14, slot_count=5120)
+        rt_handles = [it.gaitem_handle for it in rt_items if it.gaitem_handle]
+        assert len(rt_handles) == len(set(rt_handles))
+
+        # The character name rides the items_end-relative shift intact.
+        assert (read_char_name(rt, items_end_after)
+                == read_char_name(userdata, items_end_before))
+
         # MD5 trailer valid on the round-tripped blob.
         end = len(rt) - 28
         assert rt[end:end + 16] == hashlib.md5(
@@ -517,11 +641,15 @@ class TestMintRelics:
         from nrplanner.writer import _MAX_TAIL_SHIFT, _MINT_GROWTH
 
         ghosts = len(_ghost_relics(userdata))
-        mintable = min(_virgin_tail_count(userdata), _MAX_TAIL_SHIFT // _MINT_GROWTH)
+        mintable = min(_empty_slot_count(userdata), _MAX_TAIL_SHIFT // _MINT_GROWTH)
         assert add_capacity(userdata) == min(ghosts + mintable, _free_entry_rows(userdata))
 
     def test_mint_then_mint_again(self, userdata):
-        """A minted blob is a valid base for another mint pass."""
+        """A minted blob is a valid base for another mint pass.
+
+        Tail-most selection means pass 1 leaves relic records at the arena's
+        end, so pass 2 necessarily mints into empties that have live records
+        after them — i.e. it exercises the mid-arena rebuild."""
         ghosts = _ghost_relics(userdata)
         relics, _ = parse_relics(userdata)
         record = userdata[relics[0].offset:relics[0].offset + 80]
@@ -532,17 +660,139 @@ class TestMintRelics:
         assert len(res2.minted_handles) == 2
         assert set(res2.minted_handles).isdisjoint(res1.minted_handles)
 
+        # Pass 2's records sit BEFORE pass 1's, i.e. it rebuilt mid-arena with
+        # live records after the mint point.
+        offsets = {it.gaitem_handle: it.offset for it
+                   in _parse_items(second, start_offset=0x14, slot_count=5120)[0]}
+        assert (max(offsets[h] for h in res2.minted_handles)
+                < min(offsets[h] for h in res1.minted_handles))
+
         after, _ = parse_relics(second)
         assert len(after) == len(relics) + len(ghosts) + 4
 
-    def test_corrupt_virgin_slot_shrinks_mint_capacity(self, userdata):
+    def test_corrupt_empty_slot_shrinks_mint_capacity_by_one(self, userdata):
         """A byte off the canonical 00000000/FFFFFFFF empty-slot sentinel
-        disqualifies that record and everything before it — minting only
-        trusts verified sentinel slots."""
+        disqualifies THAT record only — minting still trusts verified sentinel
+        slots, but a deviant one no longer disqualifies its neighbours."""
         items, _ = _parse_items(userdata, start_offset=0x14, slot_count=5120)
         assert items[-1].gaitem_handle == 0 and items[-1].size == 8
-        virgin_before = _virgin_tail_count(userdata)
-        assert virgin_before > 0
+        empties_before = _empty_slot_count(userdata)
+        assert empties_before > 0
         poisoned = bytearray(userdata)
         poisoned[items[-1].offset + 4] = 0x7F  # breaks the item_id sentinel
-        assert _virgin_tail_count(bytes(poisoned)) == 0
+        assert _empty_slot_count(bytes(poisoned)) == empties_before - 1
+
+    def test_mint_survives_a_blocked_tail(self, raw_save, userdata):
+        """THE regression: a save whose LAST arena record is not a canonical
+        empty must still mint.
+
+        Real post-session saves park the game's own weapon/armor ghost records
+        at the arena's end, so the old trailing-run rule reported zero mintable
+        slots (measured 2026-08-26: capacity 12 on a save holding 3,292
+        canonical empties). Simulated by poisoning the last record's item_id —
+        it still parses as an 8-byte record, so the arena stays in sync, but
+        the trailing canonical run collapses to 0.
+        """
+        from nrplanner.writer import _MAX_TAIL_SHIFT, _MINT_GROWTH
+
+        items, items_end_before = _parse_items(userdata, start_offset=0x14,
+                                               slot_count=5120)
+        assert items[-1].gaitem_handle == 0 and items[-1].size == 8
+        poisoned = bytearray(userdata)
+        struct.pack_into("<I", poisoned, items[-1].offset + 4, 0x12345678)
+        blocked = bytes(poisoned)
+
+        # Arena still parses identically — only a dead slot's id changed.
+        _, items_end_blocked = _parse_items(blocked, start_offset=0x14, slot_count=5120)
+        assert items_end_blocked == items_end_before
+        assert _trailing_empty_run(blocked) == 0  # the old rule would mint nothing
+
+        ghosts = _ghost_relics(blocked)
+        empties = _empty_slot_count(blocked)
+        n_mint = 3
+        assert empties >= n_mint
+        assert add_capacity(blocked) == min(
+            len(ghosts) + min(empties, _MAX_TAIL_SHIFT // _MINT_GROWTH),
+            _free_entry_rows(blocked))
+
+        before_relics, _ = parse_relics(blocked)
+        source = next(r for r in before_relics if r.size == 80)
+        record = blocked[source.offset:source.offset + 80]
+        n = len(ghosts) + n_mint
+        new_blob, res = add_relics(blocked, [record] * n)
+
+        assert len(res.minted_handles) == n_mint
+        assert res.tail_shift == n_mint * 72
+        assert len(new_blob) == len(blocked)
+
+        rt = _decrypt_blob(repack_sl2(raw_save, {0: new_blob}))
+        after_relics, items_end_after = parse_relics(rt)
+        by_handle = {r.ga_handle: r for r in after_relics}
+        assert len(after_relics) == len(before_relics) + n
+        for h in res.added_handles:
+            assert h in by_handle
+        for r in before_relics:
+            assert r.ga_handle in by_handle
+        assert items_end_after == items_end_before + n_mint * 72
+        assert _empty_slot_count(rt) == empties - n_mint
+        assert _read_entry_count(rt) == _live_entry_rows(rt)
+
+        # The blocking record survived the rebuild untouched, still a dead slot.
+        rt_items, _ = _parse_items(rt, start_offset=0x14, slot_count=5120)
+        assert rt_items[-1].gaitem_handle == 0
+        assert rt_items[-1].item_id == 0x12345678
+
+    def test_mint_into_non_contiguous_empties(self, raw_save, userdata):
+        """The rebuild must handle chosen empties that are NOT adjacent.
+
+        Real arenas interleave dead slots with live records, so the tail-most
+        empties are usually scattered. Simulated by poisoning every other one of
+        the last 12 records: the three mintable empties then sit 16 bytes apart
+        and each needs its own segment in the rebuild.
+        """
+        items, items_end_before = _parse_items(userdata, start_offset=0x14,
+                                               slot_count=5120)
+        poisoned = bytearray(userdata)
+        for k in range(1, 13, 2):
+            slot = items[-k]
+            assert slot.gaitem_handle == 0 and slot.size == 8
+            struct.pack_into("<I", poisoned, slot.offset + 4, 0xAAAAAAAA)
+        scattered = bytes(poisoned)
+
+        scattered_items, _ = _parse_items(scattered, start_offset=0x14, slot_count=5120)
+        from nrplanner.writer import _empty_slots
+        chosen = _empty_slots(scattered, scattered_items)[-3:]
+        assert all(chosen[i + 1].offset - chosen[i].offset == 16 for i in range(2)), (
+            "the mintable empties must be non-adjacent for this test to mean anything")
+
+        ghosts = _ghost_relics(scattered)
+        before_relics, _ = parse_relics(scattered)
+        source = next(r for r in before_relics if r.size == 80)
+        record = scattered[source.offset:source.offset + 80]
+        n = len(ghosts) + 3
+        new_blob, res = add_relics(scattered, [record] * n)
+        assert len(res.minted_handles) == 3
+        assert len(new_blob) == len(scattered)
+
+        rt = _decrypt_blob(repack_sl2(raw_save, {0: new_blob}))
+        after_items, items_end_after = _parse_items(rt, start_offset=0x14, slot_count=5120)
+        assert items_end_after == items_end_before + 3 * 72
+
+        # Each mint landed in its own slot; the six poisoned dead slots between
+        # and after them survived byte-for-byte.
+        by_handle = {it.gaitem_handle: it for it in after_items}
+        for h in res.minted_handles:
+            assert by_handle[h].size == 80
+        assert sum(1 for it in after_items
+                   if it.gaitem_handle == 0 and it.size == 8
+                   and it.item_id == 0xAAAAAAAA) == 6
+
+        after_relics, _ = parse_relics(rt)
+        relics_by_handle = {r.ga_handle: r for r in after_relics}
+        assert len(after_relics) == len(before_relics) + n
+        for h in res.minted_handles:
+            minted = relics_by_handle[h]
+            assert (minted.item_id, minted.effect_1, minted.effect_2,
+                    minted.effect_3) == (source.item_id, source.effect_1,
+                                         source.effect_2, source.effect_3)
+        assert _read_entry_count(rt) == _live_entry_rows(rt)
