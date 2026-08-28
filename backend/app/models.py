@@ -316,7 +316,7 @@ class RitesPlanResponse(SQLModel):
     murk_delta: int
     limited_by: str | None = None   # "murk" | "storage" | "gen_max" | None
     add_capacity: int               # effective add capacity: ghost slots +
-                                    # mintable virgin-tail slots + staged sells −
+                                    # mintable empty slots + staged sells −
                                     # staged mints (how many MORE relics the
                                     # next export can mint)
     storage_left: int               # all_murk: 1950 − effective owned (staged diff
@@ -566,6 +566,16 @@ class OptimizationSnapshot(SQLModel, table=True):
     # half-diffs the user never saw.  Backfilled on the adding migration — a
     # NULL baseline is only correct for a build that has never been optimized.
     baseline: dict | None = Field(
+        default=None, sa_column=Column(JSON, nullable=True)
+    )
+    # The same thing, restricted to the save's OWN inventory: only a pure-save
+    # run advances it, so staged Relic Rites purchases can never leak into the
+    # yardstick an upload is measured against.  A pure-save run diffs against
+    # THIS; a staged run diffs against `baseline` (app.core.snapshot_baseline.
+    # pick_baseline).  Nullable and only partly backfillable — a build whose
+    # last acknowledged state was staged has no honest pure-save arrangement to
+    # name, and reports status "new" once instead of a fabricated loss.
+    save_baseline: dict | None = Field(
         default=None, sa_column=Column(JSON, nullable=True)
     )
 

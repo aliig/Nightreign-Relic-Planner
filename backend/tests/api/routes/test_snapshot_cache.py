@@ -702,12 +702,15 @@ class TestStagedSnapshotCache:
 
         # Age the BASELINE to a previous optimizer version, leaving the layouts
         # it recorded in place — exactly the state a snapshot last optimized
-        # before a version bump is in.  Reassigned rather than mutated so the
-        # JSON column is seen as dirty.
+        # before a version bump is in.  Both tracks: a pure-save run advances
+        # them together, so they hold the same record here, and the pure re-run
+        # below is measured against the save one.  Reassigned rather than
+        # mutated so the JSON columns are seen as dirty.
         snap = _snap()
-        baseline = dict(snap.baseline)
-        baseline["inputs"] = {**baseline["inputs"], "optimizer_version": "3"}
-        snap.baseline = baseline
+        for field in ("baseline", "save_baseline"):
+            aged = dict(getattr(snap, field))
+            aged["inputs"] = {**aged["inputs"], "optimizer_version": "3"}
+            setattr(snap, field, aged)
         db.add(snap)
         db.commit()
 
@@ -831,6 +834,171 @@ class TestStagedSnapshotCache:
         change = _snap().last_change
         assert change["causes"] == [], change
         assert change["status"] == "unchanged", change
+
+
+    def test_a_dismissed_purchase_never_becomes_the_upload_yardstick(
+        self,
+        client: TestClient,
+        normal_user_token_headers: dict[str, str],
+        db: Session,
+    ) -> None:
+        """The reported bug: buy in Relic Rites, dismiss, discard, re-upload.
+
+        Dismissing used to advance the ONE baseline onto layouts built from
+        staged purchases.  Discarding those purchases and uploading a newer save
+        was then diffed against relics that had never been in any save, so every
+        purchase was narrated as "gone from your save" with a percentage loss
+        attached and the blame put on the save.
+
+        The save track is only advanced by pure-save runs, so it still holds the
+        arrangement the user actually acknowledged about their save.
+        """
+        from tests.api.routes.test_optimize import _targeted_mints
+
+        mints = _targeted_mints()
+        wanted = [e for m in mints for e in m["effects"] if e not in (EMPTY, 0)]
+        minted_ids = {m["real_id"] for m in mints}
+
+        user = get_test_user(db)
+        profile = seed_profile_with_relics(db, user.id, with_hash=True)
+        build = create_build(
+            client, normal_user_token_headers,
+            # 100 is the seeded relics' effect: without it the save-only optimum
+            # is an empty zero-score layout and there is no baseline to contaminate.
+            groups=[{"weight": 10, "effects": [100, *wanted], "families": []}],
+        )
+
+        def _snap() -> OptimizationSnapshot:
+            row = db.exec(
+                select(OptimizationSnapshot).where(
+                    OptimizationSnapshot.build_id == uuid.UUID(build["id"]),
+                )
+            ).first()
+            assert row is not None
+            db.refresh(row)
+            return row
+
+        # 1. The save as uploaded — the state the user has acknowledged.
+        assert self._run(
+            client, normal_user_token_headers, build["id"], str(profile.id)
+        ).status_code == 200
+        save_score = _snap().best_score
+
+        # 2. A Relic Rites spree: bought in-app, never exported.
+        assert self._run(
+            client, normal_user_token_headers, build["id"], str(profile.id),
+            staged_mints=mints,
+        ).status_code == 200
+        assert _snap().last_change["causes"] == ["staged"]
+        staged_score = _snap().best_score
+        assert staged_score > save_score, (
+            "the mints must actually move the optimum or this proves nothing"
+        )
+
+        # 3. The user dismisses the change on the builds page.
+        ack = client.post(
+            f"/api/v1/optimize/summaries/{build['id']}/reviewed",
+            headers=normal_user_token_headers,
+        )
+        assert ack.status_code == 204, ack.text
+        assert _snap().baseline["best_score"] == staged_score, (
+            "the effective baseline still tracks what the user acknowledged"
+        )
+        assert _snap().save_baseline["best_score"] == save_score, (
+            "the save baseline must not absorb relics that are not in the save"
+        )
+
+        # 4. The purchases are discarded and a newer save is uploaded: a
+        #    pure-save run over a changed inventory.
+        TestSnapshotCache._add_relic_and_rehash(db, profile, effect=100)
+        assert self._run(
+            client, normal_user_token_headers, build["id"], str(profile.id)
+        ).status_code == 200
+        change = _snap().last_change
+
+        assert change["causes"] == ["relics"], change
+        assert change["best_before"] == save_score, (
+            "measured from the last acknowledged SAVE, not from the discarded "
+            "shopping trip"
+        )
+        assert not [
+            r for r in change["left"] if r["real_id"] in minted_ids
+        ], "a discarded purchase must never be reported as a lost relic"
+
+    def test_a_discarded_purchase_is_not_relost_on_the_next_spree(
+        self,
+        client: TestClient,
+        normal_user_token_headers: dict[str, str],
+        db: Session,
+    ) -> None:
+        """Same leak, reached through Relic Rites instead of an upload.
+
+        A staged baseline's layouts are anchored to the save they were built on.
+        Once that save is replaced the purchases are gone for good, so the next
+        spree is measured from the save track rather than reporting the first
+        spree's relics as lost a second time.
+        """
+        from tests.api.routes.test_optimize import _targeted_mints
+
+        first_spree = _targeted_mints()
+        second_spree = _targeted_mints(seed_base=2000)
+
+        def _ids(mints: list[dict]) -> set[tuple]:
+            return {(m["real_id"], tuple(m["effects"])) for m in mints}
+
+        assert not _ids(first_spree) & _ids(second_spree), (
+            "the two sprees must roll different relics or this proves nothing"
+        )
+        wanted = [
+            e
+            for m in first_spree + second_spree
+            for e in m["effects"]
+            if e not in (EMPTY, 0)
+        ]
+
+        user = get_test_user(db)
+        profile = seed_profile_with_relics(db, user.id, with_hash=True)
+        build = create_build(
+            client, normal_user_token_headers,
+            # 100 is the seeded relics' effect: without it the save-only optimum
+            # is an empty zero-score layout and there is no baseline to contaminate.
+            groups=[{"weight": 10, "effects": [100, *wanted], "families": []}],
+        )
+
+        def _snap() -> OptimizationSnapshot:
+            row = db.exec(
+                select(OptimizationSnapshot).where(
+                    OptimizationSnapshot.build_id == uuid.UUID(build["id"]),
+                )
+            ).first()
+            assert row is not None
+            db.refresh(row)
+            return row
+
+        assert self._run(
+            client, normal_user_token_headers, build["id"], str(profile.id)
+        ).status_code == 200
+        assert self._run(
+            client, normal_user_token_headers, build["id"], str(profile.id),
+            staged_mints=first_spree,
+        ).status_code == 200
+        ack = client.post(
+            f"/api/v1/optimize/summaries/{build['id']}/reviewed",
+            headers=normal_user_token_headers,
+        )
+        assert ack.status_code == 204, ack.text
+        # Newer save (purchases discarded), then a fresh spree against it.
+        TestSnapshotCache._add_relic_and_rehash(db, profile, effect=100)
+        assert self._run(
+            client, normal_user_token_headers, build["id"], str(profile.id),
+            staged_mints=second_spree,
+        ).status_code == 200
+        change = _snap().last_change
+        assert not [
+            r
+            for r in change["left"]
+            if (r["real_id"], tuple(r["effects"])) in _ids(first_spree)
+        ], "the first spree's relics exist nowhere and cannot be lost again"
 
 
 @pytest.mark.usefixtures("override_game_data")

@@ -16,9 +16,23 @@ was classified as a staged edit and suppressed.  With a sticky baseline the two
 compose into one honest verdict — "since the save you last looked at, here is
 where your build stands" — and the causes list names *everything* that moved.
 
-The baseline is a single JSON blob rather than a column per field: nothing
-filters or joins on it, and the freshness hashes it duplicates stay in their own
-columns where the cache-hit query needs them.
+There are TWO baselines, because a staged run and a pure-save run are not
+measuring against the same yardstick:
+
+- ``baseline`` is the last acknowledged arrangement over the EFFECTIVE
+  inventory, staged Relic Rites purchases included;
+- ``save_baseline`` is the last acknowledged arrangement over the SAVE's own
+  inventory, and only a pure-save run ever advances it.
+
+Without the split, dismissing a Relic Rites change folded relics that were never
+in any save into the one baseline the next upload would be diffed against — so
+discarding the purchases and uploading a newer save reported every purchase as
+"gone from your save", with a percentage attached, and blamed it on the save.
+A pure-save run reads ``save_baseline``; a staged run reads ``baseline``.
+
+The baselines are JSON blobs rather than a column per field: nothing filters or
+joins on them, and the freshness hashes they duplicate stay in their own columns
+where the cache-hit query needs them.
 """
 from typing import Any
 
@@ -79,6 +93,72 @@ def baseline_layouts(baseline: dict[str, Any] | None) -> list[dict] | None:
     if not baseline:
         return None
     return baseline.get("layouts") or None
+
+
+def is_staged_baseline(baseline: dict[str, Any] | None) -> bool:
+    """Whether this baseline's arrangement used relics that were never saved.
+
+    Read off the baseline's OWN recorded inputs, not the snapshot column of the
+    same name: the column describes the latest run, while a baseline can be
+    several runs old.
+    """
+    if not baseline:
+        return False
+    return ((baseline.get("inputs") or {}).get("staged_signature")) is not None
+
+
+def pick_baseline(
+    baseline: dict[str, Any] | None,
+    save_baseline: dict[str, Any] | None,
+    *,
+    staged: bool,
+    base_relics_hash: str,
+) -> dict[str, Any] | None:
+    """The baseline THIS run must be measured against.
+
+    A staged run is asking "what did buying these relics do?", so it compares
+    against everything the user has acknowledged.  A pure-save run is asking
+    "what did my save do?", and staged purchases are not save state — comparing
+    against them narrates a discarded shopping trip as a loss.
+
+    One exception keeps a staged run honest too: a staged baseline's layouts are
+    anchored to the save they were built on, and uploading a new file discards
+    the staged diff along with it.  Once the base hash has moved, those
+    purchases exist nowhere — not in the app, not in any save — so the staged
+    track falls back to the save track rather than report them as lost a second
+    time.  This is deliberately narrow: an UNstaged baseline is left alone when
+    the save moves, which is what makes an upload plus a later Relic Rites spree
+    still compose into one verdict.
+
+    ``save_baseline`` is NULL for a build whose only acknowledged state was
+    staged (the rows this split was introduced to fix, plus any the migration
+    could not honestly backfill).  None means "no baseline": the run reports
+    status "new" once and re-baselines silently, which is the right outcome —
+    better no comparison than a false one.
+    """
+    if not staged:
+        return save_baseline
+    anchored_to = ((baseline or {}).get("inputs") or {}).get("base_relics_hash")
+    if is_staged_baseline(baseline) and anchored_to != base_relics_hash:
+        return save_baseline
+    return baseline
+
+
+def advanced_baselines(
+    fresh: dict[str, Any],
+    save_baseline: dict[str, Any] | None,
+    *,
+    staged: bool,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """``(baseline, save_baseline)`` after folding ``fresh`` into them.
+
+    The whole rule, in one place so the three call sites cannot drift: every
+    advance moves ``baseline``; only a pure-save one also moves
+    ``save_baseline``.
+    """
+    if staged:
+        return fresh, save_baseline
+    return fresh, fresh
 
 
 def causes_since(

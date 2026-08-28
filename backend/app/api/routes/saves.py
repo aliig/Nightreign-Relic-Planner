@@ -38,6 +38,7 @@ from nrplanner import (
     read_owner_steam_id,
     rename_preset,
     repack_sl2,
+    repair_blob,
     reset_all_presets,
     reset_all_vessels,
     sell_value,
@@ -100,6 +101,7 @@ from app.core.snapshot_baseline import (
     apply_causes,
     baseline_layouts,
     make_baseline,
+    pick_baseline,
     snapshot_inputs,
 )
 from app.core.staged import effective_slot_state
@@ -963,6 +965,11 @@ def _apply_snapshot_for_stream(
     relics the user had are now either in the save — where the base hash sees
     them — or gone.
 
+    Being pure-save is also why this diffs against ``save_baseline`` rather than
+    ``baseline``: the latter can hold an arrangement built from Relic Rites
+    purchases the user dismissed and then discarded, and diffing a real save
+    against those reports relics that were never in any save as lost.
+
     The baseline never advances here: an upload always has news in it, and the
     change must survive until the user actually reads it.
     """
@@ -991,7 +998,13 @@ def _apply_snapshot_for_stream(
         staged_signature=None,
     )
 
-    baseline = snap.baseline if snap else None
+    # Pure-save run: measured against acknowledged SAVE state only.
+    baseline = pick_baseline(
+        snap.baseline if snap else None,
+        snap.save_baseline if snap else None,
+        staged=False,
+        base_relics_hash=relics_hash,
+    )
     change = diff_results(
         baseline_layouts(baseline), results, owned=owned_relics
     )
@@ -1008,6 +1021,9 @@ def _apply_snapshot_for_stream(
     best_score = max((r.total_score for r in results), default=0)
     any_truncated = any(r.search_truncated for r in results)
     change_json = change.model_dump(mode="json")
+    fresh_baseline = make_baseline(
+        layouts=top_layouts, best_score=best_score, inputs=inputs
+    )
 
     if snap is None:
         snap = OptimizationSnapshot(
@@ -1029,10 +1045,9 @@ def _apply_snapshot_for_stream(
             last_change=change_json,
             # First-ever optimization of this build: there is no prior state to
             # compare against, so this run IS the baseline and there is nothing
-            # to review.
-            baseline=make_baseline(
-                layouts=top_layouts, best_score=best_score, inputs=inputs
-            ),
+            # to review.  Pure-save, so it is the baseline on BOTH tracks.
+            baseline=fresh_baseline,
+            save_baseline=fresh_baseline,
             reviewed=True,
         )
     else:
@@ -1720,6 +1735,8 @@ def _export_modified_save(
             sell_value(owned[h].effect_count, owned[h].is_deep) for h in ga_handles
         )
         new_blob, del_result = delete_relics(blob, ga_handles, murk_credit=murk_credit)
+        # Self-heal invariants inherited from pre-2026-08-27 exports (see repair_blob).
+        new_blob, _repair = repair_blob(new_blob)
         new_save = repack_sl2(file_bytes, {slot_index: new_blob})
 
     summary = {
@@ -1826,7 +1843,7 @@ def _export_added_save(
     Each spec is re-validated as a legal relic, packed into an 80-byte ItemState
     record templated from one of the save's OWN relics (so durability/unknown/
     trailing bytes are provably correct), added via ghost resurrection — then
-    virgin-tail minting beyond the ghost supply — and the slot re-encrypted.
+    empty-slot minting beyond the ghost supply — and the slot re-encrypted.
     Returns (new_save_bytes, summary). Raises HTTPException on
     validation/capacity errors. The embedded Steam ID is left unchanged.
     """
@@ -1903,6 +1920,8 @@ def _export_added_save(
     if murk_delta:
         new_blob, _before, murks_after = adjust_murks(new_blob, murk_delta)
 
+    # Self-heal invariants inherited from pre-2026-08-27 exports (see repair_blob).
+    new_blob, _repair = repair_blob(new_blob)
     new_save = repack_sl2(file_bytes, {slot_index: new_blob})
     summary = {
         "added": len(added_handles),
@@ -2854,6 +2873,8 @@ def _export_modified_loadouts(
     except VesselWriteError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    # Self-heal invariants inherited from pre-2026-08-27 exports (see repair_blob).
+    blob, _repair = repair_blob(blob)
     new_save = repack_sl2(file_bytes, {slot_index: blob})
 
     # final loadout count for the client

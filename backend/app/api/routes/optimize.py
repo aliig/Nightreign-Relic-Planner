@@ -70,10 +70,12 @@ from app.core.config import settings
 from app.core.db import engine
 from app.core.game_data import game_data_version, get_items_json
 from app.core.snapshot_baseline import (
+    advanced_baselines,
     apply_causes,
     baseline_layouts,
     is_narratable,
     make_baseline,
+    pick_baseline,
     snapshot_inputs,
 )
 from app.core.staged import apply_staged_diff, staged_diff_signature
@@ -323,6 +325,11 @@ def _apply_snapshot(
     silently, exactly as before; anything the user should see is left standing
     (and marked unreviewed) until they review it.
 
+    Which of the two baselines applies depends on the run: a staged one is
+    measured against everything the user has acknowledged, a pure-save one only
+    against acknowledged SAVE state, so a discarded shopping trip never becomes
+    the yardstick for the next upload.
+
     Returns the BuildChange (build identity + causes filled).  Commits the session.
     """
     snap = session.exec(
@@ -348,7 +355,13 @@ def _apply_snapshot(
         staged_signature=staged_signature,
     )
 
-    baseline = snap.baseline if snap else None
+    staged_run = staged_signature is not None
+    baseline = pick_baseline(
+        snap.baseline if snap else None,
+        snap.save_baseline if snap else None,
+        staged=staged_run,
+        base_relics_hash=ctx.base_relics_hash,
+    )
     change = diff_results(
         baseline_layouts(baseline), results, owned=owned_relics
     )
@@ -402,6 +415,9 @@ def _apply_snapshot(
             last_change=change_json,
             reviewed=True,
             baseline=fresh_baseline,
+            # First-ever run: it is the baseline for both yardsticks, and only
+            # a pure-save one may claim to describe the save.
+            save_baseline=None if staged_run else fresh_baseline,
         )
     else:
         snap.relics_hash = relics_hash
@@ -423,7 +439,9 @@ def _apply_snapshot(
             # back to unreviewed so the change list picks it up.
             snap.reviewed = False
         else:
-            snap.baseline = fresh_baseline
+            snap.baseline, snap.save_baseline = advanced_baselines(
+                fresh_baseline, snap.save_baseline, staged=staged_run
+            )
             snap.reviewed = True
         snap.updated_at = get_datetime_utc()
     session.add(snap)
@@ -935,12 +953,13 @@ def mark_change_reviewed(
         # from the previous baseline, which is exactly what we want: the save
         # itself did not change).
         prev_inputs = (snap.baseline or {}).get("inputs") or {}
+        staged_run = snap.staged_signature is not None
         base_hash = (
-            snap.relics_hash
-            if snap.staged_signature is None
-            else prev_inputs.get("base_relics_hash", snap.relics_hash)
+            prev_inputs.get("base_relics_hash", snap.relics_hash)
+            if staged_run
+            else snap.relics_hash
         )
-        snap.baseline = make_baseline(
+        fresh = make_baseline(
             layouts=snap.top_layouts or [],
             best_score=snap.best_score,
             inputs=snapshot_inputs(
@@ -951,6 +970,14 @@ def mark_change_reviewed(
                 optimizer_version=str(snap.optimizer_version),
                 staged_signature=snap.staged_signature,
             ),
+        )
+        # Dismissing a Relic Rites change means "I have seen what buying those
+        # did" — NOT that the purchases are in the save.  Only the effective
+        # baseline moves; the save baseline stays where the last upload (or
+        # export + re-upload) put it, so discarding the purchases and uploading
+        # a newer save is still diffed against real save state.
+        snap.baseline, snap.save_baseline = advanced_baselines(
+            fresh, snap.save_baseline, staged=staged_run
         )
         session.add(snap)
     session.commit()

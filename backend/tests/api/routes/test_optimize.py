@@ -199,13 +199,18 @@ class TestDbMode:
         assert response.status_code == 401
 
 
-def _targeted_mints(colors: tuple[str, ...] = ("Red", "Blue", "Green")) -> list[dict]:
+def _targeted_mints(
+    colors: tuple[str, ...] = ("Red", "Blue", "Green"), *, seed_base: int = 1000
+) -> list[dict]:
     """Legal StagedMint payloads in known colors, rolled from real game data.
 
     Targeted mode fixes color+tier so placement mirrors the 3-color inline
     tests; the deterministic seed keeps the payload stable across runs.  The
     generator only emits relics that pass RelicChecker, so these always
     survive staged-mint validation.
+
+    ``seed_base`` rolls a different batch — for tests that need two Relic Rites
+    sprees to be told apart.
     """
     from app.core.game_data import get_relic_generator
 
@@ -214,7 +219,7 @@ def _targeted_mints(colors: tuple[str, ...] = ("Red", "Blue", "Green")) -> list[
     for i, color in enumerate(colors):
         rolled = gen.roll(
             is_deep=False, version="1.03", mode="targeted",
-            color=color, tier=1, seed=1000 + i,
+            color=color, tier=1, seed=seed_base + i,
         )
         mints.append({
             "handle": -(i + 1),

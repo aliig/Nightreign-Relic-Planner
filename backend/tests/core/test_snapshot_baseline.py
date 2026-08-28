@@ -10,10 +10,13 @@ boundary keeps its layout diff and loses its score claim.
 from nrplanner.models import BuildChange
 
 from app.core.snapshot_baseline import (
+    advanced_baselines,
     apply_causes,
     causes_since,
     is_narratable,
+    is_staged_baseline,
     make_baseline,
+    pick_baseline,
     scores_comparable,
     snapshot_inputs,
 )
@@ -129,3 +132,88 @@ class TestApplyCauses:
         apply_causes(change, _baseline(), _inputs(staged="s1"))
         assert change.causes == ["staged"]
         assert change.comparable is True
+
+
+class TestPickBaseline:
+    """Which of the two baselines a run is measured against.
+
+    The bug this splits apart: dismissing a Relic Rites change folded staged
+    purchases into the single baseline, so discarding them and uploading a newer
+    save reported relics that were never in any save as "gone from your save".
+    """
+
+    SAVE = make_baseline(layouts=[{"total_score": 100}], best_score=100,
+                         inputs=_inputs(base_relics="r1"))
+    STAGED = make_baseline(layouts=[{"total_score": 180}], best_score=180,
+                           inputs=_inputs(base_relics="r1", staged="s1"))
+
+    def test_a_pure_save_run_ignores_the_staged_baseline(self):
+        """The upload path. r1 -> r2 is a genuinely newer save; the purchases
+        were discarded with the working file and must not be diffed against."""
+        assert pick_baseline(
+            self.STAGED, self.SAVE, staged=False, base_relics_hash="r2"
+        ) is self.SAVE
+
+    def test_a_staged_run_uses_the_staged_baseline(self):
+        assert pick_baseline(
+            self.STAGED, self.SAVE, staged=True, base_relics_hash="r1"
+        ) is self.STAGED
+
+    def test_a_staged_baseline_dies_with_the_save_it_was_built_on(self):
+        """Buy, dismiss, discard, upload, then buy again: the first spree's
+        relics exist nowhere now, so the second spree is measured from the save
+        rather than reporting them lost all over again."""
+        assert pick_baseline(
+            self.STAGED, self.SAVE, staged=True, base_relics_hash="r2"
+        ) is self.SAVE
+
+    def test_an_unstaged_baseline_survives_a_newer_save(self):
+        """The composition the sticky baseline exists for — upload without
+        reviewing, then go shopping, and both moves land in ONE verdict."""
+        assert pick_baseline(
+            self.SAVE, self.SAVE, staged=True, base_relics_hash="r2"
+        ) is self.SAVE
+
+    def test_no_save_baseline_means_no_comparison(self):
+        """Rows the migration would not backfill: only ever acknowledged in a
+        staged state, so there is no honest pure-save arrangement to name."""
+        assert pick_baseline(
+            self.STAGED, None, staged=False, base_relics_hash="r2"
+        ) is None
+
+    def test_first_ever_run_has_neither(self):
+        assert pick_baseline(
+            None, None, staged=False, base_relics_hash="r1") is None
+        assert pick_baseline(
+            None, None, staged=True, base_relics_hash="r1") is None
+
+
+class TestIsStagedBaseline:
+    def test_reads_the_baselines_own_recorded_inputs(self):
+        assert is_staged_baseline(
+            make_baseline(layouts=[], best_score=0, inputs=_inputs(staged="s1")))
+        assert not is_staged_baseline(
+            make_baseline(layouts=[], best_score=0, inputs=_inputs()))
+
+    def test_absent_baseline_is_not_staged(self):
+        assert not is_staged_baseline(None)
+        assert not is_staged_baseline({})
+
+
+class TestAdvancedBaselines:
+    FRESH = make_baseline(layouts=[{"total_score": 7}], best_score=7,
+                          inputs=_inputs())
+    PRIOR_SAVE = make_baseline(layouts=[{"total_score": 5}], best_score=5,
+                               inputs=_inputs())
+
+    def test_a_pure_save_advance_moves_both(self):
+        assert advanced_baselines(
+            self.FRESH, self.PRIOR_SAVE, staged=False
+        ) == (self.FRESH, self.FRESH)
+
+    def test_a_staged_advance_leaves_the_save_track_alone(self):
+        """Dismissing a purchase means "I saw what buying that did", never
+        "those relics are in my save"."""
+        assert advanced_baselines(
+            self.FRESH, self.PRIOR_SAVE, staged=True
+        ) == (self.FRESH, self.PRIOR_SAVE)
