@@ -171,6 +171,36 @@ def _compute_handle_remap(
     return remap
 
 
+def _remap_pinned_handles(
+    session: Session,
+    db_builds: list[Build],
+    handle_remap: dict[int, int],
+) -> None:
+    """Rewrite each build's pinned ga_handles for the newly uploaded save.
+
+    The game reassigns every ga_handle on save, so pins are re-pointed by
+    relic CONTENT (see _compute_handle_remap); pins whose relic is absent from
+    the new save are dropped.
+
+    pinned_relics is part of build_signature, so any rewrite here MUST also
+    advance build_hash.  Leaving it behind makes _snapshot_is_fresh compare a
+    correct snapshot hash against a stale Build row and judge the build
+    permanently out of date — re-optimizing rewrites the same correct hash and
+    changes nothing, so the "N builds out of date" banner never clears.
+
+    Both upload paths share this helper so they can never drift apart again.
+    """
+    for build in db_builds:
+        if not build.pinned_relics:
+            continue
+        new_pinned = [handle_remap[h] for h in build.pinned_relics if h in handle_remap]
+        if new_pinned != build.pinned_relics:
+            build.pinned_relics = new_pinned
+            build.build_hash = build_signature(build_def_from_db(build))
+            session.add(build)
+    session.flush()
+
+
 def _db_relic_fingerprint(r: Relic) -> tuple:
     return relic_fingerprint(
         r.real_id, (r.effect_1, r.effect_2, r.effect_3),
@@ -820,14 +850,7 @@ async def upload_save(
         db_builds = session.exec(
             select(Build).where(Build.owner_id == current_user.id)
         ).all()
-        for build in db_builds:
-            if not build.pinned_relics:
-                continue
-            new_pinned = [handle_remap[h] for h in build.pinned_relics if h in handle_remap]
-            if new_pinned != build.pinned_relics:
-                build.pinned_relics = new_pinned
-                session.add(build)
-        session.flush()
+        _remap_pinned_handles(session, list(db_builds), handle_remap)
 
         # Cheap save-diff: flag builds whose stored arrangement may have changed
         # (snapshots survive the re-upload — they key on slot_index, not profile).
@@ -1147,14 +1170,7 @@ async def upload_save_stream(
     ).all())
 
     if old_relics:
-        for build in db_builds:
-            if not build.pinned_relics:
-                continue
-            new_pinned = [handle_remap[h] for h in build.pinned_relics if h in handle_remap]
-            if new_pinned != build.pinned_relics:
-                build.pinned_relics = new_pinned
-                session.add(build)
-        session.flush()
+        _remap_pinned_handles(session, db_builds, handle_remap)
 
         # A different account's slot N is a different character — skip the diff
         # and the re-optimization it drives when accounts differ.  (Builds with

@@ -13,8 +13,10 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
+from app.core.build_def import build_def_from_db
 from app.core.config import settings
 from app.models import Build, SaveUpload, User
+from nrplanner.changes import build_signature
 from nrplanner.constants import EMPTY_EFFECT
 from nrplanner.save import RawRelic
 
@@ -301,6 +303,62 @@ class TestHandleRemapOnReupload:
         updated = db.get(Build, build.id)
         assert updated is not None
         assert updated.pinned_relics == [MOCK_RELIC.ga_handle]
+
+    def test_build_hash_follows_the_remap(
+        self,
+        client: TestClient,
+        superuser_token_headers: dict[str, str],
+        db: Session,
+    ) -> None:
+        """A remapped pin must advance build_hash along with pinned_relics.
+
+        pinned_relics is part of build_signature.  Leaving build_hash behind
+        made every snapshot for the build read as permanently stale — the
+        builds page's "N builds out of date" banner could never clear, because
+        re-optimizing writes back the same correct hash the row disagrees with.
+        """
+        _upload_sl2(client, headers=superuser_token_headers, relics=[MOCK_RELIC])
+
+        user = self._superuser(db)
+        build = self._make_build(db, user.id, [MOCK_RELIC.ga_handle])
+        build.build_hash = build_signature(build_def_from_db(build))
+        db.add(build)
+        db.commit()
+
+        _upload_sl2(
+            client,
+            headers=superuser_token_headers,
+            relics=[MOCK_RELIC_NEW_HANDLE],
+        )
+
+        db.expire(build)
+        updated = db.get(Build, build.id)
+        assert updated is not None
+        assert updated.pinned_relics == [MOCK_RELIC_NEW_HANDLE.ga_handle]
+        assert updated.build_hash == build_signature(build_def_from_db(updated))
+
+    def test_build_hash_untouched_when_pins_dont_move(
+        self,
+        client: TestClient,
+        superuser_token_headers: dict[str, str],
+        db: Session,
+    ) -> None:
+        """A re-upload that leaves pins alone must not disturb build_hash."""
+        _upload_sl2(client, headers=superuser_token_headers, relics=[MOCK_RELIC])
+
+        user = self._superuser(db)
+        build = self._make_build(db, user.id, [MOCK_RELIC.ga_handle])
+        original = build_signature(build_def_from_db(build))
+        build.build_hash = original
+        db.add(build)
+        db.commit()
+
+        _upload_sl2(client, headers=superuser_token_headers, relics=[MOCK_RELIC])
+
+        db.expire(build)
+        updated = db.get(Build, build.id)
+        assert updated is not None
+        assert updated.build_hash == original
 
 
 # ---------------------------------------------------------------------------
