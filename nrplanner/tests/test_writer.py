@@ -27,6 +27,7 @@ from nrplanner.writer import (
     read_favorite_handles,
     read_murks,
     repack_sl2,
+    repair_blob,
     sell_value,
     set_favorites,
 )
@@ -351,6 +352,68 @@ class TestGameWrittenInvariants:
             assert mirror == item_id, (
                 f"relic {r.ga_handle:#x} at {r.offset}: 0x08={mirror:#x} "
                 f"does not mirror item_id={item_id:#x}")
+
+
+@requires_fixture
+class TestRepairBlob:
+    """repair_blob heals damage a pre-2026-08-27 export could have baked in.
+
+    The game round-trips that damage forward forever, so exports self-heal it.
+    """
+
+    def test_pristine_save_is_left_completely_alone(self, userdata):
+        repaired, result = repair_blob(userdata)
+        assert repaired == userdata
+        assert result.item_id_mirrors_fixed == []
+        assert result.next_acq_id_before == result.next_acq_id_after
+        assert result.changed is False
+
+    def test_heals_a_stale_item_id_mirror(self, userdata):
+        relics, _ = parse_relics(userdata)
+        victim = next(r for r in relics if r.size == 80)
+        damaged = bytearray(userdata)
+        struct.pack_into("<I", damaged, victim.offset + 0x08, 0xDEADBEEF)
+
+        repaired, result = repair_blob(bytes(damaged))
+
+        assert result.item_id_mirrors_fixed == [victim.ga_handle]
+        item_id, mirror = struct.unpack_from("<II", repaired, victim.offset + 0x04)
+        assert mirror == item_id
+        assert repaired == userdata  # byte-for-byte back to the original
+
+    def test_advances_a_counter_left_behind(self, userdata):
+        from nrplanner.writer import _NEXT_ACQ_ID_REL_OFFSET
+
+        damaged = bytearray(userdata)
+        _, items_end = _parse_items(damaged, start_offset=0x14, slot_count=5120)
+        max_acq = _max_acq_id(userdata)
+        struct.pack_into("<I", damaged, items_end + _NEXT_ACQ_ID_REL_OFFSET, max_acq - 5)
+
+        repaired, result = repair_blob(bytes(damaged))
+
+        assert result.next_acq_id_before == max_acq - 5
+        assert result.next_acq_id_after == max_acq + 1
+        assert _read_next_acq_id(repaired) == max_acq + 1
+        assert result.changed is True
+
+    def test_is_idempotent_and_length_preserving(self, userdata):
+        relics, _ = parse_relics(userdata)
+        victim = next(r for r in relics if r.size == 80)
+        damaged = bytearray(userdata)
+        struct.pack_into("<I", damaged, victim.offset + 0x08, 0xDEADBEEF)
+
+        once, first = repair_blob(bytes(damaged))
+        twice, second = repair_blob(once)
+
+        assert twice == once
+        assert first.changed is True and second.changed is False
+        assert len(once) == len(userdata)
+
+    def test_add_relics_output_needs_no_repair(self, userdata):
+        """The writer fixes mean a fresh export is already clean."""
+        new_blob, _ = add_relics(userdata, [_clone_relic_record(userdata)] * 2)
+        _, result = repair_blob(new_blob)
+        assert result.changed is False
 
 
 @requires_fixture

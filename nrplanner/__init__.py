@@ -27,6 +27,7 @@ from nrplanner.writer import (
     AddResult,
     DeleteResult,
     FavoriteResult,
+    RepairResult,
     add_capacity,
     add_relics,
     adjust_murks,
@@ -36,6 +37,7 @@ from nrplanner.writer import (
     read_favorite_handles,
     read_murks,
     repack_sl2,
+    repair_blob,
     sell_value,
     set_favorites,
 )
@@ -78,9 +80,10 @@ __all__ = [
     # Optimizer
     "BuildScorer", "VesselOptimizer",
     # Save write-back
-    "AddCapacityError", "AddResult", "DeleteResult", "FavoriteResult",
+    "AddCapacityError", "AddResult", "DeleteResult", "FavoriteResult", "RepairResult",
     "add_capacity", "add_relics", "adjust_murks", "build_relic_record", "delete_relics",
     "read_acquisition_ids", "read_favorite_handles", "read_murks", "repack_sl2",
+    "repair_blob",
     "sell_value", "set_favorites",
     # Relic generation
     "RelicGenerator", "GeneratedRelic", "GenerationError",

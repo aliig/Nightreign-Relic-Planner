@@ -193,6 +193,68 @@ def read_acquisition_ids(data: bytes, items_end_offset: int) -> dict[int, int]:
     return acquisition_ids
 
 
+@dataclass
+class RepairResult:
+    """What repair_blob had to heal. All-zero/empty means the blob was already clean."""
+    item_id_mirrors_fixed: list[int] = field(default_factory=list)  # ga_handles
+    next_acq_id_before: int = 0
+    next_acq_id_after: int = 0
+
+    @property
+    def changed(self) -> bool:
+        return bool(self.item_id_mirrors_fixed) or self.next_acq_id_after != self.next_acq_id_before
+
+
+def repair_blob(blob: bytes) -> tuple[bytes, RepairResult]:
+    """Heal save invariants that earlier buggy exports could have violated.
+
+    Idempotent, length-preserving, and safe on a pristine game save (it then
+    changes nothing). Run this on every blob an export writes: a save can carry
+    damage inherited from an export made before the relevant fix, and the game
+    happily round-trips that damage forward, so it never heals on its own.
+
+    Two invariants, both established by surveying real game-written saves and
+    both violated by exports this tool produced before 2026-08-27:
+
+    * item_id mirror at 0x08 of every 80-byte relic record. Mirrors 0x04 in
+      1101 of 1101 game-written records; ``build_relic_record`` used to leave
+      the donor template's id there.
+    * the next-acquisition-id counter (see ``_NEXT_ACQ_ID_REL_OFFSET``) must
+      stay AHEAD of every acquisition_id in the ItemEntry table. ``add_relics``
+      used to hand out ids past it without advancing it, which produced a save
+      the game refused to load (in-game confirmed 2026-08-27).
+
+    Only ever advances the counter, so a save whose counter is legitimately
+    further ahead keeps its value.
+    """
+    data = bytearray(blob)
+    result = RepairResult()
+
+    items, items_end = _parse_items(data, start_offset=0x14, slot_count=5120)
+
+    for item in items:
+        if (item.gaitem_handle & 0xF0000000) != ITEM_TYPE_RELIC:
+            continue
+        if item.size != _RELIC_STATE_SIZE:
+            continue
+        item_id, mirror = struct.unpack_from("<II", data, item.offset + 0x04)
+        if mirror != item_id:
+            struct.pack_into("<I", data, item.offset + 0x08, item_id)
+            result.item_id_mirrors_fixed.append(item.gaitem_handle)
+
+    acq_off = items_end + _NEXT_ACQ_ID_REL_OFFSET
+    before = struct.unpack_from("<I", data, acq_off)[0]
+    max_acq = max(read_acquisition_ids(data, items_end).values(), default=0)
+    after = max(before, max_acq + 1)
+    if after != before:
+        struct.pack_into("<I", data, acq_off, after)
+    result.next_acq_id_before = before
+    result.next_acq_id_after = after
+
+    assert len(data) == len(blob), f"length changed: {len(blob)} -> {len(data)}"
+    return bytes(data), result
+
+
 def set_favorites(blob: bytes, changes: dict[int, bool]) -> tuple[bytes, FavoriteResult]:
     """Bookmark/unbookmark relics by toggling the ItemEntry is_favorite byte.
 
