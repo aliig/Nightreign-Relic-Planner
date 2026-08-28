@@ -103,6 +103,57 @@ export function getBreakdownColor(
   return "#888888"
 }
 
+// --- Stacked curses ---
+
+/** Override statuses where the game itself neutralizes an effect, so a second
+ *  copy costs the player nothing: greyed out for this Nightfarer, or beaten by
+ *  a desired effect in the same exclusive category. Every other status is a
+ *  scoring-only note (a user limit, a penalty) — the curse still fires in-game. */
+const INERT_CURSE_STATUSES = new Set([
+  "character_incompatible",
+  "excl_category_nullified",
+])
+
+export type StackedCurse = { name: string; count: number; slots: number[] }
+
+/** Curses carried by more than one relic in the same vessel.
+ *
+ *  Curses stack: every one of the 24 debuff effects in the game data resolves
+ *  to stacking type "stack" (SourceDataHandler.get_effect_stacking_type over
+ *  resources/json/stacking_rules.json), so a second "Reduced Rune Acquisition"
+ *  is a second full penalty, not a no-op.
+ *
+ *  A curse the build weights POSITIVELY is skipped — some builds want their
+ *  curses, and the optimizer picked those copies on purpose. */
+export function stackedCurses(assignments: SlotAssignment[]): StackedCurse[] {
+  const byName = new Map<string, { count: number; slots: Set<number> }>()
+  const wanted = new Set<string>()
+  for (const slot of assignments) {
+    for (const b of slot.breakdown ?? []) {
+      if (!b.is_curse) continue
+      const name = b.name as string
+      if (!name) continue
+      if (((b.weight as number) ?? 0) > 0) {
+        wanted.add(name)
+        continue
+      }
+      if (INERT_CURSE_STATUSES.has(b.override_status as string)) continue
+      const entry = byName.get(name) ?? { count: 0, slots: new Set<number>() }
+      entry.count += 1
+      entry.slots.add(slot.slot_index)
+      byName.set(name, entry)
+    }
+  }
+  return [...byName.entries()]
+    .filter(([name, e]) => e.count > 1 && !wanted.has(name))
+    .map(([name, e]) => ({
+      name,
+      count: e.count,
+      slots: [...e.slots].sort((a, b) => a - b),
+    }))
+    .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
+}
+
 // --- Result cache (persists across route navigations, clears on page reload) ---
 
 /** One base key (build + profile + upload) holds the latest results plus the
@@ -195,10 +246,14 @@ export function SlotCard({
   isStriking = false,
   busy = false,
   noAlternative = false,
+  stackedCurseCounts,
 }: {
   slot: SlotAssignment
   isPinned?: boolean
   isNew?: boolean
+  /** Curse name -> how many relics in this whole vessel carry it (>1 only).
+   *  Marks the rows behind the vessel's stacked-curse warning. */
+  stackedCurseCounts?: Map<string, number>
   /** When provided, renders an X to reject this relic and re-optimize the slot. */
   onStrike?: () => void
   /** This slot's re-optimization is in flight (shows a spinner). */
@@ -321,6 +376,14 @@ export function SlotCard({
                     <span className="truncate text-destructive/80">
                       {b.name as string}
                       {breakdownNote(b)}
+                      {stackedCurseCounts?.has(b.name as string) && (
+                        <span
+                          className="ml-1 font-semibold text-destructive"
+                          title={`${stackedCurseCounts.get(b.name as string)} copies of this curse in this loadout — curses stack, so the penalty applies ${stackedCurseCounts.get(b.name as string)} times`}
+                        >
+                          ×{stackedCurseCounts.get(b.name as string)}
+                        </span>
+                      )}
                     </span>
                     <span className="font-mono ml-2 shrink-0 text-destructive/80">
                       {(b.score as number) >= 0 ? "+" : ""}
@@ -422,6 +485,44 @@ export function CumulativeSummary({
   )
 }
 
+/**
+ * Duplicate-curse heads-up for a vessel: curses stack, so two copies of the
+ * same curse hurt twice. Sits beside the cumulative summary so it is visible
+ * whether the card is expanded or collapsed. Curses the build asked for
+ * (positive weight) never appear here — see stackedCurses().
+ */
+export function StackedCurseWarning({
+  curses,
+  className = "px-6 pb-3",
+}: {
+  curses: StackedCurse[]
+  className?: string
+}) {
+  if (curses.length === 0) return null
+  return (
+    <div className={`${className} flex flex-wrap items-center gap-1.5`}>
+      {curses.map((c) => (
+        <Tooltip key={c.name}>
+          <TooltipTrigger asChild>
+            <span className="inline-flex items-center gap-1 rounded bg-destructive/10 px-1.5 py-px text-[10px] font-medium text-destructive">
+              <AlertTriangle className="h-3 w-3 shrink-0" />
+              <span className="truncate">{c.name}</span>
+              <span className="font-mono">×{c.count}</span>
+            </span>
+          </TooltipTrigger>
+          <TooltipContent className="max-w-xs">
+            {c.count} copies of {c.name} in this loadout (slot
+            {c.slots.length === 1 ? " " : "s "}
+            {c.slots.map((s) => s + 1).join(", ")}). Curses stack in-game, so
+            the penalty applies {c.count} times. Weight this curse in the build
+            (or cap it) if you want the optimizer to avoid the pile-up.
+          </TooltipContent>
+        </Tooltip>
+      ))}
+    </div>
+  )
+}
+
 export function VesselCard({
   vessel,
   defaultExpanded = false,
@@ -482,6 +583,16 @@ export function VesselCard({
 
   const isModified = workingVessel !== vessel
   const canStrike = inventorySource !== undefined
+
+  // Recomputed from workingVessel so striking a relic updates the warning.
+  const duplicateCurses = useMemo(
+    () => stackedCurses(workingVessel.assignments),
+    [workingVessel],
+  )
+  const duplicateCurseCounts = useMemo(
+    () => new Map(duplicateCurses.map((c) => [c.name, c.count])),
+    [duplicateCurses],
+  )
 
   // Does this setup (same vessel + same non-empty relics) already exist as a
   // saved in-game loadout? Exact = same ga_handles (slot order ignored);
@@ -639,6 +750,7 @@ export function VesselCard({
         </p>
       </CardHeader>
       <CumulativeSummary groups={workingVessel.cumulative_effects} />
+      <StackedCurseWarning curses={duplicateCurses} />
       {expanded && (
         <CardContent className="pt-0">
           <Separator className="mb-3" />
@@ -662,6 +774,7 @@ export function VesselCard({
                 isStriking={strikingSlot === slot.slot_index}
                 busy={strikingSlot !== null}
                 noAlternative={noAltSlots.has(slot.slot_index)}
+                stackedCurseCounts={duplicateCurseCounts}
               />
             ))}
           </div>

@@ -12,6 +12,7 @@ import {
 import {
   MissingRequirementsSeparator,
   NoCoveringResultsBanner,
+  stackedCurses,
   VesselCard,
 } from "@/components/OptimizeResults"
 
@@ -261,5 +262,98 @@ describe("VesselCard cumulative summary", () => {
     render(<VesselCard vessel={makeVessel([ALPHA, BETA, GAMMA])} />)
     expect(screen.queryByText(/see all/i)).not.toBeInTheDocument()
     expect(screen.queryByText(/Max HP/i)).not.toBeInTheDocument()
+  })
+})
+
+describe("Stacked curses", () => {
+  /** A slot whose relic carries one curse, with the build's weight for it. */
+  function cursedSlot(
+    slot_index: number,
+    relic: OwnedRelic,
+    curse: string,
+    opts: { weight?: number; override_status?: string } = {},
+  ): SlotAssignment {
+    return {
+      ...makeSlot(slot_index, relic),
+      breakdown: [
+        {
+          effect_id: 6840000,
+          name: curse,
+          category: opts.weight ? "custom" : null,
+          weight: opts.weight ?? 0,
+          score: opts.weight ?? 0,
+          is_curse: true,
+          redundant: opts.override_status != null,
+          override_status: opts.override_status ?? null,
+        },
+      ],
+    }
+  }
+
+  const RUNES = "Reduced Rune Acquisition"
+
+  function vesselWith(assignments: SlotAssignment[]): VesselResult {
+    return { ...makeVessel([]), assignments }
+  }
+
+  it("reports a curse carried by two relics", () => {
+    const dupes = stackedCurses([
+      cursedSlot(0, ALPHA, RUNES),
+      cursedSlot(1, BETA, "Continuous HP Loss"),
+      cursedSlot(2, GAMMA, RUNES),
+    ])
+    expect(dupes).toEqual([{ name: RUNES, count: 2, slots: [0, 2] }])
+  })
+
+  it("stays quiet for a single copy", () => {
+    expect(stackedCurses([cursedSlot(0, ALPHA, RUNES)])).toEqual([])
+  })
+
+  it("stays quiet when the build asked for the curse", () => {
+    // Some builds want their curses — a positive weight is a deliberate pick.
+    expect(
+      stackedCurses([
+        cursedSlot(0, ALPHA, RUNES, { weight: 50 }),
+        cursedSlot(1, BETA, RUNES, { weight: 50 }),
+      ]),
+    ).toEqual([])
+  })
+
+  it("ignores copies the game itself neutralizes", () => {
+    expect(
+      stackedCurses([
+        cursedSlot(0, ALPHA, RUNES),
+        cursedSlot(1, BETA, RUNES, {
+          override_status: "character_incompatible",
+        }),
+      ]),
+    ).toEqual([])
+  })
+
+  it("warns on the card even when collapsed, and marks the slot rows", async () => {
+    const vessel = vesselWith([
+      cursedSlot(0, ALPHA, RUNES),
+      cursedSlot(1, BETA, RUNES),
+    ])
+    const { unmount } = render(<VesselCard vessel={vessel} />)
+    expect(screen.getByText(RUNES)).toBeInTheDocument()
+    expect(screen.getByText("×2")).toBeInTheDocument()
+    unmount()
+
+    // Expanded, each offending curse row is marked too (chip + 2 slot rows).
+    render(<VesselCard vessel={vessel} defaultExpanded />)
+    expect(screen.getAllByText("×2")).toHaveLength(3)
+  })
+
+  it("renders no warning when no curse repeats", () => {
+    render(
+      <VesselCard
+        vessel={vesselWith([
+          cursedSlot(0, ALPHA, RUNES),
+          cursedSlot(1, BETA, "Continuous HP Loss"),
+        ])}
+      />,
+    )
+    expect(screen.queryByText("×2")).not.toBeInTheDocument()
   })
 })
