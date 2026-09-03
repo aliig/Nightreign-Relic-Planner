@@ -17,6 +17,7 @@ from app.core.snapshot_baseline import (
     is_staged_baseline,
     make_baseline,
     pick_baseline,
+    reviewed_baselines,
     scores_comparable,
     snapshot_inputs,
 )
@@ -206,14 +207,68 @@ class TestAdvancedBaselines:
     PRIOR_SAVE = make_baseline(layouts=[{"total_score": 5}], best_score=5,
                                inputs=_inputs())
 
+    PENDING = make_baseline(layouts=[{"total_score": 6}], best_score=6,
+                            inputs=_inputs())
+
     def test_a_pure_save_advance_moves_both(self):
         assert advanced_baselines(
-            self.FRESH, self.PRIOR_SAVE, staged=False
-        ) == (self.FRESH, self.FRESH)
+            self.FRESH, self.PRIOR_SAVE, None, staged=False
+        ) == (self.FRESH, self.FRESH, None)
 
     def test_a_staged_advance_leaves_the_save_track_alone(self):
         """Dismissing a purchase means "I saw what buying that did", never
         "those relics are in my save"."""
         assert advanced_baselines(
-            self.FRESH, self.PRIOR_SAVE, staged=True
-        ) == (self.FRESH, self.PRIOR_SAVE)
+            self.FRESH, self.PRIOR_SAVE, None, staged=True
+        ) == (self.FRESH, self.PRIOR_SAVE, None)
+
+    def test_a_pure_save_advance_consumes_a_parked_arrangement(self):
+        """FRESH is itself a newer pure-save arrangement, so the parked one is
+        superseded rather than left to be promoted later."""
+        assert advanced_baselines(
+            self.FRESH, self.PRIOR_SAVE, self.PENDING, staged=False
+        ) == (self.FRESH, self.FRESH, None)
+
+    def test_a_staged_advance_keeps_a_parked_arrangement_waiting(self):
+        assert advanced_baselines(
+            self.FRESH, self.PRIOR_SAVE, self.PENDING, staged=True
+        ) == (self.FRESH, self.PRIOR_SAVE, self.PENDING)
+
+
+class TestReviewedBaselines:
+    """Review is the only place a parked pure-save arrangement can land."""
+
+    FRESH = make_baseline(layouts=[{"total_score": 7}], best_score=7,
+                          inputs=_inputs(staged="s1"))
+    PRIOR_SAVE = make_baseline(layouts=[{"total_score": 5}], best_score=5,
+                               inputs=_inputs())
+    PENDING = make_baseline(layouts=[{"total_score": 6}], best_score=6,
+                            inputs=_inputs())
+
+    def test_promotes_the_parked_arrangement_on_a_staged_review(self):
+        """The bug this fixes: reviewing an upload's change while a Relic Rites
+        diff is standing used to advance ONLY the effective track, freezing the
+        save track at the save that preceded the first purchase."""
+        assert reviewed_baselines(
+            self.FRESH, self.PRIOR_SAVE, self.PENDING, staged=True
+        ) == (self.FRESH, self.PENDING, None)
+
+    def test_a_staged_review_with_nothing_parked_is_unchanged(self):
+        assert reviewed_baselines(
+            self.FRESH, self.PRIOR_SAVE, None, staged=True
+        ) == (self.FRESH, self.PRIOR_SAVE, None)
+
+    def test_never_puts_a_staged_arrangement_on_the_save_track(self):
+        _baseline, save_bl, _pending = reviewed_baselines(
+            self.FRESH, self.PRIOR_SAVE, self.PENDING, staged=True
+        )
+        assert save_bl is not self.FRESH
+
+    def test_a_pure_save_review_prefers_its_own_fresh_arrangement(self):
+        """A pure-save review IS the newest save state; the parked one is older
+        and merely gets cleared."""
+        fresh_pure = make_baseline(layouts=[{"total_score": 7}], best_score=7,
+                                   inputs=_inputs())
+        assert reviewed_baselines(
+            fresh_pure, self.PRIOR_SAVE, self.PENDING, staged=False
+        ) == (fresh_pure, fresh_pure, None)

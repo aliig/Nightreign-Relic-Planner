@@ -98,6 +98,7 @@ from app.core.game_data import (
 )
 from app.core.optimizer_pool import prefetch_depth
 from app.core.snapshot_baseline import (
+    advanced_baselines,
     apply_causes,
     baseline_layouts,
     make_baseline,
@@ -993,8 +994,18 @@ def _apply_snapshot_for_stream(
     purchases the user dismissed and then discarded, and diffing a real save
     against those reports relics that were never in any save as lost.
 
-    The baseline never advances here: an upload always has news in it, and the
-    change must survive until the user actually reads it.
+    The baseline does not advance here (with one exception below): an upload
+    has news in it, and the change must survive until the user actually reads
+    it.  But this run's arrangement IS the save track's next baseline, so it is
+    parked in ``pending_save_baseline`` for review to promote — otherwise the
+    save track starves, because by review time a staged run has usually taken
+    over ``staged_signature`` and only the effective baseline moves.  A second
+    upload before the review overwrites the parked one, which keeps two uploads
+    composing into a single verdict while still landing the NEWEST save.
+
+    The exception is a "reordered" change (same strength, different relics),
+    which is no longer narrated anywhere; it re-baselines silently instead of
+    sitting unread and freezing the yardstick.
     """
     from app.models import get_datetime_utc
 
@@ -1071,6 +1082,7 @@ def _apply_snapshot_for_stream(
             # to review.  Pure-save, so it is the baseline on BOTH tracks.
             baseline=fresh_baseline,
             save_baseline=fresh_baseline,
+            pending_save_baseline=None,
             reviewed=True,
         )
     else:
@@ -1090,10 +1102,29 @@ def _apply_snapshot_for_stream(
         snap.best_score = best_score
         snap.any_truncated = any_truncated
         snap.last_change = change_json
-        # Unread until viewed/dismissed — this is what surfaces the build in
-        # the builds-page "Changes since your last save" list.  The baseline
-        # deliberately stays where it was: reviewing is what advances it.
-        snap.reviewed = False
+        if change.status == "reordered":
+            # Never shown to the user (see describeBuildChange), so leaving it
+            # unread would block the baseline forever on a change nobody can
+            # dismiss.  Pure-save run, so both tracks advance.
+            (
+                snap.baseline,
+                snap.save_baseline,
+                snap.pending_save_baseline,
+            ) = advanced_baselines(
+                fresh_baseline,
+                snap.save_baseline,
+                snap.pending_save_baseline,
+                staged=False,
+            )
+            snap.reviewed = True
+        else:
+            # Unread until viewed/dismissed — this is what surfaces the build in
+            # the builds-page "Changes since your last save" list.  The baseline
+            # deliberately stays where it was: reviewing is what advances it,
+            # and `pending_save_baseline` is how this pure-save arrangement
+            # survives until then.
+            snap.pending_save_baseline = fresh_baseline
+            snap.reviewed = False
         snap.updated_at = get_datetime_utc()
     session.add(snap)
     session.commit()

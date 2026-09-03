@@ -76,6 +76,7 @@ from app.core.snapshot_baseline import (
     is_narratable,
     make_baseline,
     pick_baseline,
+    reviewed_baselines,
     snapshot_inputs,
 )
 from app.core.staged import apply_staged_diff, staged_diff_signature
@@ -389,7 +390,11 @@ def _apply_snapshot(
     # Nothing the user needs to hear (their own build edit, a game-data bump, or
     # no movement at all) — fold this run into the baseline so the NEXT change is
     # measured from here.  News is left un-baselined and unreviewed.
-    news = is_narratable(change.causes)
+    # "reordered" (same strength, different relics) is no longer shown to the
+    # user, so it must not count as news either: an unnarrated change that still
+    # blocks the baseline would freeze the yardstick exactly the way the save
+    # track used to freeze.  Suppressed here and in describeBuildChange, together.
+    news = is_narratable(change.causes) and change.status != "reordered"
     fresh_baseline = make_baseline(
         layouts=top_layouts, best_score=best_score, inputs=inputs
     )
@@ -418,6 +423,10 @@ def _apply_snapshot(
             # First-ever run: it is the baseline for both yardsticks, and only
             # a pure-save one may claim to describe the save.
             save_baseline=None if staged_run else fresh_baseline,
+            # A first run has nothing unread behind it: a pure-save one already
+            # landed on the save track above, and a staged one has no pure-save
+            # arrangement to park.
+            pending_save_baseline=None,
         )
     else:
         snap.relics_hash = relics_hash
@@ -438,9 +447,21 @@ def _apply_snapshot(
             # Unread news stays unread; a build the user already reviewed goes
             # back to unreviewed so the change list picks it up.
             snap.reviewed = False
+            # A pure-save run's arrangement is a legitimate save-track baseline
+            # even though it may not advance yet.  Park it so review can promote
+            # it whatever staged runs happen in between.
+            if not staged_run:
+                snap.pending_save_baseline = fresh_baseline
         else:
-            snap.baseline, snap.save_baseline = advanced_baselines(
-                fresh_baseline, snap.save_baseline, staged=staged_run
+            (
+                snap.baseline,
+                snap.save_baseline,
+                snap.pending_save_baseline,
+            ) = advanced_baselines(
+                fresh_baseline,
+                snap.save_baseline,
+                snap.pending_save_baseline,
+                staged=staged_run,
             )
             snap.reviewed = True
         snap.updated_at = get_datetime_utc()
@@ -972,12 +993,20 @@ def mark_change_reviewed(
             ),
         )
         # Dismissing a Relic Rites change means "I have seen what buying those
-        # did" — NOT that the purchases are in the save.  Only the effective
-        # baseline moves; the save baseline stays where the last upload (or
-        # export + re-upload) put it, so discarding the purchases and uploading
-        # a newer save is still diffed against real save state.
-        snap.baseline, snap.save_baseline = advanced_baselines(
-            fresh, snap.save_baseline, staged=staged_run
+        # did" — NOT that the purchases are in the save.  So the save track never
+        # takes `fresh` from a staged run; it takes the pure-save arrangement a
+        # pure-save run parked in `pending_save_baseline` (usually the upload
+        # that started this whole change), and only if one is waiting.  Without
+        # that promotion the save track froze for anyone holding a staged diff,
+        # because `staged_run` here reads the LATEST run, not the one being
+        # acknowledged.
+        (
+            snap.baseline,
+            snap.save_baseline,
+            snap.pending_save_baseline,
+        ) = reviewed_baselines(
+            fresh, snap.save_baseline, snap.pending_save_baseline,
+            staged=staged_run,
         )
         session.add(snap)
     session.commit()

@@ -154,21 +154,36 @@ describe("describeBuildChange", () => {
     expect(groupNames(d, "No longer in your save")).toEqual(["Stalwart Horn"])
   })
 
-  it("reordered: same strength, swapped relics", () => {
-    const d = describeBuildChange(
-      change({
-        status: "reordered",
-        best_before: 300,
-        best_after: 300,
-        delta: 0,
-        entered: [relic("Gilded Greatrune")],
-        left: [relic("Old Faithful", 2, true)],
-      }),
-    )
-    expect(d?.tone).toBe("neutral")
-    expect(d?.headline).toBe("rearranged, same strength")
-    expect(groupNames(d, "Swaps in")).toEqual(["Gilded Greatrune"])
-    expect(groupNames(d, "Swaps out")).toEqual(["Old Faithful"])
+  it("reordered: suppressed — a same-strength shuffle is not news", () => {
+    expect(
+      describeBuildChange(
+        change({
+          status: "reordered",
+          best_before: 300,
+          best_after: 300,
+          delta: 0,
+          entered: [relic("Gilded Greatrune")],
+          left: [relic("Old Faithful", 2, true)],
+        }),
+      ),
+    ).toBeNull()
+  })
+
+  it("reordered stays suppressed even when a relic left the save", () => {
+    // The relics moved and one is gone, but the verdict is still "same
+    // strength" — nothing here changes what the user would do.
+    expect(
+      describeBuildChange(
+        change({
+          status: "reordered",
+          best_before: 300,
+          best_after: 300,
+          delta: 0,
+          entered: [relic("Gilded Greatrune")],
+          left: [relic("Old Faithful", 2, false)],
+        }),
+      ),
+    ).toBeNull()
   })
 
   it("broken_pin: warn tone naming the lost pin", () => {
@@ -279,16 +294,19 @@ describe("describeBuildChange", () => {
       expect(d?.tone).not.toBe("up")
     })
 
-    it('withdraws "same strength", which is also a score claim', () => {
-      const d = describeBuildChange(
-        change({
-          status: "reordered",
-          best_before: 100,
-          best_after: 100,
-          comparable: false,
-        }),
-      )
-      expect(d?.headline).toBe("best setup changed")
+    it('suppresses "same strength" rather than withdrawing it', () => {
+      // A rules change makes the same-strength verdict meaningless, and with
+      // the verdict gone there is nothing left in a reordered change to say.
+      expect(
+        describeBuildChange(
+          change({
+            status: "reordered",
+            best_before: 100,
+            best_after: 100,
+            comparable: false,
+          }),
+        ),
+      ).toBeNull()
     })
 
     it("leaves statuses that make no score claim alone", () => {

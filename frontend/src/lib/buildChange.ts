@@ -27,7 +27,7 @@ export interface ChangeRelicGroup {
 export interface ChangeDescription {
   tone: ChangeTone
   icon: LucideIcon
-  /** Short, plain-language verdict, e.g. "23% stronger" / "rearranged, same strength". */
+  /** Short, plain-language verdict, e.g. "23% stronger" / "best setup changed". */
   headline: string
   /** Which relics moved, split by what actually happened to them. */
   groups: ChangeRelicGroup[]
@@ -116,7 +116,8 @@ function splitLeft(refs: RelicRef[] | undefined): {
  * replacing the opaque "+91 pts". Raw points are exposed only via `rawScore`
  * (for a tooltip).
  *
- * Returns null for changes not worth surfacing (unchanged / first-ever optimize).
+ * Returns null for changes not worth surfacing (unchanged / first-ever optimize
+ * / a same-strength rearrangement).
  * Callers apply their own policy on WHY the change happened — see
  * `isChangeNews`, which every narrating surface should gate on.
  *
@@ -130,7 +131,14 @@ export function describeBuildChange(
 ): ChangeDescription | null {
   if (!change) return null
   const { status } = change
-  if (status === "unchanged" || status === "new") return null
+  // "reordered" is a same-strength shuffle: the optimizer found a different
+  // arrangement worth the same points. That is noise dressed up as news — it
+  // tells the user nothing to act on — so it is suppressed like "unchanged".
+  // The backend re-baselines a reordered change silently to match; if only one
+  // side suppressed it, the change would sit unread and freeze the yardstick
+  // every later diff is measured against.
+  if (status === "unchanged" || status === "new" || status === "reordered")
+    return null
 
   const before = change.best_before ?? null
   const after = change.best_after ?? null
@@ -151,15 +159,14 @@ export function describeBuildChange(
   let note: string | undefined
   const groups: ChangeRelicGroup[] = []
 
-  if (
-    !comparable &&
-    (status === "improved" || status === "degraded" || status === "reordered")
-  ) {
-    // A cross-version comparison. All three of these statuses assert something
-    // about strength — "stronger", "weaker", and "same strength" alike — and an
-    // optimizer or game-data bump can move a build's optimum on an inventory
-    // that never changed. Report the movement, which is real, and make no claim
-    // about the direction, which is not measurable from here.
+  if (!comparable && (status === "improved" || status === "degraded")) {
+    // A cross-version comparison. Both of these statuses assert something about
+    // strength — "stronger" and "weaker" alike — and an optimizer or game-data
+    // bump can move a build's optimum on an inventory that never changed.
+    // Report the movement, which is real, and make no claim about the
+    // direction, which is not measurable from here. ("reordered" returned null
+    // above: a same-strength verdict is exactly the claim a rules change makes
+    // meaningless, and there is nothing else in it worth saying.)
     tone = "neutral"
     icon = ArrowLeftRight
     headline = "best setup changed"
@@ -192,13 +199,6 @@ export function describeBuildChange(
     if (gone.length === 0 && benched.length > 0) {
       note = "still in your save — the best setup just moved on from them"
     }
-  } else if (status === "reordered") {
-    tone = "neutral"
-    icon = ArrowLeftRight
-    headline = "rearranged, same strength"
-    addGroup(groups, "gone", "No longer in your save", gone)
-    addGroup(groups, "entered", "Swaps in", change.entered)
-    addGroup(groups, "benched", "Swaps out", benched)
   } else if (status === "broken_pin") {
     tone = "warn"
     icon = AlertTriangle

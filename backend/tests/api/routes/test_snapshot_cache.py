@@ -925,6 +925,107 @@ class TestStagedSnapshotCache:
             r for r in change["left"] if r["real_id"] in minted_ids
         ], "a discarded purchase must never be reported as a lost relic"
 
+    def test_the_save_track_advances_even_while_a_staged_diff_stands(
+        self,
+        client: TestClient,
+        normal_user_token_headers: dict[str, str],
+        db: Session,
+    ) -> None:
+        """The save baseline must not starve behind a standing Relic Rites diff.
+
+        Only a pure-save run may advance ``save_baseline``, and review is what
+        advances a baseline carrying news — but review read ``staged_signature``
+        off the LATEST run, which by then is the staged one.  So a user holding
+        purchases never advanced the save track at all: it stayed pinned to the
+        save that preceded their first purchase, and every later upload was
+        measured against it, reporting long-owned relics as NEW with a
+        percentage attached.  ``pending_save_baseline`` is what survives the
+        staged run in between.
+        """
+        from tests.api.routes.test_optimize import _targeted_mints
+
+        mints = _targeted_mints()
+        wanted = [e for m in mints for e in m["effects"] if e not in (EMPTY, 0)]
+
+        user = get_test_user(db)
+        profile = seed_profile_with_relics(db, user.id, with_hash=True)
+        build = create_build(
+            client, normal_user_token_headers,
+            groups=[{"weight": 10, "effects": [100, *wanted], "families": []}],
+        )
+
+        def _snap() -> OptimizationSnapshot:
+            row = db.exec(
+                select(OptimizationSnapshot).where(
+                    OptimizationSnapshot.build_id == uuid.UUID(build["id"]),
+                )
+            ).first()
+            assert row is not None
+            db.refresh(row)
+            return row
+
+        def _save_hash(baseline) -> str | None:
+            """Which SAVE a stored baseline describes.  Identity, not score: two
+            different saves can have the same optimum, and it is the save the
+            next upload gets measured against that this test is about."""
+            return ((baseline or {}).get("inputs") or {}).get("base_relics_hash")
+
+        # Save A — acknowledged by the first run.
+        assert self._run(
+            client, normal_user_token_headers, build["id"], str(profile.id)
+        ).status_code == 200
+        hash_a = profile.relics_hash
+        assert _save_hash(_snap().save_baseline) == hash_a
+
+        # Save B — a pure-save run with news.  It cannot advance a baseline yet
+        # (the change is unread), so it parks its arrangement instead.
+        TestSnapshotCache._add_relic_and_rehash(db, profile, effect=100,
+                                                real_id=200)
+        hash_b = profile.relics_hash
+        assert hash_b != hash_a
+        assert self._run(
+            client, normal_user_token_headers, build["id"], str(profile.id)
+        ).status_code == 200
+        assert _snap().reviewed is False
+        assert _save_hash(_snap().save_baseline) == hash_a, (
+            "an unread change must not advance the save track by itself"
+        )
+        assert _save_hash(_snap().pending_save_baseline) == hash_b, (
+            "a pure-save run's arrangement must survive until review"
+        )
+
+        # A Relic Rites spree lands before the user reads the upload's change —
+        # this is what used to hide save B from the save track forever.
+        assert self._run(
+            client, normal_user_token_headers, build["id"], str(profile.id),
+            staged_mints=mints,
+        ).status_code == 200
+        assert _snap().staged_signature is not None
+        assert _save_hash(_snap().pending_save_baseline) == hash_b, (
+            "a staged run must not consume the parked pure-save arrangement"
+        )
+
+        # The user dismisses the change.
+        ack = client.post(
+            f"/api/v1/optimize/summaries/{build['id']}/reviewed",
+            headers=normal_user_token_headers,
+        )
+        assert ack.status_code == 204, ack.text
+        assert _save_hash(_snap().save_baseline) == hash_b, (
+            "the save track must have advanced to save B, not stayed at save A"
+        )
+        assert _snap().pending_save_baseline is None, "promoted, so cleared"
+
+        # Save C: the next pure-save run is measured from B — the newest
+        # acknowledged save — not from A, which predates the purchases.
+        TestSnapshotCache._add_relic_and_rehash(db, profile, effect=100,
+                                                real_id=201)
+        assert self._run(
+            client, normal_user_token_headers, build["id"], str(profile.id)
+        ).status_code == 200
+        assert _save_hash(_snap().pending_save_baseline) == profile.relics_hash
+        assert _save_hash(_snap().save_baseline) == hash_b
+
     def test_a_discarded_purchase_is_not_relost_on_the_next_spree(
         self,
         client: TestClient,

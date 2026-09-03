@@ -30,6 +30,17 @@ discarding the purchases and uploading a newer save reported every purchase as
 "gone from your save", with a percentage attached, and blamed it on the save.
 A pure-save run reads ``save_baseline``; a staged run reads ``baseline``.
 
+A third field, ``pending_save_baseline``, exists because the save track could
+otherwise starve.  Only a pure-save run may advance ``save_baseline``, but an
+upload advances nothing (its change must survive until read), and by review time
+a staged run has usually overwritten ``staged_signature`` — so review moved only
+the effective track.  A user with a standing Relic Rites diff therefore froze
+``save_baseline`` at the save preceding their first purchase, and every later
+upload was measured against it: long-owned relics reported as NEW, with a
+percentage attached.  A pure-save run now parks its arrangement in
+``pending_save_baseline`` and review promotes it, so the save track advances no
+matter what ran in between.
+
 The baselines are JSON blobs rather than a column per field: nothing filters or
 joins on them, and the freshness hashes they duplicate stay in their own columns
 where the cache-hit query needs them.
@@ -147,18 +158,45 @@ def pick_baseline(
 def advanced_baselines(
     fresh: dict[str, Any],
     save_baseline: dict[str, Any] | None,
+    pending: dict[str, Any] | None = None,
     *,
     staged: bool,
-) -> tuple[dict[str, Any], dict[str, Any] | None]:
-    """``(baseline, save_baseline)`` after folding ``fresh`` into them.
+) -> tuple[dict[str, Any], dict[str, Any] | None, dict[str, Any] | None]:
+    """``(baseline, save_baseline, pending_save_baseline)`` after folding ``fresh``.
 
     The whole rule, in one place so the three call sites cannot drift: every
     advance moves ``baseline``; only a pure-save one also moves
-    ``save_baseline``.
+    ``save_baseline`` — and a pure-save advance consumes any parked pending
+    arrangement, because ``fresh`` is a newer pure-save one.
     """
     if staged:
-        return fresh, save_baseline
-    return fresh, fresh
+        return fresh, save_baseline, pending
+    return fresh, fresh, None
+
+
+def reviewed_baselines(
+    fresh: dict[str, Any],
+    save_baseline: dict[str, Any] | None,
+    pending: dict[str, Any] | None,
+    *,
+    staged: bool,
+) -> tuple[dict[str, Any], dict[str, Any] | None, dict[str, Any] | None]:
+    """``(baseline, save_baseline, pending)`` after the user acknowledges a change.
+
+    Same rule as :func:`advanced_baselines`, plus the one thing review can do
+    that a run cannot: promote a PENDING pure-save arrangement onto the save
+    track.  ``fresh`` is never eligible for that on a staged run — it is an
+    arrangement built from relics that are in no save — which is exactly why the
+    save track used to starve.  An upload parks its pure-save result in
+    ``pending``; whatever staged runs happen before the user reads the change,
+    this is where that result finally lands.
+    """
+    baseline, save_bl, pend = advanced_baselines(
+        fresh, save_baseline, pending, staged=staged
+    )
+    if pend is not None:
+        return baseline, pend, None
+    return baseline, save_bl, pend
 
 
 def causes_since(

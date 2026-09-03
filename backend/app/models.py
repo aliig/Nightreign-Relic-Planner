@@ -578,6 +578,20 @@ class OptimizationSnapshot(SQLModel, table=True):
     save_baseline: dict | None = Field(
         default=None, sa_column=Column(JSON, nullable=True)
     )
+    # The pure-save arrangement waiting to BECOME `save_baseline`, written by a
+    # pure-save run whose change is still unread.  Without it the save track
+    # starves: an upload does not advance a baseline (the change must survive
+    # until read), and by review time a staged run has usually overwritten
+    # `staged_signature`, so `mark_change_reviewed` advances only the effective
+    # track.  A user with a standing Relic Rites diff therefore never advanced
+    # `save_baseline` at all, and the next upload was diffed against a save from
+    # arbitrarily far back — reporting long-owned relics as NEW with a
+    # percentage attached.  Review promotes this and clears it; a second upload
+    # before the review overwrites it, which is what keeps two uploads composing
+    # into one verdict while still landing the NEWEST save on the save track.
+    pending_save_baseline: dict | None = Field(
+        default=None, sa_column=Column(JSON, nullable=True)
+    )
 
     computed_at: datetime | None = Field(
         default_factory=get_datetime_utc,

@@ -314,7 +314,8 @@ function BuildCard({
           ) : (
             (() => {
               // Subtle at-a-glance marker: only the score/pin-moving changes
-              // (neutral "rearranged" lives in the changes-since-last-save list).
+              // (a neutral cross-version "best setup changed" verdict makes no
+              // claim about strength, so it stays in the changes list only).
               const d = describeBuildChange(summary?.change)
               if (!d || d.tone === "neutral") return null
               const Icon = d.icon
