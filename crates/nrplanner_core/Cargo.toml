@@ -1,0 +1,23 @@
+[package]
+name = "nrplanner_core"
+version = "0.1.0"
+edition = "2021"
+description = "Vessel-slot solver for the Nightreign Relic Planner"
+license = "MIT"
+
+[lib]
+name = "nrplanner_core"
+# cdylib for the Python extension module; rlib so `cargo test` can link the
+# pure-Rust modules without libpython.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# Pinned to a minor: PyO3 breaks API across minors more often than not.
+# The extension-module feature is applied by maturin (see pyproject.toml), not
+# here, so `cargo test` still links against libpython.
+pyo3 = { version = "0.24", features = ["abi3-py312"] }
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1

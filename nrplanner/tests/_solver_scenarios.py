@@ -73,7 +73,11 @@ def _random_build(rng: random.Random, ids: list[int], fams: list[str],
     """
     groups = []
     for _ in range(rng.randint(1, 4)):
-        effs = _sample(rng, ids, rng.randint(0, 4))
+        # Generous group sizes on purpose: the candidate pre-filter drops every
+        # relic with a positive pre-score of 0, so thin builds produce
+        # near-empty candidate lists and a search too shallow to prove
+        # anything.
+        effs = _sample(rng, ids, rng.randint(0, 12))
         if cat_members and rng.random() < 0.5:
             effs.append(rng.choice(cat_members))
         groups.append(WeightGroup(
@@ -201,6 +205,22 @@ def legal_relics(ds: SourceDataHandler, seed: int, n: int) -> list[OwnedRelic]:
     return out
 
 
+def common_effect_ids(relics: list[OwnedRelic], top: int = 150) -> list[int]:
+    """The effect ids that occur most often across ``relics``.
+
+    Builds weighted on rare ids leave almost every relic at a positive
+    pre-score of 0, so they are filtered out before the solver ever sees them.
+    Drawing weights from the common ids is what makes a scenario's candidate
+    lists — and therefore its search — realistically large.
+    """
+    counts: dict[int, int] = {}
+    for r in relics:
+        for e in r.all_effects:
+            counts[e] = counts.get(e, 0) + 1
+    ranked = sorted(counts, key=lambda e: (-counts[e], e))
+    return ranked[:top]
+
+
 def legal_scenarios(ds: SourceDataHandler, seed: int, n: int = 1,
                     n_relics: int = 200,
                     relics: list[OwnedRelic] | None = None) -> list[Scenario]:
@@ -213,7 +233,7 @@ def legal_scenarios(ds: SourceDataHandler, seed: int, n: int = 1,
     rng = random.Random(seed ^ 0x5EED)
     if relics is None:
         relics = legal_relics(ds, seed, n_relics)
-    ids = sorted({e for r in relics for e in r.all_effects})
+    ids = common_effect_ids(relics)
     fams = [f["name"] for f in ds.get_all_families_list()[:20]]
     cat_members = _category_members(ds, ids)
 

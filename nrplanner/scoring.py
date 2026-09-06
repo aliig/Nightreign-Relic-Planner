@@ -133,6 +133,9 @@ class BuildScorer:
         self._resolve_memo: dict[int, tuple[str | None, int]] = {}
         self._protected_memo: dict[int, bool] = {}
         self._profile_memo: dict[int, RelicProfile] = {}
+        # Compiled Rust-side inventory (nrplanner.solver_bridge.CoreBundle).
+        # Derived from _profile_memo, so it shares its invalidation exactly.
+        self._core_bundle = None
         # The inventory _profile_memo's ga_handle keys refer to (bind_inventory).
         self._memo_inventory: RelicInventory | None = None
         self._character: str | None = None
@@ -190,6 +193,7 @@ class BuildScorer:
         self._resolve_memo = {}
         self._protected_memo = {}
         self._profile_memo = {}
+        self._core_bundle = None
         self._memo_inventory = None
         self._character = build.character
         self._inert_memo = {}
@@ -807,6 +811,7 @@ class BuildScorer:
             return
         self._memo_inventory = inventory
         self._profile_memo = {}
+        self._core_bundle = None
 
     def compile_profile(self, relic: OwnedRelic, build: BuildDefinition,
                         effect_limit_by_name: dict[str, int] | None = None,

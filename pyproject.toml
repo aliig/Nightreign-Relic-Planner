@@ -12,13 +12,24 @@ dependencies = [
     "pydantic>=2.0",
 ]
 
+[project.optional-dependencies]
+# The Rust solver.  Optional only for the duration of the migration, so
+# `uv sync` still works on a machine without a Rust toolchain; it becomes a
+# hard dependency at switchover.
+rust = ["nrplanner-core"]
+
 [tool.uv.workspace]
-members = ["backend"]
+members = ["backend", "crates/nrplanner_core"]
+
+[tool.uv.sources]
+nrplanner-core = { workspace = true }
 
 [dependency-groups]
 dev = [
     "pytest>=7.4.3",
     "coverage>=7.4.3",
+    # `uv run maturin develop --release -m crates/nrplanner_core/Cargo.toml`
+    "maturin>=1.8,<2",
 ]
 
 [build-system]

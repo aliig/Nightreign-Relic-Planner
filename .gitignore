@@ -82,3 +82,5 @@ blob-report/
 playwright/.cache/
 
 .smithbox
+# Rust build artifacts (Cargo.lock IS committed — see crates/nrplanner_core)
+crates/*/target/

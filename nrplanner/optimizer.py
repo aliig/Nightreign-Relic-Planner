@@ -423,6 +423,50 @@ class VesselOptimizer:
         return (raw_free, search_truncated, nodes_expanded,
                 [len(c) for c in candidates_per_free_slot])
 
+    def _solve_free_slots_rust(
+        self,
+        build: BuildDefinition,
+        inventory: RelicInventory,
+        slot_colors: tuple,
+        free_slot_indices: list[int],
+        pinned_handles: set[int],
+        excluded_handles: set[int],
+        req_specs: list[tuple[frozenset[int], str | None]],
+        pinned_mask: int,
+        full_mask: int,
+        top_n: int,
+        deadline_secs: float,
+        desired_cw: dict[int, int] | None,
+        desired_compat_effs: dict[int, set[int]] | None,
+        effect_limit_by_name: dict[str, int] | None,
+        family_limit_map: dict[str, int] | None,
+    ) -> tuple[list[list], bool, int, list[int]]:
+        """The Rust solver behind the same seam as _solve_free_slots_python.
+
+        Everything build-dependent is compiled once per (build, inventory) into
+        a CoreBundle; this call only picks each free slot's candidates out of
+        it and hands the index lists across.  ``desired_cw`` is unused here —
+        conflict penalties are already baked into the compiled profiles — but
+        stays in the signature so both engines are interchangeable.
+        """
+        bundle = solver_bridge.get_bundle(
+            self, build, inventory, effect_limit_by_name, family_limit_map,
+            req_specs)
+        cand_lists = [
+            solver_bridge.slot_candidates(
+                bundle, slot_colors[i], i >= 3, pinned_handles,
+                excluded_handles)
+            for i in free_slot_indices
+        ]
+        # Leaf-level excluded-category validation needs absolute slot order;
+        # with pinned slots the free-slot indices no longer align, so the
+        # post-hoc filter alone handles those (rare) builds.
+        validate_leaves = bool(desired_compat_effs) and not pinned_handles
+        raw_free, truncated, nodes = solver_bridge.solve_free_slots(
+            bundle, cand_lists, top_n, build.curse_max, deadline_secs,
+            validate_leaves, full_mask, pinned_mask)
+        return raw_free, truncated, nodes, [len(c) for c in cand_lists]
+
     # ------------------------------------------------------------------
     # Requirement hard-constraint helpers
     # ------------------------------------------------------------------
