@@ -79,6 +79,62 @@ cd backend
 fastapi dev app/main.py
 ```
 
+## Rust toolchain (required)
+
+The vessel optimizer's search runs in a Rust extension module,
+`crates/nrplanner_core`, built with [maturin](https://www.maturin.rs/) and
+loaded as `nrplanner_core`. It is a hard dependency: `uv sync` builds it, and
+without a toolchain the sync fails loudly rather than falling back to
+something slower.
+
+On Windows you need Rust plus the MSVC linker:
+
+```powershell
+winget install Rustlang.Rustup
+winget install Microsoft.VisualStudio.2022.BuildTools
+```
+
+In the Visual Studio Installer, select the **Desktop development with C++**
+workload (that is what provides `link.exe`). Then:
+
+```bash
+rustup default stable
+uv sync --all-groups
+```
+
+On Linux/macOS `rustup` alone is enough (`curl https://sh.rustup.rs -sSf | sh`).
+
+While iterating on the Rust code, rebuild into the active venv with:
+
+```bash
+uv run maturin develop --release -m crates/nrplanner_core/Cargo.toml
+```
+
+Always `--release`: a debug build is roughly an order of magnitude slower and
+makes every benchmark number meaningless.
+
+Rust unit tests:
+
+```bash
+cargo test --manifest-path crates/nrplanner_core/Cargo.toml
+```
+
+The Docker image builds the wheel in its own stage
+(`ghcr.io/pyo3/maturin`), before any Python source is copied, so ordinary
+Python changes never re-run cargo.
+
+### Benchmarking the solver
+
+`scripts/bench_solver.py` is a standalone CLI (no database, no fixtures) that
+rolls a synthetic inventory of game-legal relics, runs a set of random builds
+over every vessel, and reports per-vessel solve times, node counts and pooled
+wall time:
+
+```bash
+uv run python scripts/bench_solver.py --relics 2000 --builds 64 --seed 7 \
+    --pool thread --out after.json
+```
+
 ## Docker Compose in `localhost.tiangolo.com`
 
 When you start the Docker Compose stack, it uses `localhost` by default, with different ports for each service (backend, frontend, adminer, etc).

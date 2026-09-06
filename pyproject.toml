@@ -7,16 +7,11 @@ requires-python = ">=3.12"
 dependencies = [
     "cryptography>=46.0.3",
     "lxml>=6.0.2",
+    "nrplanner-core",
     "orjson>=3.11.5",
     "pandas>=2.3.3",
     "pydantic>=2.0",
 ]
-
-[project.optional-dependencies]
-# The Rust solver.  Optional only for the duration of the migration, so
-# `uv sync` still works on a machine without a Rust toolchain; it becomes a
-# hard dependency at switchover.
-rust = ["nrplanner-core"]
 
 [tool.uv.workspace]
 members = ["backend", "crates/nrplanner_core"]

@@ -76,6 +76,7 @@ dependencies = [
     { name = "httpx" },
     { name = "jinja2" },
     { name = "nrplanner" },
+    { name = "nrplanner-core" },
     { name = "psycopg", extra = ["binary"] },
     { name = "pwdlib", extra = ["argon2", "bcrypt"] },
     { name = "pydantic" },
@@ -107,6 +108,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.25.1,<1.0.0" },
     { name = "jinja2", specifier = ">=3.1.4,<4.0.0" },
     { name = "nrplanner", editable = "." },
+    { name = "nrplanner-core", editable = "crates/nrplanner_core" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.1.13,<4.0.0" },
     { name = "pwdlib", extras = ["argon2", "bcrypt"], specifier = ">=0.3.0" },
     { name = "pydantic", specifier = ">2.0" },
@@ -1198,14 +1200,10 @@ source = { editable = "." }
 dependencies = [
     { name = "cryptography" },
     { name = "lxml" },
+    { name = "nrplanner-core" },
     { name = "orjson" },
     { name = "pandas" },
     { name = "pydantic" },
-]
-
-[package.optional-dependencies]
-rust = [
-    { name = "nrplanner-core" },
 ]
 
 [package.dev-dependencies]
@@ -1219,12 +1217,11 @@ dev = [
 requires-dist = [
     { name = "cryptography", specifier = ">=46.0.3" },
     { name = "lxml", specifier = ">=6.0.2" },
-    { name = "nrplanner-core", marker = "extra == 'rust'", editable = "crates/nrplanner_core" },
+    { name = "nrplanner-core", editable = "crates/nrplanner_core" },
     { name = "orjson", specifier = ">=3.11.5" },
     { name = "pandas", specifier = ">=2.3.3" },
     { name = "pydantic", specifier = ">=2.0" },
 ]
-provides-extras = ["rust"]
 
 [package.metadata.requires-dev]
 dev = [

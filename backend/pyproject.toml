@@ -5,6 +5,7 @@ description = ""
 requires-python = ">=3.12"
 dependencies = [
     "nrplanner",
+    "nrplanner-core",
     "fastapi[standard]<1.0.0,>=0.114.2",
     "python-multipart<1.0.0,>=0.0.7",
     "email-validator<3.0.0.0,>=2.1.0.post1",
@@ -24,6 +25,7 @@ dependencies = [
 
 [tool.uv.sources]
 nrplanner = { workspace = true }
+nrplanner-core = { workspace = true }
 
 [dependency-groups]
 dev = [
