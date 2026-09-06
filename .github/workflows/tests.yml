@@ -46,10 +46,7 @@ jobs:
         run: cargo test --manifest-path crates/nrplanner_core/Cargo.toml
       - name: nrplanner tests
         # Tests needing the real save fixture skip themselves when absent.
-        # NRPLANNER_REQUIRE_RUST makes a missing extension fail the parity
-        # suite instead of silently skipping it.
-        env:
-          NRPLANNER_REQUIRE_RUST: "1"
+        # A missing nrplanner_core is not skippable: it is an import error.
         run: uv run pytest nrplanner/tests -q
       - name: Backend migrations
         working-directory: backend
