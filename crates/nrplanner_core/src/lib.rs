@@ -153,6 +153,63 @@ fn score_profile_debug(
     Ok(score::score_profile(inventory, profile_idx, &state, curse_max))
 }
 
+/// Test hook: the full stacking state after placing `placed` (profile indices)
+/// in order, as dense ids.
+///
+/// Lets `test_profile_equivalence` pin the Rust `VesselState` against the
+/// legacy `VesselState.place` over real game data — the placement half of the
+/// compiled-vs-legacy equivalence property.  Returns
+/// `(effect_ids, exclusivity_ids, no_stack_exclusivity_ids,
+///   no_stack_compat_ids, desired_compat_placed, curse_counts,
+///   limited_counts)`, the counters as `(id, count)` pairs for nonzero
+/// entries only (Python's dicts delete a key when it reaches zero).
+#[pyfunction]
+#[allow(clippy::type_complexity)]
+fn state_debug(
+    inv: &CompiledInventory,
+    placed: Vec<usize>,
+) -> PyResult<(
+    Vec<u32>,
+    Vec<u32>,
+    Vec<u32>,
+    Vec<u32>,
+    Vec<u32>,
+    Vec<(u32, u32)>,
+    Vec<(u32, u32)>,
+)> {
+    let inventory = &inv.inner;
+    let n = inventory.len();
+    for &p in &placed {
+        if p >= n {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "profile index {p} out of range (inventory has {n} profiles)"
+            )));
+        }
+    }
+    let mut st = state::VesselState::new(inventory);
+    let mut delta = state::Delta::default();
+    for p in placed {
+        st.place(inventory, p, &mut delta);
+    }
+    let nonzero = |counts: &[u32]| -> Vec<(u32, u32)> {
+        counts
+            .iter()
+            .enumerate()
+            .filter(|(_, &c)| c > 0)
+            .map(|(i, &c)| (i as u32, c))
+            .collect()
+    };
+    Ok((
+        st.effect_ids.iter().collect(),
+        st.exclusivity_ids.iter().collect(),
+        st.no_stack_exclusivity_ids.iter().collect(),
+        st.no_stack_compat_ids.iter().collect(),
+        st.desired_compat_placed.iter().collect(),
+        nonzero(&st.curse_counts),
+        nonzero(&st.limited_counts),
+    ))
+}
+
 /// Build provenance, for the startup log and the parity test.
 #[pyfunction]
 fn engine_info(py: Python<'_>) -> PyResult<Py<PyDict>> {
@@ -169,6 +226,7 @@ fn nrplanner_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(compile_inventory, m)?)?;
     m.add_function(wrap_pyfunction!(solve_vessel, m)?)?;
     m.add_function(wrap_pyfunction!(score_profile_debug, m)?)?;
+    m.add_function(wrap_pyfunction!(state_debug, m)?)?;
     m.add_function(wrap_pyfunction!(engine_info, m)?)?;
     Ok(())
 }

@@ -2,15 +2,12 @@
 
 Multi-build flows submit the NEXT build's vessel tasks before draining the
 current build's (submit_all_vessels + presubmitted=/collect_all_vessels).
-This spins a real pool and pins that interleaved consumption produces exactly
-the sequential in-process results for every build.  Both pool kinds are
-covered: the thread pool the app uses (vessels share one BuildSolveContext by
-reference) and the process pool it replaced (each task pickles its own copy),
-which stays until the Python solver is deleted.
+This spins a real thread pool — where the vessels of one build share a single
+BuildSolveContext by reference — and pins that interleaved consumption
+produces exactly the sequential in-process results for every build.
 """
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor
 
-import pytest
 
 from nrplanner import SourceDataHandler
 from nrplanner.constants import EMPTY_EFFECT as EMPTY
@@ -20,10 +17,8 @@ from nrplanner.models import (
     RelicInventory,
     WeightGroup,
 )
-from nrplanner.optimizer import VesselOptimizer, init_optimizer_worker
+from nrplanner.optimizer import VesselOptimizer
 from nrplanner.scoring import BuildScorer
-
-pytestmark = pytest.mark.slow  # spawns worker processes (Windows spawn is slow)
 
 # High top_n so score ties never straddle the cutoff (arrival order between the
 # parallel and sequential paths may rank equal-score layouts differently).
@@ -45,16 +40,8 @@ def _relic(handle: int, effects: list[int], color: str) -> OwnedRelic:
     )
 
 
-def _make_pool(kind: str):
-    if kind == "process":
-        return ProcessPoolExecutor(max_workers=2,
-                                   initializer=init_optimizer_worker)
-    return ThreadPoolExecutor(max_workers=2, thread_name_prefix="nr-test")
-
-
-@pytest.mark.parametrize("pool_kind", ["thread", "process"])
 def test_presubmitted_futures_match_sequential(
-    ds: SourceDataHandler, all_effects, pool_kind: str
+    ds: SourceDataHandler, all_effects
 ) -> None:
     wylder_ok = [
         e["id"] for e in all_effects
@@ -88,7 +75,8 @@ def test_presubmitted_futures_match_sequential(
         build_b, inv, 1, top_n=_TOP_N, max_per_vessel=_MAX_PER_VESSEL,
         deadline_secs=_DEADLINE))
 
-    pool = _make_pool(pool_kind)
+    pool = ThreadPoolExecutor(max_workers=2,
+                              thread_name_prefix="nr-test")
     try:
         # Prefetch pattern: submit BOTH builds up front, then drain in order.
         fut_a = opt.submit_all_vessels(

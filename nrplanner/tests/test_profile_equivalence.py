@@ -1,12 +1,18 @@
-"""Compiled-profile equivalence: score_profile/place_profile vs legacy.
+"""Compiled-profile equivalence: the Rust solver vs the legacy Python scorer.
 
-The solver hot loop runs on compiled RelicProfiles (BuildScorer.compile_profile)
-instead of score_relic_in_context/VesselState.place.  These property tests pin
-the two implementations together over randomized builds, relics, and placement
+The solver runs in Rust over a compiled inventory (solver_bridge.get_bundle,
+built from BuildScorer.compile_profile) instead of
+score_relic_in_context/VesselState.place.  These property tests pin the two
+implementations together over randomized builds, relics and placement
 sequences using real game data — any divergence is a solver-correctness bug.
+
+Unlike test_solver_parity, which compares whole solved vessels, this works one
+relic and one placement at a time against the legacy functions, so a
+divergence points straight at the scoring rule that moved.
 """
 import random
 
+import nrplanner_core
 import pytest
 
 from nrplanner import SourceDataHandler
@@ -18,8 +24,9 @@ from nrplanner.models import (
     VesselState,
     WeightGroup,
 )
+from nrplanner import solver_bridge
 from nrplanner.optimizer import VesselOptimizer
-from nrplanner.scoring import BuildScorer, score_profile
+from nrplanner.scoring import BuildScorer
 
 
 def _random_build(rng: random.Random, ids: list[int], fams: list[str],
@@ -70,16 +77,6 @@ def _random_relic(rng: random.Random, pool: list[int],
     )
 
 
-def _assert_states_equal(a: VesselState, b: VesselState) -> None:
-    assert a.effect_ids == b.effect_ids
-    assert a.exclusivity_ids == b.exclusivity_ids
-    assert a.no_stack_exclusivity_ids == b.no_stack_exclusivity_ids
-    assert a.no_stack_compat_ids == b.no_stack_compat_ids
-    assert a.curse_counts == b.curse_counts
-    assert a.desired_compat_placed == b.desired_compat_placed
-    assert a.limited_counts == b.limited_counts
-
-
 @pytest.mark.parametrize("seed", [11, 23, 37, 51])
 def test_profiles_match_legacy_scoring_and_place(
     ds: SourceDataHandler, all_effects, seed: int
@@ -95,49 +92,72 @@ def test_profiles_match_legacy_scoring_and_place(
 
     scorer = BuildScorer(ds)
     optimizer = VesselOptimizer(ds, scorer)
+    compared = 0
 
     for build_i in range(8):
         build = _random_build(rng, ids, fams, cat_members)
         dcw = scorer.get_desired_conflict_weights(build)
         dce = scorer.get_desired_compat_effects(build)
         elbn, flm = optimizer._prepare_limits(build)
+        req_specs = optimizer._requirement_specs(build)
 
-        def mk_state() -> VesselState:
-            # character must match what compile_profile filters on, exactly as
-            # VesselOptimizer constructs it — otherwise place() would register
-            # effects the compiled profile treats as inert.
-            return VesselState(
-                ds, desired_conflict_weights=dcw, desired_compat_effects=dce,
-                effect_limit_by_name=elbn, family_limit_map=flm,
-                character=build.character,
-            )
-
-        legacy, compiled = mk_state(), mk_state()
+        # Generously many: only relics that survive the candidate pre-filters
+        # reach the solver, and a random relic clears them maybe one time in
+        # six, so a small pool leaves almost nothing to compare.
         relics = [
             _random_relic(rng, ids, cat_members, 0xC1000000 + build_i * 100 + i)
-            for i in range(12)
+            for i in range(48)
         ]
+        inventory = RelicInventory.from_owned_relics(relics)
+        scorer.bind_inventory(inventory)
+        bundle = solver_bridge.get_bundle(
+            optimizer, build, inventory, elbn, flm, req_specs)
+
+        # The bundle holds only relics that survive the candidate pre-filters,
+        # which is exactly the set the solver ever scores or places.
+        eligible = [
+            (r, bundle.handle_to_index[r.ga_handle]) for r in relics
+            if r.ga_handle in bundle.handle_to_index
+        ]
+        if not eligible:
+            continue
+
+        # character must match what compile_profile filters on, exactly as
+        # VesselOptimizer constructs it — otherwise place() would register
+        # effects the compiled profile treats as inert.
+        legacy = VesselState(
+            ds, desired_conflict_weights=dcw, desired_compat_effects=dce,
+            effect_limit_by_name=elbn, family_limit_map=flm,
+            character=build.character,
+        )
+        placed_indices: list[int] = []
 
         for _step in range(5):
-            for r in relics:
-                prof = scorer.compile_profile(r, build, elbn, flm)
-                got = score_profile(prof, compiled, build.curse_max)
-                want = scorer.score_relic_in_context(r, build, legacy)
+            for relic, index in eligible:
+                got = nrplanner_core.score_profile_debug(
+                    bundle.core, index, placed_indices, build.curse_max)
+                want = scorer.score_relic_in_context(relic, build, legacy)
                 assert got == want, (
-                    f"seed={seed} build={build_i} relic={r.ga_handle:#x}: "
-                    f"score_profile={got} != legacy={want}\n"
-                    f"effects={r.effects} curses={r.curses}\n"
+                    f"seed={seed} build={build_i} relic={relic.ga_handle:#x}: "
+                    f"rust score={got} != legacy={want}\n"
+                    f"effects={relic.effects} curses={relic.curses}\n"
                     f"build={build.model_dump()}"
                 )
-            placed = rng.choice(relics)
-            prof = scorer.compile_profile(placed, build, elbn, flm)
-            d_legacy = legacy.place(placed)
-            d_compiled = compiled.place_profile(prof)
-            assert d_legacy == d_compiled, (
-                f"seed={seed} build={build_i} placed={placed.ga_handle:#x}: "
-                f"deltas diverge\nlegacy={d_legacy}\ncompiled={d_compiled}"
+                compared += 1
+
+            relic, index = rng.choice(eligible)
+            legacy.place(relic)
+            placed_indices.append(index)
+            assert (solver_bridge.placement_state(bundle, placed_indices)
+                    == solver_bridge.legacy_state_snapshot(legacy)), (
+                f"seed={seed} build={build_i} placed={relic.ga_handle:#x}: "
+                f"solver state diverged from legacy place()"
             )
-            _assert_states_equal(legacy, compiled)
+
+    assert compared > 100, (
+        f"only {compared} scoring comparisons ran — the pre-filters swallowed "
+        "the generated relics, so this test proved nothing"
+    )
 
 
 def test_a_reused_ga_handle_does_not_serve_a_stale_profile(

@@ -50,6 +50,20 @@ impl BitSet {
         ids.iter().all(|&id| self.contains(id))
     }
 
+    /// The ids present, ascending.  Diagnostics only (the `state_debug` hook);
+    /// the solver never enumerates a set.
+    pub fn iter(&self) -> impl Iterator<Item = u32> + '_ {
+        self.words.iter().enumerate().flat_map(|(w, &word)| {
+            (0..64).filter_map(move |b| {
+                if word >> b & 1 != 0 {
+                    Some((w * 64 + b) as u32)
+                } else {
+                    None
+                }
+            })
+        })
+    }
+
     pub fn clear(&mut self) {
         self.words.iter_mut().for_each(|w| *w = 0);
     }
@@ -67,6 +81,15 @@ mod tests {
         assert!(b.contains(3));
         b.remove(3);
         assert!(!b.contains(3));
+    }
+
+    #[test]
+    fn iter_yields_present_ids_ascending() {
+        let mut b = BitSet::new(200);
+        for id in [130u32, 3, 64, 3] {
+            b.insert(id);
+        }
+        assert_eq!(b.iter().collect::<Vec<_>>(), vec![3, 64, 130]);
     }
 
     #[test]

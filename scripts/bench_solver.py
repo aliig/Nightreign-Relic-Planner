@@ -14,7 +14,7 @@ Rust one and diff the same fields.
 
 Run:
     uv run python scripts/bench_solver.py --relics 2000 --builds 64 \\
-        --seed 7 --engine python --out baseline.json
+        --seed 7 --pool thread --out after.json
 """
 from __future__ import annotations
 
@@ -23,14 +23,13 @@ import json
 import os
 import statistics
 import time
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor
 
 from nrplanner import solver_bridge
 from nrplanner.data import SourceDataHandler
 from nrplanner.models import RelicInventory
 from nrplanner.optimizer import (
     DEFAULT_BACKTRACK_DEADLINE_SECS, OPTIMIZER_VERSION, VesselOptimizer,
-    init_optimizer_worker,
 )
 from nrplanner.scoring import BuildScorer
 from nrplanner.tests import _solver_scenarios as scenarios
@@ -71,7 +70,7 @@ def build_workload(ds: SourceDataHandler, n_relics: int, n_builds: int,
 # ---------------------------------------------------------------------------
 
 def time_one_build(optimizer: VesselOptimizer, sc: scenarios.Scenario,
-                   ds: SourceDataHandler, engine: str, top_n: int,
+                   ds: SourceDataHandler, top_n: int,
                    deadline_secs: float) -> dict:
     """Solve every vessel of one build sequentially, timing each."""
     vessels = ds.get_all_vessels_for_hero(sc.hero_type)
@@ -82,8 +81,7 @@ def time_one_build(optimizer: VesselOptimizer, sc: scenarios.Scenario,
         vd["_id"] = v["vessel_id"]
         t0 = time.perf_counter()
         results = optimizer.optimize(sc.build, sc.inventory, vd, top_n,
-                                     deadline_secs=deadline_secs,
-                                     engine=engine)
+                                     deadline_secs=deadline_secs)
         total_ms = (time.perf_counter() - t0) * 1000.0
         stats = optimizer.last_solve_stats
         solve_ms = stats.get("solve_ms", 0.0)
@@ -121,16 +119,6 @@ def time_one_build(optimizer: VesselOptimizer, sc: scenarios.Scenario,
 # Pooled end-to-end
 # ---------------------------------------------------------------------------
 
-def _make_pool(kind: str, workers: int):
-    if kind == "process":
-        return ProcessPoolExecutor(max_workers=workers,
-                                   initializer=init_optimizer_worker)
-    if kind == "thread":
-        return ThreadPoolExecutor(max_workers=workers,
-                                  thread_name_prefix="nr-bench")
-    raise ValueError(f"unknown pool kind {kind!r}")
-
-
 def run_pooled(ds: SourceDataHandler, scs: list[scenarios.Scenario],
                kind: str, workers: int, top_n: int, max_per_vessel: int,
                deadline_secs: float) -> dict:
@@ -143,7 +131,8 @@ def run_pooled(ds: SourceDataHandler, scs: list[scenarios.Scenario],
     optimizer = VesselOptimizer(ds, BuildScorer(ds))
     depth = max(4, workers * 3)
     t0 = time.perf_counter()
-    with _make_pool(kind, workers) as pool:
+    with ThreadPoolExecutor(max_workers=workers,
+                            thread_name_prefix="nr-bench") as pool:
         inflight: list[tuple[scenarios.Scenario, dict]] = []
         pending = list(scs)
         n_results = 0
@@ -216,10 +205,7 @@ def main() -> None:
     ap.add_argument("--relics", type=int, default=2000)
     ap.add_argument("--builds", type=int, default=64)
     ap.add_argument("--seed", type=int, default=7)
-    ap.add_argument("--engine", choices=("auto", "rust", "python"),
-                    default="auto")
-    ap.add_argument("--pool", choices=("none", "process", "thread"),
-                    default="none",
+    ap.add_argument("--pool", choices=("none", "thread"), default="none",
                     help="also time an end-to-end pooled run")
     ap.add_argument("--workers", type=int, default=0,
                     help="pool width (0 = os.process_cpu_count())")
@@ -231,21 +217,20 @@ def main() -> None:
                     help="write the full report as JSON here")
     args = ap.parse_args()
 
-    engine = solver_bridge.resolve_engine(args.engine)
     ds = SourceDataHandler(language="en_US")
     _inventory, scs = build_workload(ds, args.relics, args.builds, args.seed)
 
     optimizer = VesselOptimizer(ds, BuildScorer(ds))
     builds: list[dict] = []
     for i, sc in enumerate(scs, 1):
-        b = time_one_build(optimizer, sc, ds, engine, args.max_per_vessel,
+        b = time_one_build(optimizer, sc, ds, args.max_per_vessel,
                            args.deadline)
         builds.append(b)
         print(f"  [{i}/{len(scs)}] {sc.name} {sc.build.character:<10} "
               f"{b['wall_ms']:8.0f} ms")
 
     report = {
-        "engine": engine,
+        "engine": solver_bridge.ENGINE,
         "optimizer_version": OPTIMIZER_VERSION,
         "args": vars(args),
         "summary": _summarize(builds),

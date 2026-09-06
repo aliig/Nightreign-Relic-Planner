@@ -1,74 +1,25 @@
-"""Solver engine selection (and, from Phase 1, the Rust bridge).
+"""The bridge between the optimizer and the Rust solver.
 
-The free-slot solver has two interchangeable implementations behind one seam
-(``VesselOptimizer._solve_free_slots_*``).  ``NRPLANNER_SOLVER`` picks which:
+Everything that touches game data or Pydantic stays on this side: it compiles
+relic profiles, interns their ids into two dense namespaces, and hands the
+result to ``nrplanner_core`` once per (build, inventory).  Each vessel then
+passes only its candidate index lists.
 
-    auto    (default) use the Rust extension when it imports, else Python
-    rust    require the Rust extension; raise at import if it is missing
-    python  always use the pure-Python solver
-
-The switch exists only for the Rust migration: it is what lets the
-differential parity test run both engines in one process.  It goes away with
-the Python solver at switchover.
+``nrplanner_core`` is a hard dependency — there is no Python fallback solver —
+so an ImportError here is a broken install, not a degraded mode.
 """
 from __future__ import annotations
 
 import logging
-import os
 from dataclasses import dataclass, field
+
+import nrplanner_core
 
 from nrplanner.constants import EMPTY_EFFECT
 
 log = logging.getLogger(__name__)
 
-VALID_ENGINES = ("auto", "rust", "python")
-
-# The Rust extension module, or None when it is not installed.
-try:  # pragma: no cover - depends on whether the wheel is built
-    import nrplanner_core  # type: ignore
-except ImportError:  # pragma: no cover
-    nrplanner_core = None
-
-
-def _resolve_default() -> str:
-    """The engine every optimize() call uses unless it overrides it."""
-    requested = os.environ.get("NRPLANNER_SOLVER", "auto").strip().lower()
-    if requested not in VALID_ENGINES:
-        raise ValueError(
-            f"NRPLANNER_SOLVER={requested!r} is not one of {VALID_ENGINES}")
-    if requested == "rust":
-        if nrplanner_core is None:
-            raise RuntimeError(
-                "NRPLANNER_SOLVER=rust but the nrplanner_core extension is not "
-                "installed — build it with "
-                "`uv run maturin develop --release -m crates/nrplanner_core/Cargo.toml`"
-            )
-        return "rust"
-    if requested == "python":
-        return "python"
-    return "rust" if nrplanner_core is not None else "python"
-
-
-ENGINE: str = _resolve_default()
-
-log.info("nrplanner solver engine=%s core=%s", ENGINE,
-         "present" if nrplanner_core is not None else "absent")
-
-
-def resolve_engine(engine: str | None) -> str:
-    """Per-call engine override -> concrete engine name."""
-    if engine is None:
-        return ENGINE
-    engine = engine.strip().lower()
-    if engine not in VALID_ENGINES:
-        raise ValueError(f"engine={engine!r} is not one of {VALID_ENGINES}")
-    if engine == "auto":
-        return ENGINE
-    if engine == "rust" and nrplanner_core is None:
-        raise RuntimeError(
-            "engine='rust' requested but the nrplanner_core extension is not "
-            "installed")
-    return engine
+ENGINE = "rust"
 
 # ---------------------------------------------------------------------------
 # Compiled inventory bundle
@@ -94,6 +45,10 @@ class CoreBundle:
     core: object                                   # CompiledInventory
     profiles: list                                 # index -> RelicProfile
     handle_to_index: dict[int, int]
+    # Dense index -> raw game id / limit-key name.  Only the equivalence test
+    # needs to read the solver's state back out in the game's own terms.
+    raw_ids: list[int]
+    limit_names: list[str]
     # (slot_color, is_deep) -> profile indices, stable net-desc.  Built lazily:
     # a build only ever touches the colours its hero's vessels actually have.
     pools: dict[tuple[str, bool], list[int]] = field(default_factory=dict)
@@ -124,6 +79,11 @@ class _Interner:
 
     def __len__(self) -> int:
         return len(self._map)
+
+    def reverse(self) -> list:
+        """Dense index -> key. Dict order is insertion order, and a key's
+        dense index IS its insertion index, so this is exact."""
+        return list(self._map)
 
 
 def _leaf_masks(scorer, ds, relic, checked_compats, desired_expanded):
@@ -215,17 +175,38 @@ _COLUMNS = (
 ) + tuple(name for pair in _CSR_BLOCKS for name in pair)
 
 
-def _compile_bundle(optimizer, build, inventory, elbn, flm,
-                    req_specs) -> CoreBundle:
-    """Compile every eligible relic into one Rust-side inventory.
+def eligible_relics(optimizer, build, inventory, req_specs) -> list:
+    """The relics a vessel could actually be offered, in inventory order.
 
-    Applies exactly the build-dependent candidate filters `optimize()` applies
-    per slot (excluded effects, then the positive-pre-score floor with the
-    Required-carrier escape), so the only thing left per slot is the colour /
-    deep split and this vessel's pinned/excluded handles.
+    Exactly the build-dependent candidate filters `optimize()` used to apply
+    per slot — excluded effects, then the positive-pre-score floor with the
+    Required-carrier escape — so the only thing left per slot is the colour /
+    deep split and that vessel's pinned/excluded handles.
     """
-    if nrplanner_core is None:  # pragma: no cover - guarded by resolve_engine
-        raise RuntimeError("the nrplanner_core extension is not installed")
+    scorer = optimizer.scorer
+    dce = scorer.get_desired_compat_effects(build) or {}
+    out = []
+    for relic in inventory.relics:
+        if scorer.has_excluded_effect(relic, build, dce):
+            continue
+        mask = optimizer._relic_req_mask(relic, req_specs) if req_specs else 0
+        # A requirement carrier survives even at pos <= 0 — it can be mandatory
+        # at a net loss.
+        if mask == 0 and scorer.positive_pre_score(relic, build) <= 0:
+            continue
+        out.append(relic)
+    return out
+
+
+def compile_bundle(optimizer, build, relics, elbn, flm,
+                   req_specs) -> CoreBundle:
+    """Compile exactly these relics into one Rust-side inventory.
+
+    ``get_bundle`` is the production entry point and feeds this the eligible
+    relics; calling it directly compiles whatever it is given, which is what
+    tests need when they want a profile for a relic the candidate filters
+    would drop long before it reached a slot (a purely negative one, say).
+    """
     if len(req_specs) > MAX_BITMASK_BITS:
         raise ValueError(
             f"{len(req_specs)} Required entries exceeds the "
@@ -263,14 +244,8 @@ def _compile_bundle(optimizer, build, inventory, elbn, flm,
     profiles: list = []
     handle_to_index: dict[int, int] = {}
 
-    for relic in inventory.relics:
-        if scorer.has_excluded_effect(relic, build, dce):
-            continue
+    for relic in relics:
         mask = optimizer._relic_req_mask(relic, req_specs) if req_specs else 0
-        # A requirement carrier survives even at pos <= 0 — it can be mandatory
-        # at a net loss.
-        if mask == 0 and scorer.positive_pre_score(relic, build) <= 0:
-            continue
         prof = scorer.compile_profile(relic, build, elbn, flm)
 
         handle_to_index[relic.ga_handle] = len(profiles)
@@ -323,7 +298,8 @@ def _compile_bundle(optimizer, build, inventory, elbn, flm,
 
     core = nrplanner_core.compile_inventory(cols, len(ids), len(limits))
     return CoreBundle(core=core, profiles=profiles,
-                      handle_to_index=handle_to_index)
+                      handle_to_index=handle_to_index,
+                      raw_ids=ids.reverse(), limit_names=limits.reverse())
 
 
 def get_bundle(optimizer, build, inventory, elbn, flm,
@@ -336,8 +312,10 @@ def get_bundle(optimizer, build, inventory, elbn, flm,
     scorer = optimizer.scorer
     bundle = scorer._core_bundle
     if bundle is None:
-        bundle = _compile_bundle(
-            optimizer, build, inventory, elbn or {}, flm or {}, req_specs)
+        bundle = compile_bundle(
+            optimizer, build,
+            eligible_relics(optimizer, build, inventory, req_specs),
+            elbn or {}, flm or {}, req_specs)
         scorer._core_bundle = bundle
     return bundle
 
@@ -382,3 +360,39 @@ def solve_free_slots(bundle: CoreBundle, cand_lists: list[list[int]],
         for a in raw
     ]
     return layouts, truncated, nodes
+
+
+def placement_state(bundle: CoreBundle, profile_indices: list[int]) -> dict:
+    """The solver's stacking state after placing those profiles, in game terms.
+
+    De-interns what `nrplanner_core.state_debug` returns back to raw effect ids
+    and limit-key names, so it can be compared field-for-field against a
+    ``VesselState`` built by the legacy ``place()``.  Test-only — the solver
+    itself never enumerates a set.
+    """
+    (effect_ids, exclusivity_ids, ns_exclusivity_ids, ns_compat_ids,
+     desired_compat_placed, curse_counts, limited_counts) =         nrplanner_core.state_debug(bundle.core, profile_indices)
+    raw = bundle.raw_ids
+    names = bundle.limit_names
+    return {
+        "effect_ids": {raw[i] for i in effect_ids},
+        "exclusivity_ids": {raw[i] for i in exclusivity_ids},
+        "no_stack_exclusivity_ids": {raw[i] for i in ns_exclusivity_ids},
+        "no_stack_compat_ids": {raw[i] for i in ns_compat_ids},
+        "desired_compat_placed": {raw[i] for i in desired_compat_placed},
+        "curse_counts": {raw[i]: c for i, c in curse_counts},
+        "limited_counts": {names[i]: c for i, c in limited_counts},
+    }
+
+
+def legacy_state_snapshot(state) -> dict:
+    """The same seven fields off a Python ``VesselState``, for comparison."""
+    return {
+        "effect_ids": set(state.effect_ids),
+        "exclusivity_ids": set(state.exclusivity_ids),
+        "no_stack_exclusivity_ids": set(state.no_stack_exclusivity_ids),
+        "no_stack_compat_ids": set(state.no_stack_compat_ids),
+        "desired_compat_placed": set(state.desired_compat_placed),
+        "curse_counts": dict(state.curse_counts),
+        "limited_counts": dict(state.limited_counts),
+    }
