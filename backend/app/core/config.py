@@ -110,16 +110,17 @@ class Settings(BaseSettings):
     MAX_UPLOAD_SIZE_MB: int = 200
     MAX_RELICS_PER_OPTIMIZE: int = 2000
 
-    # Vessel-optimizer process pool.  0 = auto (all CPUs available to this
-    # process, capped at OPTIMIZER_MAX_WORKERS_CAP).
+    # Vessel-optimizer thread pool.  0 = auto (all CPUs available to this
+    # process, capped at OPTIMIZER_MAX_WORKERS_CAP).  Note this is per uvicorn
+    # worker: the CMD runs 4, so a small host may want an explicit cap.
     OPTIMIZER_MAX_WORKERS: int = 0
     OPTIMIZER_MAX_WORKERS_CAP: int = 32
     # How many builds' vessel tasks may be in flight at once during a
     # multi-build run.  The pool starves at low depth because each build's
     # completion tail leaves workers idle; measured on a 77-build/2000-relic
     # run (8 workers): depth 1 = 103s, depth 8 = 92s, depth 24 = 46s.
-    # Each in-flight build queues one pickled relic payload per vessel
-    # (~280 KiB at 1950 relics), so depth is bounded rather than unlimited.
+    # Each in-flight build holds one compiled inventory (~0.5-1 MB at 2000
+    # relics), so depth is bounded rather than unlimited.
     OPTIMIZER_PREFETCH_BUILDS: int = 0  # 0 = auto (3x pool width)
 
     def _check_default_secret(self, var_name: str, value: str | None) -> None:
