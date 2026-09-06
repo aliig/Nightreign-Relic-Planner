@@ -1,3 +1,23 @@
+# ---------------------------------------------------------------------------
+# Stage 1: build the Rust solver wheel.
+#
+# Kept in its own stage, before any Python source is copied, so a change to
+# nrplanner or the backend never re-runs cargo.  abi3-py312 means one wheel
+# serves every Python >= 3.12.
+# ---------------------------------------------------------------------------
+FROM ghcr.io/pyo3/maturin:v1.9.1 AS rust-builder
+
+WORKDIR /build
+COPY ./crates/nrplanner_core /build/crates/nrplanner_core
+
+RUN --mount=type=cache,target=/root/.cargo/registry \
+    --mount=type=cache,target=/build/crates/nrplanner_core/target \
+    maturin build --release --manylinux 2_28 --interpreter python3.12 \
+        -m crates/nrplanner_core/Cargo.toml -o /wheels
+
+# ---------------------------------------------------------------------------
+# Stage 2: the application image.
+# ---------------------------------------------------------------------------
 FROM python:3.12
 
 ENV PYTHONUNBUFFERED=1
@@ -40,7 +60,13 @@ COPY ./nrplanner /app/nrplanner
 RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=uv.lock,target=uv.lock \
     --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
-    uv sync --frozen --package app
+    uv sync --frozen --package app --no-install-package nrplanner-core
+
+# Install the prebuilt solver wheel.  --no-deps because uv already resolved
+# and installed everything it needs.
+COPY --from=rust-builder /wheels /wheels
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --no-deps /wheels/nrplanner_core-*.whl
 
 WORKDIR /app/backend/
 

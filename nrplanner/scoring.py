@@ -19,22 +19,24 @@ class RelicProfile:
 
     Splits a relic's score into a state-independent ``static_score`` plus a
     short ``dyn`` tuple of effects whose contribution depends on vessel state,
-    and precomputes everything ``VesselState.place_profile`` needs — so the
-    solver's innermost loops run on plain ints/tuples with zero data-source or
-    Pydantic access.  Compiled once per (build, relic) and memoized on the
-    scorer; the compiled-vs-legacy equivalence test pins it to
+    and precomputes the id sets a placement contributes — so the search needs
+    no data-source or Pydantic access at all.  This is what
+    ``solver_bridge`` marshals into the Rust solver's compiled inventory.
+
+    Compiled once per (build, relic) and memoized on the scorer;
+    test_profile_equivalence pins the whole chain to the legacy
     ``score_relic_in_context`` / ``place``.
     """
     __slots__ = ("relic", "ga_handle", "static_score", "dyn", "curse_ids",
-                 "penalized_curse_ids", "place_ops", "limit_keys", "pos_bound",
+                 "penalized_curse_ids", "limit_keys", "pos_bound",
                  "net",
-                 # Pre-unioned placement sets — one per VesselState collection,
-                 # in the same order place_profile applies them.
+                 # Pre-unioned placement sets — one per VesselState
+                 # collection, in the order a placement applies them.
                  "eff_set", "excl_set", "ns_excl_set", "ns_compat_set",
                  "dcp_set")
 
     def __init__(self, relic: OwnedRelic, static_score: int, dyn: tuple,
-                 curse_ids: tuple, place_ops: tuple, limit_keys: tuple,
+                 curse_ids: tuple, limit_keys: tuple,
                  pos_bound: int, net: int,
                  penalized_curse_ids: tuple | None = None,
                  eff_set: frozenset = frozenset(),
@@ -49,11 +51,11 @@ class RelicProfile:
         self.curse_ids = curse_ids
         # Curses subject to the build-wide curse_max excess check. Excludes
         # curses with an explicit user limit at negative weight — for those the
-        # limit IS the tolerance (see the sign fork in score_profile) and it
-        # replaces curse_max. place_profile still counts ALL curse_ids.
+        # limit IS the tolerance (see the sign fork in the solver's
+        # score_profile) and it replaces curse_max.  A placement still counts
+        # ALL curse_ids.
         self.penalized_curse_ids = (
             curse_ids if penalized_curse_ids is None else penalized_curse_ids)
-        self.place_ops = place_ops
         self.eff_set = eff_set
         self.excl_set = excl_set
         self.ns_excl_set = ns_excl_set
@@ -62,63 +64,6 @@ class RelicProfile:
         self.limit_keys = limit_keys
         self.pos_bound = pos_bound
         self.net = net
-
-
-def score_profile(profile: RelicProfile, state: VesselState,
-                  curse_max: int) -> int:
-    """score_relic_in_context over a compiled profile (hot path).
-
-    Branch order within each kind mirrors the legacy functions exactly.
-    """
-    score = profile.static_score
-    for (kind, weight, eff, text_id, excl, compat, penalty,
-         lname, lfam) in profile.dyn:
-        if lname is not None or lfam is not None:
-            counts = state.limited_counts
-            if ((lname is not None
-                    and counts.get(lname, 0) >= state.effect_limit_by_name[lname])
-                    or (lfam is not None
-                        and counts.get(lfam, 0) >= state.family_limit_map[lfam])):
-                # Sign fork: a limit on a desired effect is a score cap (extra
-                # copies are neutral); on an undesired one it is a tolerance —
-                # copies beyond it disqualify like excess curses.
-                if weight < 0:
-                    score += CURSE_EXCESS_PENALTY
-                continue
-        if kind == K_STACK:
-            score += weight
-        elif kind == K_UNIQUE:
-            effect_ids = state.effect_ids
-            if eff in effect_ids:
-                continue
-            if text_id != -1 and text_id in effect_ids:
-                continue
-            if excl != -1 and excl in state.no_stack_exclusivity_ids:
-                score += penalty
-                continue
-            if compat != -1 and compat in state.no_stack_compat_ids:
-                score += penalty
-                continue
-            score += weight
-        elif kind == K_NO_STACK:
-            if excl != -1 and excl in state.exclusivity_ids:
-                score += penalty
-                continue
-            effect_ids = state.effect_ids
-            if text_id != -1 and text_id in effect_ids:
-                continue
-            if eff in effect_ids:
-                continue
-            score += weight
-        else:  # K_EXCL_CAT — blocking penalty until the desired effect is placed
-            if compat not in state.desired_compat_placed:
-                score += penalty
-    if profile.penalized_curse_ids:
-        counts = state.curse_counts
-        for c in profile.penalized_curse_ids:
-            if counts.get(c, 0) >= curse_max:
-                score += CURSE_EXCESS_PENALTY
-    return score
 
 
 class BuildScorer:
@@ -133,6 +78,9 @@ class BuildScorer:
         self._resolve_memo: dict[int, tuple[str | None, int]] = {}
         self._protected_memo: dict[int, bool] = {}
         self._profile_memo: dict[int, RelicProfile] = {}
+        # Compiled Rust-side inventory (nrplanner.solver_bridge.CoreBundle).
+        # Derived from _profile_memo, so it shares its invalidation exactly.
+        self._core_bundle = None
         # The inventory _profile_memo's ga_handle keys refer to (bind_inventory).
         self._memo_inventory: RelicInventory | None = None
         self._character: str | None = None
@@ -190,6 +138,7 @@ class BuildScorer:
         self._resolve_memo = {}
         self._protected_memo = {}
         self._profile_memo = {}
+        self._core_bundle = None
         self._memo_inventory = None
         self._character = build.character
         self._inert_memo = {}
@@ -807,6 +756,7 @@ class BuildScorer:
             return
         self._memo_inventory = inventory
         self._profile_memo = {}
+        self._core_bundle = None
 
     def compile_profile(self, relic: OwnedRelic, build: BuildDefinition,
                         effect_limit_by_name: dict[str, int] | None = None,
@@ -918,10 +868,11 @@ class BuildScorer:
                  desired_compat))
 
         # Pre-union the place_ops columns into one frozenset per VesselState
-        # collection.  place_profile then applies each with a single C-level
-        # set difference + union instead of re-walking place_ops and building
-        # five fresh sets per search node.  Derived from place_ops itself, so
-        # the two cannot drift.
+        # collection — the form the solver consumes (solver_bridge ships these
+        # five as the profile's placement id sets, and the Rust VesselState
+        # applies each as one pass).  Derived from place_ops, which mirrors
+        # VesselState.place effect by effect, so the two cannot drift; the
+        # equivalence test pins the chain end to end.
         eff_set = frozenset(
             [op[0] for op in place_ops]
             + [op[1] for op in place_ops if op[1] != -1]
@@ -955,7 +906,6 @@ class BuildScorer:
             static_score=static_score,
             dyn=tuple(dyn),
             curse_ids=curse_ids,
-            place_ops=tuple(place_ops),
             eff_set=eff_set,
             excl_set=excl_set,
             ns_excl_set=ns_excl_set,

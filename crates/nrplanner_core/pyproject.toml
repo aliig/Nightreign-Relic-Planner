@@ -1,0 +1,19 @@
+[build-system]
+requires = ["maturin>=1.8,<2"]
+build-backend = "maturin"
+
+[project]
+name = "nrplanner-core"
+version = "0.1.0"
+description = "Vessel-slot solver for the Nightreign Relic Planner"
+requires-python = ">=3.12"
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+]
+
+[tool.maturin]
+module-name = "nrplanner_core"
+# Applied here rather than in Cargo.toml so `cargo test` can still link
+# libpython; with it set unconditionally the test binary fails to link.
+features = ["pyo3/extension-module"]

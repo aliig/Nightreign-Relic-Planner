@@ -1,13 +1,22 @@
+import logging
 from contextlib import asynccontextmanager
 
 import sentry_sdk
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
+from nrplanner import solver_bridge
 from starlette.middleware.cors import CORSMiddleware
 
 from app.api.main import api_router
 from app.core.config import settings
-from app.core.optimizer_pool import init_optimizer_pool, shutdown_optimizer_pool
+from app.core.optimizer_pool import (
+    get_pool_width,
+    init_optimizer_pool,
+    prefetch_depth,
+    shutdown_optimizer_pool,
+)
+
+log = logging.getLogger(__name__)
 
 
 def custom_generate_unique_id(route: APIRoute) -> str:
@@ -21,6 +30,8 @@ if settings.SENTRY_DSN and settings.ENVIRONMENT != "local":
 @asynccontextmanager
 async def lifespan(app: FastAPI):  # noqa: ARG001 - signature fixed by FastAPI
     init_optimizer_pool()
+    log.info("optimizer pool kind=thread width=%d prefetch_depth=%d engine=%s",
+             get_pool_width(), prefetch_depth(), solver_bridge.ENGINE)
     yield
     shutdown_optimizer_pool()
 

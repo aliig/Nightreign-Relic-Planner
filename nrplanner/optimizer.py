@@ -3,15 +3,16 @@ from __future__ import annotations
 
 import logging
 import time
-from concurrent.futures import Future, ProcessPoolExecutor, as_completed
+from concurrent.futures import Executor, Future, as_completed
+from dataclasses import dataclass
 
-from nrplanner.constants import EMPTY_EFFECT
 from nrplanner.data import SourceDataHandler
 from nrplanner.models import (
     BuildDefinition, OwnedRelic, RelicInventory,
     SlotAssignment, VesselResult, VesselState,
 )
-from nrplanner.scoring import BuildScorer, score_profile
+from nrplanner import solver_bridge
+from nrplanner.scoring import BuildScorer
 
 log = logging.getLogger(__name__)
 
@@ -40,38 +41,67 @@ DEFAULT_BACKTRACK_DEADLINE_SECS = 10.0
 #     on Raider, who starts with a colossal weapon).
 OPTIMIZER_VERSION = 5
 
-# ---------------------------------------------------------------------------
-# Worker-process globals (set once per worker by init_optimizer_worker)
-# ---------------------------------------------------------------------------
-_worker_ds: SourceDataHandler | None = None
-_worker_scorer: BuildScorer | None = None
+@dataclass(slots=True)
+class BuildSolveContext:
+    """Everything the vessels of ONE build share, prepared once up front.
+
+    The process pool pickled the whole inventory into every vessel task
+    (10-12x per build), rebuilt a RelicInventory in the worker and recompiled
+    every relic profile from scratch.  With the solver in Rust that overhead
+    dominates, so vessels now run on threads and share this context by
+    reference instead.
+
+    Every lazily-built cache the vessels read — the scorer's per-build memos
+    and the compiled Rust inventory — is warmed here, on the submitting
+    thread, so the worker threads only ever read.  The scorer is per context,
+    so concurrent builds never share one.
+    """
+    build: BuildDefinition
+    inventory: RelicInventory
+    optimizer: "VesselOptimizer"
 
 
-def init_optimizer_worker() -> None:
-    """ProcessPoolExecutor initializer — one SourceDataHandler per worker."""
-    global _worker_ds, _worker_scorer
-    _worker_ds = SourceDataHandler(language="en_US")
-    _worker_scorer = BuildScorer(_worker_ds)
-    # Warm up lazy caches so the first task doesn't pay init cost
-    _ = _worker_ds._reachable_effect_ids  # noqa: F841  # cached_property
-    _worker_ds.get_effect_stacking_type(0)  # loads _stacking_cache
-    _worker_ds.get_effect_family(0)  # loads _effect_families
+def warm_data_source(ds: SourceDataHandler) -> None:
+    """Force the data source's lazy caches before any task can race on them.
+
+    ``SourceDataHandler``'s caches are built non-atomically, so they must be
+    populated while only one thread is running — at pool init, exactly as the
+    process pool's worker initializer did per worker.
+    """
+    _ = ds._reachable_effect_ids  # noqa: F841  # cached_property
+    ds.get_effect_stacking_type(0)  # loads _stacking_cache
+    ds.get_effect_family(0)  # loads _effect_families
 
 
-def _optimize_vessel_task(
-    build: BuildDefinition,
-    relics: list[OwnedRelic],
+def make_solve_context(data_source: SourceDataHandler,
+                       build: BuildDefinition,
+                       inventory: RelicInventory) -> BuildSolveContext:
+    """Prepare one build's shared solve context (see BuildSolveContext)."""
+    scorer = BuildScorer(data_source)
+    optimizer = VesselOptimizer(data_source, scorer)
+    scorer.bind_inventory(inventory)
+    scorer._ensure_build_cache(build)
+    scorer.get_desired_conflict_weights(build)
+    scorer.get_desired_compat_effects(build)
+    elbn, flm = optimizer._prepare_limits(build)
+    req_specs = optimizer._requirement_specs(build)
+    # Compile the inventory once per build instead of once per vessel task.
+    solver_bridge.get_bundle(optimizer, build, inventory, elbn, flm, req_specs)
+    return BuildSolveContext(
+        build=build, inventory=inventory, optimizer=optimizer)
+
+
+def _optimize_vessel_task_ctx(
+    ctx: BuildSolveContext,
     vessel_data: dict,
     max_per_vessel: int,
     deadline_secs: float = DEFAULT_BACKTRACK_DEADLINE_SECS,
 ) -> tuple[int, str, list[VesselResult], float]:
-    """Top-level picklable worker function for ProcessPoolExecutor."""
-    assert _worker_ds is not None and _worker_scorer is not None
+    """One vessel, sharing its build's context by reference (thread pool)."""
     t0 = time.perf_counter()
-    inventory = RelicInventory.from_owned_relics(relics)
-    optimizer = VesselOptimizer(_worker_ds, _worker_scorer)
-    results = optimizer.optimize(
-        build, inventory, vessel_data, max_per_vessel, deadline_secs=deadline_secs)
+    results = ctx.optimizer.optimize(
+        ctx.build, ctx.inventory, vessel_data, max_per_vessel,
+        deadline_secs=deadline_secs)
     vessel_id = vessel_data.get("_id", 0)
     for r in results:
         r.vessel_id = vessel_id
@@ -85,6 +115,10 @@ class VesselOptimizer:
     def __init__(self, data_source: SourceDataHandler, scorer: BuildScorer):
         self.data_source = data_source
         self.scorer = scorer
+        # Filled in by optimize() — engine/nodes/truncated/solve_ms/candidates
+        # of the most recent free-slot solve.  Diagnostics only (the parity
+        # test and scripts/bench_solver.py read it); nothing in the app does.
+        self.last_solve_stats: dict = {}
 
     @staticmethod
     def _placed_effects_per_slot(result: VesselResult) -> list[set[int]]:
@@ -127,9 +161,7 @@ class VesselOptimizer:
 
         slot_colors = vessel_data["Colors"]
         num_slots = 6 if build.include_deep else 3
-        search_truncated = False
         t_start = time.perf_counter()
-        nodes_expanded = 0
 
         # Precompute conflict penalty weights once per optimization call.
         desired_cw = self.scorer.get_desired_conflict_weights(build)
@@ -142,6 +174,11 @@ class VesselOptimizer:
         pinned_map, slot_owner = self._pre_assign_pinned(
             build, inventory, slot_colors, num_slots)
         if pinned_map is None:
+            # No solve ran, so the previous vessel's stats must not stand.
+            self.last_solve_stats = {
+                "nodes": 0, "truncated": False, "solve_ms": 0.0,
+                "candidates": [], "skipped": True,
+            }
             return []  # vessel incompatible with pinned relics — exclude
 
         pinned_handles: set[int] = set(pinned_map.keys())
@@ -153,158 +190,25 @@ class VesselOptimizer:
         # pinned relics count toward coverage via pinned_mask.
         req_specs = self._requirement_specs(build)
         full_mask = (1 << len(req_specs)) - 1
-        req_masks: dict[int, int] = {}
         pinned_mask = 0
         if req_specs:
             for relic in pinned_map.values():
                 pinned_mask |= self._relic_req_mask(relic, req_specs)
 
-        candidates_per_free_slot = []
-        for i in free_slot_indices:
-            is_deep = i >= 3
-            candidates = inventory.get_candidates(slot_colors[i], is_deep)
-            candidates = [
-                r for r in candidates
-                if not self.scorer.has_excluded_effect(r, build, desired_compat_effs)
-                and r.ga_handle not in pinned_handles
-                and r.ga_handle not in excluded_handles
-            ]
-            # Pre-filter on the POSITIVE pre-score (sum of positive weights):
-            # an effect contributes at most max(0, weight) in any context, so
-            # pos <= 0 relics can never help and are safe to drop.  The net
-            # pre-score is NOT a sound filter — a negatively-weighted
-            # duplicate dedups to 0 in context, so a net<=0 relic can still
-            # belong to the optimum.  Candidates are ordered by net score
-            # (finds good solutions early => aggressive pruning); the stored
-            # value is the positive bound, which is what pruning must use.
-            # Survivors are compiled into RelicProfiles (memoized per build on
-            # the scorer, so slots/vessels sharing a relic compile it once) —
-            # the solvers below run entirely on profiles.
-            scored = []
-            for r in candidates:
-                r_mask = 0
-                if req_specs and r.ga_handle not in req_masks:
-                    r_mask = self._relic_req_mask(r, req_specs)
-                    req_masks[r.ga_handle] = r_mask
-                elif req_specs:
-                    r_mask = req_masks[r.ga_handle]
-                # A requirement carrier survives even at pos <= 0 — it can be
-                # mandatory at a net loss (e.g. a family-required tier whose
-                # magnitude weight rounds to 0 on an otherwise dead relic).
-                if r_mask == 0 and self.scorer.positive_pre_score(r, build) <= 0:
-                    continue
-                prof = self.scorer.compile_profile(
-                    r, build, effect_limit_by_name, family_limit_map)
-                scored.append((prof.net, prof.pos_bound, prof))
-            scored.sort(key=lambda x: x[0], reverse=True)
-            candidates_per_free_slot.append([(pos, p) for _net, pos, p in scored])
-
         num_free = len(free_slot_indices)
-
-        # Per-free-slot suffix unions of requirement coverage: what the slots
-        # from index j onward can still contribute.  suffix[num_free] = 0
-        # doubles as leaf rejection in the backtracker.  The union is
-        # optimistic (ignores one-relic-per-slot and handle reuse), so it is
-        # a sound prune but "feasible" here does not guarantee coverable.
-        req_suffix_union: list[int] = []
-        vessel_can_cover = True
-        if req_specs:
-            req_suffix_union = [0] * (num_free + 1)
-            for j in range(num_free - 1, -1, -1):
-                slot_union = 0
-                for _pos, p in candidates_per_free_slot[j]:
-                    slot_union |= req_masks.get(p.ga_handle, 0)
-                req_suffix_union[j] = req_suffix_union[j + 1] | slot_union
-            vessel_can_cover = (pinned_mask | req_suffix_union[0]) == full_mask
-        # When the vessel can't possibly cover, fall back to the ordinary
-        # unconstrained solve — its best-effort results are flagged
-        # meets_requirements=False by _build_vessel_result.
-        constrained = bool(req_specs) and vessel_can_cover
-
-        def _covers(assignment: list) -> bool:
-            m = pinned_mask
-            for r, _s in assignment:
-                if r is not None:
-                    m |= req_masks.get(r.ga_handle, 0)
-            return m == full_mask
-
-        if num_free == 0:
-            raw_free: list[list] = [[]]
-        else:
-            # Always run greedy first — it's fast O(n*k) and gives a
-            # baseline score that seeds backtracking for aggressive pruning.
-            raw_free = self._greedy_solve(
-                candidates_per_free_slot, num_free, build, top_n, desired_cw,
+        t_solve = time.perf_counter()
+        raw_free, search_truncated, nodes_expanded, cand_counts =             self._solve_free_slots(
+                build, inventory, slot_colors, free_slot_indices,
+                pinned_handles, excluded_handles, req_specs, pinned_mask,
+                full_mask, top_n, deadline_secs, desired_cw,
                 desired_compat_effs, effect_limit_by_name, family_limit_map)
+        self.last_solve_stats = {
+            "nodes": nodes_expanded,
+            "truncated": search_truncated,
+            "solve_ms": (time.perf_counter() - t_solve) * 1000.0,
+            "candidates": cand_counts,
+        }
 
-            # Always run the exhaustive backtracking solver for an optimal
-            # assignment.  Greedy commits each slot before later slots are
-            # scored, so it can miss globally better placements — e.g. when a
-            # family/effect limit only bites once a later deep slot is filled,
-            # greedy over-values the earlier slot and locks in a worse relic.
-            # The per-call deadline in _backtrack_solve bounds worst-case
-            # runtime, and the greedy result is retained in the merge below as
-            # a floor whenever the search is truncated.  (Previously this was
-            # gated behind a `total <= 500` candidate cap, which silently
-            # disabled optimal search for large inventories.)
-            if constrained:
-                # Only a requirement-COVERING assignment may seed the pruning
-                # threshold: the covering optimum can score below the best
-                # unconstrained greedy, so a non-covering seed could prune
-                # every valid optimum away.
-                covering_scores = [
-                    sum(s for _, s in a) for a in raw_free if _covers(a)]
-                if covering_scores:
-                    initial_threshold = max(covering_scores) - 1
-                else:
-                    cover = self._greedy_cover_once(
-                        candidates_per_free_slot, num_free, build, req_masks,
-                        req_suffix_union, full_mask, pinned_mask, desired_cw,
-                        desired_compat_effs, effect_limit_by_name,
-                        family_limit_map)
-                    if cover is not None:
-                        raw_free.append(cover)
-                        initial_threshold = sum(s for _, s in cover) - 1
-                    else:
-                        initial_threshold = -(1 << 60)  # search unseeded
-            else:
-                greedy_best = max(
-                    (sum(s for _, s in a) for a in raw_free), default=0)
-                initial_threshold = greedy_best - 1
-            ctx_helpers = self._ctx_helper_map(
-                candidates_per_free_slot, build, desired_compat_effs)
-            # Leaf-level excluded-category validation needs absolute slot
-            # order; with pinned slots the free-slot indices no longer align,
-            # so the post-hoc filter alone handles those (rare) builds.
-            validate_leaves = bool(desired_compat_effs) and not pinned_handles
-            bt_results, search_truncated, nodes_expanded = self._backtrack_solve(
-                candidates_per_free_slot, num_free, build, top_n, desired_cw,
-                desired_compat_effs, initial_threshold=initial_threshold,
-                effect_limit_by_name=effect_limit_by_name,
-                family_limit_map=family_limit_map, deadline_secs=deadline_secs,
-                ctx_helpers=ctx_helpers, validate_leaves=validate_leaves,
-                req_masks=req_masks if constrained else None,
-                req_suffix_union=req_suffix_union if constrained else None,
-                req_full_mask=full_mask, req_initial_mask=pinned_mask)
-            if bt_results:
-                # Merge and deduplicate by relic set
-                seen: set[frozenset] = set()
-                merged: list[list] = []
-                for assignment in bt_results + raw_free:
-                    key = frozenset(
-                        r.ga_handle for r, _ in assignment if r is not None)
-                    if key not in seen:
-                        seen.add(key)
-                        merged.append(assignment)
-                raw_free = merged
-            if constrained:
-                # Constrained backtrack results always cover; greedy layouts
-                # may not.  When any covering layout exists, non-covering ones
-                # are dropped; when none does (truly infeasible slot packing,
-                # or a truncated search), greedy stays as the flagged fallback.
-                covering = [a for a in raw_free if _covers(a)]
-                if covering:
-                    raw_free = covering
 
         # When solvers find no useful free-slot relics, still produce one
         # result so pinned relics (if any) are represented.
@@ -348,11 +252,56 @@ class VesselOptimizer:
             log.debug(
                 "vessel=%r slots=%d candidates=%s nodes=%d truncated=%s elapsed_ms=%.1f",
                 vessel_data.get("Name"), num_slots,
-                [len(c) for c in candidates_per_free_slot],
+                cand_counts,
                 nodes_expanded, search_truncated,
                 (time.perf_counter() - t_start) * 1000.0,
             )
         return results
+
+    def _solve_free_slots(
+        self,
+        build: BuildDefinition,
+        inventory: RelicInventory,
+        slot_colors: tuple,
+        free_slot_indices: list[int],
+        pinned_handles: set[int],
+        excluded_handles: set[int],
+        req_specs: list[tuple[frozenset[int], str | None]],
+        pinned_mask: int,
+        full_mask: int,
+        top_n: int,
+        deadline_secs: float,
+        desired_cw: dict[int, int] | None,
+        desired_compat_effs: dict[int, set[int]] | None,
+        effect_limit_by_name: dict[str, int] | None,
+        family_limit_map: dict[str, int] | None,
+    ) -> tuple[list[list], bool, int, list[int]]:
+        """Candidate selection, then the Rust solver.
+
+        The seam between "which relics may go in each free slot" — game data
+        and Pydantic, so it stays here — and the closed-form search.
+        Everything build-dependent is compiled once per (build, inventory)
+        into a CoreBundle; this call only picks each free slot's candidates
+        out of it and hands the index lists across.  ``desired_cw`` is unused:
+        conflict penalties are already baked into the compiled profiles.
+        """
+        bundle = solver_bridge.get_bundle(
+            self, build, inventory, effect_limit_by_name, family_limit_map,
+            req_specs)
+        cand_lists = [
+            solver_bridge.slot_candidates(
+                bundle, slot_colors[i], i >= 3, pinned_handles,
+                excluded_handles)
+            for i in free_slot_indices
+        ]
+        # Leaf-level excluded-category validation needs absolute slot order;
+        # with pinned slots the free-slot indices no longer align, so the
+        # post-hoc filter alone handles those (rare) builds.
+        validate_leaves = bool(desired_compat_effs) and not pinned_handles
+        raw_free, truncated, nodes = solver_bridge.solve_free_slots(
+            bundle, cand_lists, top_n, build.curse_max, deadline_secs,
+            validate_leaves, full_mask, pinned_mask)
+        return raw_free, truncated, nodes, [len(c) for c in cand_lists]
 
     # ------------------------------------------------------------------
     # Requirement hard-constraint helpers
@@ -495,7 +444,7 @@ class VesselOptimizer:
         inventory: RelicInventory,
         hero_type: int,
         max_per_vessel: int = 3,
-        executor: ProcessPoolExecutor | None = None,
+        executor: Executor | None = None,
         deadline_secs: float = DEFAULT_BACKTRACK_DEADLINE_SECS,
         vessel_ids: set[int] | None = None,
     ) -> dict[Future, dict]:
@@ -510,13 +459,13 @@ class VesselOptimizer:
         responsible for supplying the rest as ``carried`` results.
         """
         vessels = self._vessel_subset(hero_type, vessel_ids)
-        relics = inventory.relics
+        ctx = make_solve_context(self.data_source, build, inventory)
         futures: dict[Future, dict] = {}
         for v in vessels:
             vd = dict(v)
             vd["_id"] = v["vessel_id"]
             fut = executor.submit(
-                _optimize_vessel_task, build, relics, vd, max_per_vessel,
+                _optimize_vessel_task_ctx, ctx, vd, max_per_vessel,
                 deadline_secs,
             )
             futures[fut] = v
@@ -571,7 +520,7 @@ class VesselOptimizer:
         hero_type: int,
         top_n: int = 10,
         max_per_vessel: int = 3,
-        executor: ProcessPoolExecutor | None = None,
+        executor: Executor | None = None,
         deadline_secs: float = DEFAULT_BACKTRACK_DEADLINE_SECS,
         presubmitted: dict[Future, dict] | None = None,
         vessel_ids: set[int] | None = None,
@@ -583,8 +532,8 @@ class VesselOptimizer:
             {"type": "progress", "vessel": i, "total": n, "name": vessel_name}
             {"type": "result", "data": list[VesselResult]}   (final event)
 
-        When *executor* is provided, vessels are optimized in parallel across
-        worker processes.  Progress events arrive as each vessel completes
+        When *executor* is provided, vessels are optimized in parallel on
+        the pool.  Progress events arrive as each vessel completes
         (non-deterministic order).  ``presubmitted`` (from
         ``submit_all_vessels``, requires *executor*) consumes already-submitted
         futures instead of submitting fresh ones — multi-build flows use it
@@ -633,7 +582,7 @@ class VesselOptimizer:
     def optimize_all_vessels(self, build: BuildDefinition, inventory: RelicInventory,
                              hero_type: int, top_n: int = 10,
                              max_per_vessel: int = 3,
-                             executor: ProcessPoolExecutor | None = None,
+                             executor: Executor | None = None,
                              deadline_secs: float = DEFAULT_BACKTRACK_DEADLINE_SECS,
                              ) -> list[VesselResult]:
         """Optimize all vessels for a hero. Returns top_n globally ranked results.
@@ -641,8 +590,8 @@ class VesselOptimizer:
         Results that meet requirements come before those that don't, then sorted
         by score descending.
 
-        When *executor* is provided, vessels are optimized in parallel across
-        worker processes.
+        When *executor* is provided, vessels are optimized in parallel on
+        the pool.
         """
         if executor is not None:
             futures = self.submit_all_vessels(
@@ -772,397 +721,6 @@ class VesselOptimizer:
     # ------------------------------------------------------------------
     # Solvers
     # ------------------------------------------------------------------
-
-    def _greedy_solve(self, candidates_per_slot: list, num_slots: int,
-                      build: BuildDefinition, top_n: int = 3,
-                      desired_cw: dict[int, int] | None = None,
-                      desired_compat_effs: dict[int, set[int]] | None = None,
-                      effect_limit_by_name: dict[str, int] | None = None,
-                      family_limit_map: dict[str, int] | None = None,
-                      ) -> list[list]:
-        results: list[list] = []
-        excluded: set[int] = set()
-        seen: set[frozenset] = set()
-
-        for _ in range(top_n):
-            assignment = self._greedy_solve_once(
-                candidates_per_slot, num_slots, build, excluded, desired_cw,
-                desired_compat_effs, effect_limit_by_name, family_limit_map)
-            handles = frozenset(r.ga_handle for r, _ in assignment if r is not None)
-            if not handles or handles in seen:
-                break
-            seen.add(handles)
-            results.append(assignment)
-            # Force diversity: exclude best relic from next pass
-            best_handle, best_score = None, -1
-            for relic, score in assignment:
-                if relic and score > best_score:
-                    best_score = score
-                    best_handle = relic.ga_handle
-            if best_handle:
-                excluded.add(best_handle)
-
-        return results
-
-    def _greedy_solve_once(self, candidates_per_slot: list, num_slots: int,
-                           build: BuildDefinition,
-                           excluded_handles: set[int] | None = None,
-                           desired_cw: dict[int, int] | None = None,
-                           desired_compat_effs: dict[int, set[int]] | None = None,
-                           effect_limit_by_name: dict[str, int] | None = None,
-                           family_limit_map: dict[str, int] | None = None,
-                           ) -> list:
-        assigned: list = [None] * num_slots
-        used: set[int] = set(excluded_handles or ())
-        curse_max = build.curse_max
-        state = VesselState(
-            self.data_source,
-            desired_conflict_weights=desired_cw,
-            desired_compat_effects=desired_compat_effs,
-            effect_limit_by_name=effect_limit_by_name,
-            family_limit_map=family_limit_map,
-            character=build.character,
-        )
-
-        for slot_idx in range(num_slots):
-            best: tuple | None = None
-            for _, prof in candidates_per_slot[slot_idx]:
-                if prof.ga_handle in used:
-                    continue
-                score = score_profile(prof, state, curse_max)
-                if best is None or score > best[0]:
-                    best = (score, prof)
-
-            if best is None or best[0] <= 0:
-                assigned[slot_idx] = (None, 0)
-                continue
-
-            score, prof = best
-            assigned[slot_idx] = (prof.relic, score)
-            used.add(prof.ga_handle)
-            state.place_profile(prof)
-
-        return assigned
-
-    def _greedy_cover_once(self, candidates_per_slot: list, num_slots: int,
-                           build: BuildDefinition,
-                           req_masks: dict[int, int],
-                           req_suffix_union: list[int],
-                           req_full_mask: int,
-                           req_initial_mask: int,
-                           desired_cw: dict[int, int] | None = None,
-                           desired_compat_effs: dict[int, set[int]] | None = None,
-                           effect_limit_by_name: dict[str, int] | None = None,
-                           family_limit_map: dict[str, int] | None = None,
-                           ) -> list | None:
-        """Greedy fill that guarantees requirement coverage when it succeeds.
-
-        Same shape as ``_greedy_solve_once``, but each slot only considers
-        options that keep the remaining slots able to cover the still-missing
-        requirements (suffix-union feasibility).  When the empty slot would
-        break feasibility, the best feasible candidate is placed even at a
-        negative context score — a required entry can be mandatory at a net
-        loss.  Returns ``None`` when some slot has no feasible option (e.g.
-        two requirements competing for the last slot that can hold either):
-        the suffix-union check is necessary but not sufficient, so this can
-        happen even on a "feasible-looking" vessel.
-        """
-        assigned: list = [None] * num_slots
-        used: set[int] = set()
-        curse_max = build.curse_max
-        state = VesselState(
-            self.data_source,
-            desired_conflict_weights=desired_cw,
-            desired_compat_effects=desired_compat_effs,
-            effect_limit_by_name=effect_limit_by_name,
-            family_limit_map=family_limit_map,
-            character=build.character,
-        )
-        mask = req_initial_mask
-
-        for slot_idx in range(num_slots):
-            rest = req_suffix_union[slot_idx + 1]
-            empty_ok = (mask | rest) == req_full_mask
-            best: tuple | None = None  # (score, new_bits, prof)
-            for _, prof in candidates_per_slot[slot_idx]:
-                if prof.ga_handle in used:
-                    continue
-                pmask = req_masks.get(prof.ga_handle, 0)
-                if (mask | pmask | rest) != req_full_mask:
-                    continue
-                score = score_profile(prof, state, curse_max)
-                new_bits = (pmask & ~mask).bit_count()
-                if best is None or (score, new_bits) > (best[0], best[1]):
-                    best = (score, new_bits, prof)
-
-            if best is None:
-                if not empty_ok:
-                    return None  # no single candidate keeps this slot feasible
-                assigned[slot_idx] = (None, 0)
-                continue
-            score, _new_bits, prof = best
-            if empty_ok and score <= 0:
-                assigned[slot_idx] = (None, 0)
-                continue
-            assigned[slot_idx] = (prof.relic, score)
-            used.add(prof.ga_handle)
-            state.place_profile(prof)
-            mask |= req_masks.get(prof.ga_handle, 0)
-
-        return assigned if mask == req_full_mask else None
-
-    def _backtrack_solve(self, candidates_per_slot: list, num_slots: int,
-                         build: BuildDefinition, top_n: int = 3,
-                         desired_cw: dict[int, int] | None = None,
-                         desired_compat_effs: dict[int, set[int]] | None = None,
-                         initial_threshold: int = -1,
-                         effect_limit_by_name: dict[str, int] | None = None,
-                         family_limit_map: dict[str, int] | None = None,
-                         deadline_secs: float = DEFAULT_BACKTRACK_DEADLINE_SECS,
-                         ctx_helpers: dict[int, tuple[frozenset[int], frozenset[int]]] | None = None,
-                         validate_leaves: bool = False,
-                         req_masks: dict[int, int] | None = None,
-                         req_suffix_union: list[int] | None = None,
-                         req_full_mask: int = 0,
-                         req_initial_mask: int = 0,
-                         ) -> tuple[list[list], bool, int]:
-        top: list[tuple[int, list]] = []
-        seen: set[frozenset] = set()
-        min_threshold = initial_threshold
-        deadline = time.time() + deadline_secs
-        truncated = False
-        nodes = 0
-        # Requirement hard-constraint mode: when req_masks is set, every
-        # returned assignment covers req_full_mask.  The entry check prunes
-        # branches whose remaining slots can't cover the missing requirements;
-        # req_suffix_union[num_slots] == 0 makes it double as leaf rejection.
-        constrained = req_masks is not None
-
-        # Admissible remaining-score bound: best POSITIVE pre-score per slot,
-        # as suffix sums.  (Candidates are net-ordered, so the per-slot max
-        # must be computed explicitly rather than taken from the list head.)
-        max_pos_per_slot = [
-            max((p for p, _ in c), default=0) for c in candidates_per_slot
-        ]
-        suffix_pos = [0] * (num_slots + 1)
-        for s in range(num_slots - 1, -1, -1):
-            suffix_pos[s] = suffix_pos[s + 1] + max_pos_per_slot[s]
-
-        # Per-slot suffix max of pos bounds over the net-ordered list: once
-        # even the best remaining candidate can't clear the threshold, the
-        # whole tail is prunable with a break instead of per-candidate
-        # continues.
-        suffix_max_per_slot: list[list[int]] = []
-        for c in candidates_per_slot:
-            smax = [0] * (len(c) + 1)
-            for j in range(len(c) - 1, -1, -1):
-                smax[j] = smax[j + 1] if smax[j + 1] > c[j][0] else c[j][0]
-            suffix_max_per_slot.append(smax)
-
-        curse_max = build.curse_max
-
-        state = VesselState(
-            self.data_source,
-            desired_conflict_weights=desired_cw,
-            desired_compat_effects=desired_compat_effs,
-            effect_limit_by_name=effect_limit_by_name,
-            family_limit_map=family_limit_map,
-            character=build.character,
-        )
-
-        def backtrack(slot_idx: int, current: list, used: set[int],
-                      score: int, req_mask: int) -> None:
-            nonlocal min_threshold, truncated, nodes
-            nodes += 1
-            # Sample the clock on the first node and every 1024 thereafter,
-            # rather than every node — the per-node call was ~2% of solve time
-            # on its own.  The first-node check keeps an already-expired
-            # deadline truncating immediately (callers pass one deliberately).
-            # `truncated` is still checked every node so the unwind stays
-            # prompt once tripped.
-            if not ((nodes - 1) & 1023) and time.time() > deadline:
-                truncated = True
-            if truncated:
-                return
-
-            if constrained and (
-                    req_mask | req_suffix_union[slot_idx]) != req_full_mask:
-                return  # remaining slots can't cover the missing requirements
-
-            if slot_idx == num_slots:
-                if score > min_threshold or len(top) < top_n:
-                    key = frozenset(used)
-                    if key not in seen:
-                        # Reject layouts that orphan or priority-block a
-                        # desired excluded-category effect — keeping them out
-                        # of `top` stops invalid layouts from inflating the
-                        # pruning threshold past valid optima.
-                        if validate_leaves and self.scorer.has_orphaned_excl_category_effects(
-                            [set(r.all_effects) if r is not None else set()
-                             for r, _ in current],
-                            build, desired_compat_effs,
-                        ):
-                            return
-                        seen.add(key)
-                        top.append((score, list(current)))
-                        top.sort(key=lambda x: x[0], reverse=True)
-                        if len(top) > top_n:
-                            removed_key = frozenset(
-                                r.ga_handle for r, _ in top.pop()[1] if r is not None)
-                            seen.discard(removed_key)
-                        # While top isn't full, fall back to -1 — but never
-                        # above initial_threshold: an unseeded constrained
-                        # search may have a NEGATIVE covering optimum, and a
-                        # -1 threshold would prune the path to it.
-                        min_threshold = (top[-1][0] if len(top) == top_n
-                                         else min(-1, initial_threshold))
-                return
-
-            # Try candidates first (sorted by net pre-score desc) so that
-            # high-scoring solutions are found early, establishing
-            # aggressive min_threshold for pruning.
-            remaining_max = suffix_pos[slot_idx + 1]
-            cands = candidates_per_slot[slot_idx]
-            smax = suffix_max_per_slot[slot_idx]
-            for ci in range(len(cands)):
-                if score + smax[ci] + remaining_max <= min_threshold:
-                    break  # no remaining candidate's pos bound can clear it
-                pos_bound, prof = cands[ci]
-                if prof.ga_handle in used:
-                    continue
-                if score + pos_bound + remaining_max <= min_threshold:
-                    continue  # admissible upper-bound prune
-
-                ctx_score = score_profile(prof, state, curse_max)
-                if ctx_score <= 0:
-                    # An empty slot is at least as good UNLESS this relic
-                    # provides a still-missing requirement (it can be
-                    # mandatory at a net loss), or can still raise later
-                    # relics' scores: by placing a desired excluded-category
-                    # effect (flips later competitors from -penalty to 0), or
-                    # by pre-paying a shared negative effect whose later copy
-                    # dedups to 0.
-                    if not (constrained
-                            and req_masks.get(prof.ga_handle, 0) & ~req_mask):
-                        helper = ctx_helpers.get(prof.ga_handle) if ctx_helpers else None
-                        if helper is None:
-                            continue
-                        unlocks, dedups = helper
-                        if (unlocks <= state.desired_compat_placed
-                                and dedups <= state.effect_ids):
-                            continue
-                if score + ctx_score + remaining_max <= min_threshold:
-                    continue  # actual-score prune
-
-                current[slot_idx] = (prof.relic, ctx_score)
-                used.add(prof.ga_handle)
-                delta = state.place_profile(prof)
-
-                backtrack(slot_idx + 1, current, used, score + ctx_score,
-                          (req_mask | req_masks.get(prof.ga_handle, 0))
-                          if constrained else 0)
-
-                used.discard(prof.ga_handle)
-                state.remove(delta)
-
-            # Try empty slot last (score 0 — worst case)
-            current[slot_idx] = (None, 0)
-            backtrack(slot_idx + 1, current, used, score, req_mask)
-
-        backtrack(0, [(None, 0)] * num_slots, set(), 0, req_initial_mask)
-        valid = [(s, a) for s, a in top if any(r is not None for r, _ in a)]
-        return [assignment for _, assignment in valid], truncated, nodes
-
-    def _ctx_helper_map(
-        self,
-        candidates_per_slot: list,
-        build: BuildDefinition,
-        desired_compat_effs: dict[int, set[int]] | None,
-    ) -> dict[int, tuple[frozenset[int], frozenset[int]]] | None:
-        """Per-relic reasons a ctx<=0 placement may still pay off later.
-
-        Maps ga_handle -> (unlock_compats, shared_negative_keys):
-        - unlock_compats: excluded-category compat IDs whose DESIRED effect
-          the relic carries (placing it flips later same-category
-          competitors from -penalty to 0).
-        - shared_negative_keys: canonical IDs (text_id when present) of
-          negatively-weighted no_stack/unique effects that at least one
-          other candidate also carries — a later copy dedups to 0 against
-          this one, so paying the penalty once can be globally optimal.
-
-        Relics with neither are omitted; returns None when the map is empty
-        (the common case for all-positive builds, letting the solver skip
-        the lookup entirely).
-        """
-        ds = self.data_source
-        # Binds the scorer's per-build caches so _is_inert below is valid.
-        self.scorer._ensure_build_cache(build)
-        is_inert = self.scorer._is_inert
-        dce = desired_compat_effs or {}
-        unlocks_map: dict[int, frozenset[int]] = {}
-        per_relic_neg: dict[int, set[int]] = {}
-        neg_counts: dict[int, int] = {}
-
-        seen: set[int] = set()
-        for cands in candidates_per_slot:
-            for _pos, prof in cands:
-                r = prof.relic
-                if r.ga_handle in seen:
-                    continue
-                seen.add(r.ga_handle)
-
-                if dce:
-                    unlocks: set[int] = set()
-                    for eff in r.all_effects:
-                        if is_inert(eff):
-                            continue  # mirrors VesselState.place
-                        compat = ds.get_effect_conflict_id(eff)
-                        if compat == -1 or compat not in dce:
-                            continue
-                        dset = dce[compat]
-                        if eff in dset:
-                            unlocks.add(compat)
-                            continue
-                        text_id = ds.get_effect_text_id(eff)
-                        if text_id != -1 and text_id in dset:
-                            unlocks.add(compat)
-                    if unlocks:
-                        unlocks_map[r.ga_handle] = frozenset(unlocks)
-
-                keys: set[int] = set()
-                for eff, is_curse in (
-                    [(e, False) for e in r.effects]
-                    + [(c, True) for c in r.curses]
-                ):
-                    if eff in (EMPTY_EFFECT, 0) or is_inert(eff):
-                        continue
-                    cat, weight = self.scorer._resolve_category_and_weight(eff, build)
-                    negative = (
-                        (cat is not None and cat != "excluded" and weight < 0)
-                        or (cat is None and is_curse
-                            and build.default_curse_weight < 0)
-                    )
-                    if not negative:
-                        continue
-                    if ds.get_effect_stacking_type(eff) == "stack":
-                        continue  # stacking effects never dedup
-                    text_id = ds.get_effect_text_id(eff)
-                    keys.add(text_id if text_id != -1 else eff)
-                if keys:
-                    per_relic_neg[r.ga_handle] = keys
-                    for k in keys:
-                        neg_counts[k] = neg_counts.get(k, 0) + 1
-
-        result: dict[int, tuple[frozenset[int], frozenset[int]]] = {}
-        for handle in seen:
-            unlocks = unlocks_map.get(handle, frozenset())
-            shared = frozenset(
-                k for k in per_relic_neg.get(handle, ())
-                if neg_counts.get(k, 0) >= 2
-            )
-            if unlocks or shared:
-                result[handle] = (unlocks, shared)
-        return result or None
 
     # ------------------------------------------------------------------
     # Pinned relic pre-assignment

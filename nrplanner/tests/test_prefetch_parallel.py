@@ -2,12 +2,12 @@
 
 Multi-build flows submit the NEXT build's vessel tasks before draining the
 current build's (submit_all_vessels + presubmitted=/collect_all_vessels).
-This spins a real ProcessPoolExecutor and pins that interleaved consumption
+This spins a real thread pool — where the vessels of one build share a single
+BuildSolveContext by reference — and pins that interleaved consumption
 produces exactly the sequential in-process results for every build.
 """
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ThreadPoolExecutor
 
-import pytest
 
 from nrplanner import SourceDataHandler
 from nrplanner.constants import EMPTY_EFFECT as EMPTY
@@ -17,10 +17,8 @@ from nrplanner.models import (
     RelicInventory,
     WeightGroup,
 )
-from nrplanner.optimizer import VesselOptimizer, init_optimizer_worker
+from nrplanner.optimizer import VesselOptimizer
 from nrplanner.scoring import BuildScorer
-
-pytestmark = pytest.mark.slow  # spawns worker processes (Windows spawn is slow)
 
 # High top_n so score ties never straddle the cutoff (arrival order between the
 # parallel and sequential paths may rank equal-score layouts differently).
@@ -77,7 +75,8 @@ def test_presubmitted_futures_match_sequential(
         build_b, inv, 1, top_n=_TOP_N, max_per_vessel=_MAX_PER_VESSEL,
         deadline_secs=_DEADLINE))
 
-    pool = ProcessPoolExecutor(max_workers=2, initializer=init_optimizer_worker)
+    pool = ThreadPoolExecutor(max_workers=2,
+                              thread_name_prefix="nr-test")
     try:
         # Prefetch pattern: submit BOTH builds up front, then drain in order.
         fut_a = opt.submit_all_vessels(

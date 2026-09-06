@@ -406,47 +406,6 @@ class VesselState:
         )
         self.limited_counts: dict[str, int] = {}
 
-    def place_profile(self, profile) -> PlacementDelta:
-        """place() over a compiled RelicProfile — identical state transitions
-        with zero data-source lookups (see BuildScorer.compile_profile).
-
-        Runs on the profile's pre-unioned placement sets: each collection needs
-        one set difference (what this relic adds that isn't already present —
-        exactly the delta remove() must undo) and one union, both C-level, with
-        no per-effect Python loop and no intermediate set allocation.
-
-        Kept in lockstep with :meth:`place`; the compiled-vs-legacy
-        equivalence test pins the two together.
-        """
-        added_eff = profile.eff_set - self.effect_ids
-        added_excl = profile.excl_set - self.exclusivity_ids
-        added_ns_excl = profile.ns_excl_set - self.no_stack_exclusivity_ids
-        added_ns_compat = profile.ns_compat_set - self.no_stack_compat_ids
-        added_dcp = profile.dcp_set - self.desired_compat_placed
-
-        limited_increments = profile.limit_keys
-
-        # Apply mutations
-        self.effect_ids |= added_eff
-        self.exclusivity_ids |= added_excl
-        self.no_stack_exclusivity_ids |= added_ns_excl
-        self.no_stack_compat_ids |= added_ns_compat
-        self.desired_compat_placed |= added_dcp
-        for cid in profile.curse_ids:
-            self.curse_counts[cid] = self.curse_counts.get(cid, 0) + 1
-        for name in limited_increments:
-            self.limited_counts[name] = self.limited_counts.get(name, 0) + 1
-
-        return PlacementDelta(
-            effect_ids=added_eff,
-            exclusivity_ids=added_excl,
-            no_stack_exclusivity_ids=added_ns_excl,
-            no_stack_compat_ids=added_ns_compat,
-            desired_compat_placed=added_dcp,
-            curse_ids=profile.curse_ids,
-            limited_name_increments=limited_increments,
-        )
-
     def place(self, relic: OwnedRelic) -> PlacementDelta:
         """Compute and apply state changes for placing a relic. Returns delta for undo.
 

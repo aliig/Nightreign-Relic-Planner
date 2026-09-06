@@ -35,10 +35,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/nrplanner_core
       - name: Sync workspace
-        run: uv sync --all-groups
+        # Builds the nrplanner_core extension; the solver is not optional.
+        run: uv sync --all-groups --all-packages
+      - name: Rust solver tests
+        run: cargo test --manifest-path crates/nrplanner_core/Cargo.toml
       - name: nrplanner tests
         # Tests needing the real save fixture skip themselves when absent.
+        # A missing nrplanner_core is not skippable: it is an import error.
         run: uv run pytest nrplanner/tests -q
       - name: Backend migrations
         working-directory: backend
