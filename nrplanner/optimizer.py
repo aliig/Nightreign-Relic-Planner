@@ -11,6 +11,7 @@ from nrplanner.models import (
     BuildDefinition, OwnedRelic, RelicInventory,
     SlotAssignment, VesselResult, VesselState,
 )
+from nrplanner import solver_bridge
 from nrplanner.scoring import BuildScorer, score_profile
 
 log = logging.getLogger(__name__)
@@ -39,6 +40,13 @@ DEFAULT_BACKTRACK_DEADLINE_SECS = 10.0
 #     excluded-stacking-category suppression (e.g. a Seppuku relic is fair game
 #     on Raider, who starts with a colossal weapon).
 OPTIMIZER_VERSION = 5
+
+# Engine name -> VesselOptimizer method implementing the free-slot solver seam.
+# Both entries share one signature; see _solve_free_slots_python.
+_SOLVER_METHODS = {
+    "python": "_solve_free_slots_python",
+    "rust": "_solve_free_slots_rust",
+}
 
 # ---------------------------------------------------------------------------
 # Worker-process globals (set once per worker by init_optimizer_worker)
@@ -85,6 +93,10 @@ class VesselOptimizer:
     def __init__(self, data_source: SourceDataHandler, scorer: BuildScorer):
         self.data_source = data_source
         self.scorer = scorer
+        # Filled in by optimize() — engine/nodes/truncated/solve_ms/candidates
+        # of the most recent free-slot solve.  Diagnostics only (the parity
+        # test and scripts/bench_solver.py read it); nothing in the app does.
+        self.last_solve_stats: dict = {}
 
     @staticmethod
     def _placed_effects_per_slot(result: VesselResult) -> list[set[int]]:
@@ -113,6 +125,7 @@ class VesselOptimizer:
     def optimize(self, build: BuildDefinition, inventory: RelicInventory,
                  vessel_data: dict, top_n: int = 3,
                  deadline_secs: float = DEFAULT_BACKTRACK_DEADLINE_SECS,
+                 engine: str | None = None,
                  ) -> list[VesselResult]:
         """Best relic assignments for one vessel. Returns up to top_n results.
 
@@ -127,9 +140,7 @@ class VesselOptimizer:
 
         slot_colors = vessel_data["Colors"]
         num_slots = 6 if build.include_deep else 3
-        search_truncated = False
         t_start = time.perf_counter()
-        nodes_expanded = 0
 
         # Precompute conflict penalty weights once per optimization call.
         desired_cw = self.scorer.get_desired_conflict_weights(build)
@@ -142,6 +153,12 @@ class VesselOptimizer:
         pinned_map, slot_owner = self._pre_assign_pinned(
             build, inventory, slot_colors, num_slots)
         if pinned_map is None:
+            # No solve ran, so the previous vessel's stats must not stand.
+            self.last_solve_stats = {
+                "engine": solver_bridge.resolve_engine(engine), "nodes": 0,
+                "truncated": False, "solve_ms": 0.0, "candidates": [],
+                "skipped": True,
+            }
             return []  # vessel incompatible with pinned relics — exclude
 
         pinned_handles: set[int] = set(pinned_map.keys())
@@ -153,11 +170,108 @@ class VesselOptimizer:
         # pinned relics count toward coverage via pinned_mask.
         req_specs = self._requirement_specs(build)
         full_mask = (1 << len(req_specs)) - 1
-        req_masks: dict[int, int] = {}
         pinned_mask = 0
         if req_specs:
             for relic in pinned_map.values():
                 pinned_mask |= self._relic_req_mask(relic, req_specs)
+
+        num_free = len(free_slot_indices)
+        engine_name = solver_bridge.resolve_engine(engine)
+        solve = getattr(self, _SOLVER_METHODS[engine_name])
+        t_solve = time.perf_counter()
+        raw_free, search_truncated, nodes_expanded, cand_counts = solve(
+            build, inventory, slot_colors, free_slot_indices,
+            pinned_handles, excluded_handles, req_specs, pinned_mask,
+            full_mask, top_n, deadline_secs, desired_cw, desired_compat_effs,
+            effect_limit_by_name, family_limit_map)
+        self.last_solve_stats = {
+            "engine": engine_name,
+            "nodes": nodes_expanded,
+            "truncated": search_truncated,
+            "solve_ms": (time.perf_counter() - t_solve) * 1000.0,
+            "candidates": cand_counts,
+        }
+
+
+        # When solvers find no useful free-slot relics, still produce one
+        # result so pinned relics (if any) are represented.
+        if not raw_free:
+            raw_free = [[(None, 0)] * num_free]
+
+        # Merge free-slot results back into full num_slots assignments
+        raw: list[list] = []
+        for free_assignment in raw_free:
+            full: list = [(None, 0)] * num_slots
+            for j, i in enumerate(free_slot_indices):
+                full[i] = free_assignment[j]
+            for i in range(num_slots):
+                if slot_owner[i] is not None:
+                    full[i] = (pinned_map[slot_owner[i]], 0)
+            raw.append(full)
+
+        # Drop results where no relic was assigned at all
+        raw = [r for r in raw if any(relic is not None for relic, _ in r)]
+
+        results = [
+            self._build_vessel_result(
+                assignment, num_slots, slot_colors, vessel_data, build, desired_cw,
+                desired_compat_effs, effect_limit_by_name, family_limit_map,
+                search_truncated=search_truncated)
+            for assignment in raw
+        ]
+
+        # Post-hoc filter: drop results where the desired effect of an
+        # excluded stacking category is missing OR is overridden by an
+        # undesired competitor placed to its left (in-game, the leftmost
+        # effect in a no_stack compat wins).
+        if desired_compat_effs:
+            results = [
+                r for r in results
+                if not self.scorer.has_orphaned_excl_category_effects(
+                    self._placed_effects_per_slot(r), build, desired_compat_effs)
+            ]
+
+        if log.isEnabledFor(logging.DEBUG):
+            log.debug(
+                "vessel=%r slots=%d candidates=%s nodes=%d truncated=%s elapsed_ms=%.1f",
+                vessel_data.get("Name"), num_slots,
+                cand_counts,
+                nodes_expanded, search_truncated,
+                (time.perf_counter() - t_start) * 1000.0,
+            )
+        return results
+
+    def _solve_free_slots_python(
+        self,
+        build: BuildDefinition,
+        inventory: RelicInventory,
+        slot_colors: tuple,
+        free_slot_indices: list[int],
+        pinned_handles: set[int],
+        excluded_handles: set[int],
+        req_specs: list[tuple[frozenset[int], str | None]],
+        pinned_mask: int,
+        full_mask: int,
+        top_n: int,
+        deadline_secs: float,
+        desired_cw: dict[int, int] | None,
+        desired_compat_effs: dict[int, set[int]] | None,
+        effect_limit_by_name: dict[str, int] | None,
+        family_limit_map: dict[str, int] | None,
+    ) -> tuple[list[list], bool, int, list[int]]:
+        """Candidate build + greedy + backtrack + merge for the free slots.
+
+        The solver seam: everything between "which relics may go in each free
+        slot" and "turn raw assignments into VesselResults".  Returns
+        ``(raw_free, search_truncated, nodes_expanded, candidate_counts)``
+        where ``raw_free`` is a list of per-free-slot ``(relic|None, score)``
+        assignments.
+        """
+        search_truncated = False
+        nodes_expanded = 0
+        # ga_handle -> bitmask of requirement specs the relic satisfies,
+        # filled lazily as candidates are walked.
+        req_masks: dict[int, int] = {}
 
         candidates_per_free_slot = []
         for i in free_slot_indices:
@@ -306,53 +420,8 @@ class VesselOptimizer:
                 if covering:
                     raw_free = covering
 
-        # When solvers find no useful free-slot relics, still produce one
-        # result so pinned relics (if any) are represented.
-        if not raw_free:
-            raw_free = [[(None, 0)] * num_free]
-
-        # Merge free-slot results back into full num_slots assignments
-        raw: list[list] = []
-        for free_assignment in raw_free:
-            full: list = [(None, 0)] * num_slots
-            for j, i in enumerate(free_slot_indices):
-                full[i] = free_assignment[j]
-            for i in range(num_slots):
-                if slot_owner[i] is not None:
-                    full[i] = (pinned_map[slot_owner[i]], 0)
-            raw.append(full)
-
-        # Drop results where no relic was assigned at all
-        raw = [r for r in raw if any(relic is not None for relic, _ in r)]
-
-        results = [
-            self._build_vessel_result(
-                assignment, num_slots, slot_colors, vessel_data, build, desired_cw,
-                desired_compat_effs, effect_limit_by_name, family_limit_map,
-                search_truncated=search_truncated)
-            for assignment in raw
-        ]
-
-        # Post-hoc filter: drop results where the desired effect of an
-        # excluded stacking category is missing OR is overridden by an
-        # undesired competitor placed to its left (in-game, the leftmost
-        # effect in a no_stack compat wins).
-        if desired_compat_effs:
-            results = [
-                r for r in results
-                if not self.scorer.has_orphaned_excl_category_effects(
-                    self._placed_effects_per_slot(r), build, desired_compat_effs)
-            ]
-
-        if log.isEnabledFor(logging.DEBUG):
-            log.debug(
-                "vessel=%r slots=%d candidates=%s nodes=%d truncated=%s elapsed_ms=%.1f",
-                vessel_data.get("Name"), num_slots,
-                [len(c) for c in candidates_per_free_slot],
-                nodes_expanded, search_truncated,
-                (time.perf_counter() - t_start) * 1000.0,
-            )
-        return results
+        return (raw_free, search_truncated, nodes_expanded,
+                [len(c) for c in candidates_per_free_slot])
 
     # ------------------------------------------------------------------
     # Requirement hard-constraint helpers
