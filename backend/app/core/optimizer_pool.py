@@ -1,13 +1,22 @@
-"""ProcessPoolExecutor lifecycle for vessel optimization."""
+"""Thread-pool lifecycle for vessel optimization.
+
+Threads, not processes: the Rust solver releases the GIL for the whole search,
+so the vessels of one build run genuinely in parallel while sharing one
+compiled inventory by reference.  The process pool this replaced had to pickle
+the entire relic inventory into every vessel task and recompile each relic
+profile in the worker, which dominated the wall clock once the solver itself
+got fast.
+"""
 
 import os
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ThreadPoolExecutor
 
-from nrplanner.optimizer import init_optimizer_worker
+from nrplanner.optimizer import warm_data_source
 
 from app.core.config import settings
+from app.core.game_data import get_game_data
 
-_pool: ProcessPoolExecutor | None = None
+_pool: ThreadPoolExecutor | None = None
 _width: int = 0
 
 
@@ -38,13 +47,16 @@ def init_optimizer_pool(max_workers: int | None = None) -> None:
     if max_workers is None:
         max_workers = resolve_max_workers()
     _width = max_workers
-    _pool = ProcessPoolExecutor(
+    # The data source's lazy caches are built non-atomically, so they must be
+    # warmed while only this thread is running — before any task can race.
+    warm_data_source(get_game_data())
+    _pool = ThreadPoolExecutor(
         max_workers=max_workers,
-        initializer=init_optimizer_worker,
+        thread_name_prefix="nr-solve",
     )
 
 
-def get_optimizer_pool() -> ProcessPoolExecutor | None:
+def get_optimizer_pool() -> ThreadPoolExecutor | None:
     return _pool
 
 

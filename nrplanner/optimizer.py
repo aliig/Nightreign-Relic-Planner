@@ -3,7 +3,10 @@ from __future__ import annotations
 
 import logging
 import time
-from concurrent.futures import Future, ProcessPoolExecutor, as_completed
+from concurrent.futures import (
+    Executor, Future, ProcessPoolExecutor, as_completed,
+)
+from dataclasses import dataclass
 
 from nrplanner.constants import EMPTY_EFFECT
 from nrplanner.data import SourceDataHandler
@@ -60,10 +63,7 @@ def init_optimizer_worker() -> None:
     global _worker_ds, _worker_scorer
     _worker_ds = SourceDataHandler(language="en_US")
     _worker_scorer = BuildScorer(_worker_ds)
-    # Warm up lazy caches so the first task doesn't pay init cost
-    _ = _worker_ds._reachable_effect_ids  # noqa: F841  # cached_property
-    _worker_ds.get_effect_stacking_type(0)  # loads _stacking_cache
-    _worker_ds.get_effect_family(0)  # loads _effect_families
+    warm_data_source(_worker_ds)
 
 
 def _optimize_vessel_task(
@@ -80,6 +80,76 @@ def _optimize_vessel_task(
     optimizer = VesselOptimizer(_worker_ds, _worker_scorer)
     results = optimizer.optimize(
         build, inventory, vessel_data, max_per_vessel, deadline_secs=deadline_secs)
+    vessel_id = vessel_data.get("_id", 0)
+    for r in results:
+        r.vessel_id = vessel_id
+    solve_ms = (time.perf_counter() - t0) * 1000.0
+    return (vessel_id, vessel_data["Name"], results, solve_ms)
+
+
+@dataclass(slots=True)
+class BuildSolveContext:
+    """Everything the vessels of ONE build share, prepared once up front.
+
+    The process pool pickled the whole inventory into every vessel task
+    (10-12x per build), rebuilt a RelicInventory in the worker and recompiled
+    every relic profile from scratch.  With the solver in Rust that overhead
+    dominates, so vessels now run on threads and share this context by
+    reference instead.
+
+    Every lazily-built cache the vessels read — the scorer's per-build memos
+    and the compiled Rust inventory — is warmed here, on the submitting
+    thread, so the worker threads only ever read.  The scorer is per context,
+    so concurrent builds never share one.
+    """
+    build: BuildDefinition
+    inventory: RelicInventory
+    optimizer: "VesselOptimizer"
+
+
+def warm_data_source(ds: SourceDataHandler) -> None:
+    """Force the data source's lazy caches before any task can race on them.
+
+    ``SourceDataHandler``'s caches are built non-atomically, so they must be
+    populated while only one thread is running — at pool init, exactly as the
+    process pool's worker initializer did per worker.
+    """
+    _ = ds._reachable_effect_ids  # noqa: F841  # cached_property
+    ds.get_effect_stacking_type(0)  # loads _stacking_cache
+    ds.get_effect_family(0)  # loads _effect_families
+
+
+def make_solve_context(data_source: SourceDataHandler,
+                       build: BuildDefinition,
+                       inventory: RelicInventory) -> BuildSolveContext:
+    """Prepare one build's shared solve context (see BuildSolveContext)."""
+    scorer = BuildScorer(data_source)
+    optimizer = VesselOptimizer(data_source, scorer)
+    scorer.bind_inventory(inventory)
+    scorer._ensure_build_cache(build)
+    scorer.get_desired_conflict_weights(build)
+    scorer.get_desired_compat_effects(build)
+    elbn, flm = optimizer._prepare_limits(build)
+    req_specs = optimizer._requirement_specs(build)
+    if solver_bridge.resolve_engine(None) == "rust":
+        # Compile the inventory once per build instead of once per vessel task.
+        solver_bridge.get_bundle(
+            optimizer, build, inventory, elbn, flm, req_specs)
+    return BuildSolveContext(
+        build=build, inventory=inventory, optimizer=optimizer)
+
+
+def _optimize_vessel_task_ctx(
+    ctx: BuildSolveContext,
+    vessel_data: dict,
+    max_per_vessel: int,
+    deadline_secs: float = DEFAULT_BACKTRACK_DEADLINE_SECS,
+) -> tuple[int, str, list[VesselResult], float]:
+    """One vessel, sharing its build's context by reference (thread pool)."""
+    t0 = time.perf_counter()
+    results = ctx.optimizer.optimize(
+        ctx.build, ctx.inventory, vessel_data, max_per_vessel,
+        deadline_secs=deadline_secs)
     vessel_id = vessel_data.get("_id", 0)
     for r in results:
         r.vessel_id = vessel_id
@@ -608,7 +678,7 @@ class VesselOptimizer:
         inventory: RelicInventory,
         hero_type: int,
         max_per_vessel: int = 3,
-        executor: ProcessPoolExecutor | None = None,
+        executor: Executor | None = None,
         deadline_secs: float = DEFAULT_BACKTRACK_DEADLINE_SECS,
         vessel_ids: set[int] | None = None,
     ) -> dict[Future, dict]:
@@ -623,15 +693,27 @@ class VesselOptimizer:
         responsible for supplying the rest as ``carried`` results.
         """
         vessels = self._vessel_subset(hero_type, vessel_ids)
+        # Process pools cannot share a context — a BuildSolveContext holds a
+        # loaded SourceDataHandler — so they keep the pickled per-vessel task.
+        # That path exists only until the Python solver is deleted.
+        pickled = isinstance(executor, ProcessPoolExecutor)
+        ctx = None if pickled else make_solve_context(
+            self.data_source, build, inventory)
         relics = inventory.relics
         futures: dict[Future, dict] = {}
         for v in vessels:
             vd = dict(v)
             vd["_id"] = v["vessel_id"]
-            fut = executor.submit(
-                _optimize_vessel_task, build, relics, vd, max_per_vessel,
-                deadline_secs,
-            )
+            if pickled:
+                fut = executor.submit(
+                    _optimize_vessel_task, build, relics, vd, max_per_vessel,
+                    deadline_secs,
+                )
+            else:
+                fut = executor.submit(
+                    _optimize_vessel_task_ctx, ctx, vd, max_per_vessel,
+                    deadline_secs,
+                )
             futures[fut] = v
         return futures
 
@@ -684,7 +766,7 @@ class VesselOptimizer:
         hero_type: int,
         top_n: int = 10,
         max_per_vessel: int = 3,
-        executor: ProcessPoolExecutor | None = None,
+        executor: Executor | None = None,
         deadline_secs: float = DEFAULT_BACKTRACK_DEADLINE_SECS,
         presubmitted: dict[Future, dict] | None = None,
         vessel_ids: set[int] | None = None,
@@ -696,8 +778,8 @@ class VesselOptimizer:
             {"type": "progress", "vessel": i, "total": n, "name": vessel_name}
             {"type": "result", "data": list[VesselResult]}   (final event)
 
-        When *executor* is provided, vessels are optimized in parallel across
-        worker processes.  Progress events arrive as each vessel completes
+        When *executor* is provided, vessels are optimized in parallel on
+        the pool.  Progress events arrive as each vessel completes
         (non-deterministic order).  ``presubmitted`` (from
         ``submit_all_vessels``, requires *executor*) consumes already-submitted
         futures instead of submitting fresh ones — multi-build flows use it
@@ -746,7 +828,7 @@ class VesselOptimizer:
     def optimize_all_vessels(self, build: BuildDefinition, inventory: RelicInventory,
                              hero_type: int, top_n: int = 10,
                              max_per_vessel: int = 3,
-                             executor: ProcessPoolExecutor | None = None,
+                             executor: Executor | None = None,
                              deadline_secs: float = DEFAULT_BACKTRACK_DEADLINE_SECS,
                              ) -> list[VesselResult]:
         """Optimize all vessels for a hero. Returns top_n globally ranked results.
@@ -754,8 +836,8 @@ class VesselOptimizer:
         Results that meet requirements come before those that don't, then sorted
         by score descending.
 
-        When *executor* is provided, vessels are optimized in parallel across
-        worker processes.
+        When *executor* is provided, vessels are optimized in parallel on
+        the pool.
         """
         if executor is not None:
             futures = self.submit_all_vessels(

@@ -2,10 +2,13 @@
 
 Multi-build flows submit the NEXT build's vessel tasks before draining the
 current build's (submit_all_vessels + presubmitted=/collect_all_vessels).
-This spins a real ProcessPoolExecutor and pins that interleaved consumption
-produces exactly the sequential in-process results for every build.
+This spins a real pool and pins that interleaved consumption produces exactly
+the sequential in-process results for every build.  Both pool kinds are
+covered: the thread pool the app uses (vessels share one BuildSolveContext by
+reference) and the process pool it replaced (each task pickles its own copy),
+which stays until the Python solver is deleted.
 """
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 
 import pytest
 
@@ -42,8 +45,16 @@ def _relic(handle: int, effects: list[int], color: str) -> OwnedRelic:
     )
 
 
+def _make_pool(kind: str):
+    if kind == "process":
+        return ProcessPoolExecutor(max_workers=2,
+                                   initializer=init_optimizer_worker)
+    return ThreadPoolExecutor(max_workers=2, thread_name_prefix="nr-test")
+
+
+@pytest.mark.parametrize("pool_kind", ["thread", "process"])
 def test_presubmitted_futures_match_sequential(
-    ds: SourceDataHandler, all_effects
+    ds: SourceDataHandler, all_effects, pool_kind: str
 ) -> None:
     wylder_ok = [
         e["id"] for e in all_effects
@@ -77,7 +88,7 @@ def test_presubmitted_futures_match_sequential(
         build_b, inv, 1, top_n=_TOP_N, max_per_vessel=_MAX_PER_VESSEL,
         deadline_secs=_DEADLINE))
 
-    pool = ProcessPoolExecutor(max_workers=2, initializer=init_optimizer_worker)
+    pool = _make_pool(pool_kind)
     try:
         # Prefetch pattern: submit BOTH builds up front, then drain in order.
         fut_a = opt.submit_all_vessels(
