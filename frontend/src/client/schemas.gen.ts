@@ -1535,6 +1535,11 @@ export const LoadoutRankSchema = {
             type: 'integer',
             title: 'Total'
         },
+        tied: {
+            type: 'integer',
+            title: 'Tied',
+            default: 1
+        },
         loadout_index: {
             type: 'integer',
             title: 'Loadout Index'

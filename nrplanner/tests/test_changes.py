@@ -20,6 +20,7 @@ from nrplanner.changes import (
     relics_signature,
     result_match_key,
     serialize_match_keys,
+    serialize_match_ranks,
     serialize_top_layouts,
 )
 from nrplanner.models import (
@@ -433,6 +434,34 @@ class TestMatchKeys:
         low, high = _vessel([_relic(1, [10])], 10), _vessel([_relic(2, [20])], 90)
         keys = serialize_match_keys([low, high])
         assert keys == [result_match_key(low), result_match_key(high)]
+
+    def test_ranks_share_a_position_across_a_score_tie(self):
+        # The bug this exists for: three equally scoring results sit at list
+        # positions 1/2/3 in whatever order the search produced them, so saving
+        # the third was reported as "#3" — a joint-best pick shown as beaten.
+        tied = [_vessel([_relic(i, [10])], 50, vessel_id=i) for i in (1, 2, 3)]
+        worse = _vessel([_relic(4, [10])], 10, vessel_id=4)
+        assert serialize_match_ranks([*tied, worse]) == [1, 1, 1, 4]
+
+    def test_ranks_follow_distinct_scores(self):
+        high, mid, low = (
+            _vessel([_relic(i, [10])], score, vessel_id=i)
+            for i, score in ((1, 90), (2, 50), (3, 10))
+        )
+        assert serialize_match_ranks([high, mid, low]) == [1, 2, 3]
+
+    def test_covering_outranks_a_higher_scoring_miss(self):
+        # Same tiering the optimizer sorts by: a result that misses a Required
+        # entry never ties with one that covers it, whatever it scores.
+        covering = _vessel([_relic(1, [10])], 10)
+        missing = _vessel([_relic(2, [20])], 90, vessel_id=2)
+        missing.meets_requirements = False
+        assert serialize_match_ranks([covering, missing]) == [1, 2]
+
+    def test_ranks_line_up_with_the_keys_they_annotate(self):
+        results = [_vessel([_relic(i, [10])], 50, vessel_id=i) for i in (1, 2)]
+        assert len(serialize_match_ranks(results)) == len(
+            serialize_match_keys(results))
 
     def test_key_matches_a_loadout_built_from_handles(self):
         # The shape the endpoint uses: relic fingerprints resolved from a

@@ -552,6 +552,17 @@ class OptimizationSnapshot(SQLModel, table=True):
         default_factory=list,
         sa_column=Column(JSON, nullable=False, server_default="[]"),
     )
+    # Competition rank per entry of top_match_keys, SAME order: ties share a
+    # rank, so three equally-scoring results all read 1 and the next reads 4.
+    # List position alone is not a rank (the optimizer breaks score ties
+    # arbitrarily), and a saved loadout shown as "#3" when nothing outranks it
+    # reads as a worse pick than it is.  Empty for rows written before the
+    # column existed and for rows the backfill could not derive -> the route
+    # falls back to positional rank.
+    top_match_ranks: list = Field(
+        default_factory=list,
+        sa_column=Column(JSON, nullable=False, server_default="[]"),
+    )
     best_score: int = 0
     any_truncated: bool = False
     last_change: dict | None = Field(

@@ -223,14 +223,24 @@ interface BuildCardData {
  */
 function SavedLoadoutBadge({ rank }: { rank: LoadoutRank }) {
   const label = rank.loadout_name || "(unnamed)"
+  // Ranks are tie-aware server-side: several equally scoring arrangements all
+  // carry the same rank, so the saved one is never shown as beaten by its own
+  // equals. Say the tie out loud rather than silently claiming a clean #1 —
+  // the other arrangements are just as good, and the user may prefer one.
+  const tied = (rank.tied ?? 1) > 1
   return (
     <span
       className="mt-1.5 inline-flex max-w-full items-center gap-1 text-[11px] font-medium text-muted-foreground"
-      title={`Your in-game loadout "${label}" is suggestion #${rank.rank} of ${rank.total} for this build.`}
+      title={
+        tied
+          ? `Your in-game loadout "${label}" ties for suggestion #${rank.rank} of ${rank.total} for this build (${rank.tied} results score the same).`
+          : `Your in-game loadout "${label}" is suggestion #${rank.rank} of ${rank.total} for this build.`
+      }
     >
       <BookMarked className="h-3 w-3 shrink-0" />
       <span className="truncate">
         Saved: {label} · #{rank.rank} of {rank.total}
+        {tied ? " (tied)" : ""}
       </span>
     </span>
   )

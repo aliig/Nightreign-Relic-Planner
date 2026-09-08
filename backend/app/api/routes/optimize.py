@@ -46,6 +46,7 @@ from nrplanner.changes import (
     relic_fingerprint,
     relics_signature,
     serialize_match_keys,
+    serialize_match_ranks,
     serialize_top_layouts,
     vessel_accepts,
 )
@@ -385,6 +386,10 @@ def _apply_snapshot(
     # Result identities in DISPLAY order -- lets the builds page recognise an
     # in-game loadout as "result #N" without loading full_results.
     top_match_keys = serialize_match_keys(results)
+    # Tie-aware rank per key: equally-scoring results share one rank, so a
+    # saved loadout is never reported as beaten by a result it merely sits
+    # behind in the list.
+    top_match_ranks = serialize_match_ranks(results)
     # cumulative_effects is a serve-time presentation field (recomputed on every
     # response, incl. POST /snapshot/query) — never persist it in the snapshot.
     full_results = [r.model_dump(mode="json", exclude={"cumulative_effects"}) for r in results]
@@ -419,6 +424,7 @@ def _apply_snapshot(
             max_per_vessel=max_per_vessel,
             top_layouts=top_layouts,
             top_match_keys=top_match_keys,
+            top_match_ranks=top_match_ranks,
             full_results=full_results,
             best_score=best_score,
             any_truncated=any_truncated,
@@ -444,6 +450,7 @@ def _apply_snapshot(
         snap.max_per_vessel = max_per_vessel
         snap.top_layouts = top_layouts
         snap.top_match_keys = top_match_keys
+        snap.top_match_ranks = top_match_ranks
         snap.full_results = full_results
         snap.best_score = best_score
         snap.any_truncated = any_truncated
@@ -1324,11 +1331,16 @@ class LoadoutRankRequest(BaseModel):
 class LoadoutRank(BaseModel):
     """A build whose in-game loadout reproduces one of its optimizer results."""
     build_id: str
-    # 1-based position among the build's cached results, in the order the
-    # optimize page lists them: 1 = the top suggestion.
+    # 1-based COMPETITION rank among the build's cached results: 1 = as good as
+    # the top suggestion.  Ties share a rank, so the third of three equally
+    # scoring results is rank 1, not rank 3 (see serialize_match_ranks).
     rank: int
     # How many results that snapshot holds (the "of 10" in "#3 of 10").
     total: int
+    # How many results share this rank, this one included.  1 = a clean rank;
+    # >1 means the optimizer has that many equally good arrangements and the
+    # saved one is among them, which the badge says out loud.
+    tied: int = 1
     loadout_index: int
     loadout_name: str
 
@@ -1343,8 +1355,11 @@ def list_loadout_ranks(
     """Tell each build which of its optimizer results is already saved in-game.
 
     Answers, per build, "is what I actually have equipped still the optimizer's
-    pick?" — rank 1 means the saved loadout IS the top suggestion, rank 3 means
-    the optimizer has since found two better arrangements.
+    pick?" — rank 1 means the saved loadout is AS GOOD AS the top suggestion,
+    rank 3 means the optimizer has since found two strictly better arrangements.
+    Ranks are tie-aware (``tied`` says how many results share this one), so a
+    loadout the user picked out of several equally scoring suggestions is never
+    reported as beaten by its own equals.
 
     Identity is content-based (vessel + relic multiset), the same relation the
     optimize page's "Saved" badge uses, so a preset holding the same relics in
@@ -1353,8 +1368,9 @@ def list_loadout_ranks(
     the honest answer for "never saved this build" and "fell out of the top N"
     alike, and neither deserves a badge.
 
-    Reads only ``top_match_keys`` from each snapshot — never the heavy
-    full_results blob — so this stays cheap enough for a list page.
+    Reads only ``top_match_keys``/``top_match_ranks`` from each snapshot —
+    never the heavy full_results blob — so this stays cheap enough for a list
+    page.
     """
     profile = session.get(Profile, req.profile_id)
     if not profile or profile.owner_id != current_user.id:
@@ -1395,13 +1411,16 @@ def list_loadout_ranks(
     ).all()
     snaps = session.exec(
         select(
-            OptimizationSnapshot.build_id, OptimizationSnapshot.top_match_keys
+            OptimizationSnapshot.build_id,
+            OptimizationSnapshot.top_match_keys,
+            OptimizationSnapshot.top_match_ranks,
         ).where(
             OptimizationSnapshot.owner_id == current_user.id,
             OptimizationSnapshot.slot_index == profile.slot_index,
         )
     ).all()
-    keys_by_build = {str(build_id): keys or [] for build_id, keys in snaps}
+    keys_by_build = {str(build_id): keys or [] for build_id, keys, _ in snaps}
+    ranks_by_build = {str(build_id): ranks or [] for build_id, _, ranks in snaps}
 
     out: list[LoadoutRank] = []
     for build_id, character in builds:
@@ -1411,11 +1430,17 @@ def list_loadout_ranks(
         candidates = by_character.get(character)
         if not candidates:
             continue
+        # Ranks written alongside the keys; rows predating that column (and any
+        # the backfill could not derive) fall back to list position, which is
+        # what this endpoint reported before ties were understood.
+        ranks = ranks_by_build.get(str(build_id)) or []
+        if len(ranks) != len(keys):
+            ranks = list(range(1, len(keys) + 1))
         best: tuple[int, int, str] | None = None
         for key, lo_index, lo_name in candidates:
             if key not in keys:
                 continue
-            rank = keys.index(key) + 1
+            rank = ranks[keys.index(key)]
             if best is None or rank < best[0]:
                 best = (rank, lo_index, lo_name)
         if best is None:
@@ -1424,6 +1449,7 @@ def list_loadout_ranks(
             build_id=str(build_id),
             rank=best[0],
             total=len(keys),
+            tied=sum(1 for r in ranks if r == best[0]),
             loadout_index=best[1],
             loadout_name=best[2],
         ))

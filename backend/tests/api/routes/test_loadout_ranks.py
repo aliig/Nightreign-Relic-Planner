@@ -102,6 +102,56 @@ def _setup_identity(result: dict) -> tuple:
     ))
 
 
+def _graded_owned_relics() -> list[OwnedRelic]:
+    """Relics carrying DIFFERENT weighted effects, so results differ in score.
+
+    _distinct_owned_relics() gives every relic the same effect, so every layout
+    holding the same number of relics scores the same -- fine for identity
+    tests, useless for ranking ones, since equally scoring results now share a
+    rank.  Here the two effects are weighted differently by
+    ``_graded_build()``, so dropping one relic for the other is a real loss and
+    some result genuinely ranks below the top.
+    """
+    return [
+        OwnedRelic(
+            ga_handle=0xC0020000 + i,
+            item_id=real_id + 2147483648,
+            real_id=real_id,
+            color="Red",
+            effects=[effect, EMPTY, EMPTY],
+            curses=[EMPTY, EMPTY, EMPTY],
+            is_deep=False,
+            name=f"Graded Relic {i}",
+            tier="Delicate",
+        )
+        for i, (real_id, effect) in enumerate(((100, 100), (101, 101)))
+    ]
+
+
+def _graded_build(client: TestClient, headers: dict) -> dict:
+    """A build that scores _graded_owned_relics()' two effects unequally."""
+    return create_build(
+        client, headers,
+        groups=[
+            {"weight": 10, "effects": [100], "families": []},
+            {"weight": 1, "effects": [101], "families": []},
+        ],
+    )
+
+
+def _strictly_worse(results: list[dict]) -> dict | None:
+    """The first result the top one actually beats, or None.
+
+    List position is not a rank: the optimizer breaks score ties arbitrarily,
+    so a result sitting at position 2 may be exactly as good as position 1 and
+    is ranked 1 alongside it.  Only a result with a STRICTLY lower score is
+    guaranteed to rank below the top one, which is what a "the optimizer has
+    moved on" assertion needs.
+    """
+    top = results[0]["total_score"]
+    return next((r for r in results if r["total_score"] < top), None)
+
+
 def _preset_from_result(result: dict, character: str, *, name: str, index: int = 0):
     """A loadout preset holding exactly the relics of an optimizer result."""
     return {
@@ -139,12 +189,42 @@ class TestLoadoutRanks:
         assert rows[0]["total"] == len(results)
         assert rows[0]["loadout_name"] == "Best"
 
-    def test_lower_ranked_result_reports_its_position(
+    def test_beaten_result_reports_a_rank_below_the_top(
         self, client: TestClient, normal_user_token_headers: dict[str, str],
         db: Session,
     ) -> None:
         """The whole point of the badge: the optimizer has moved on, and the
-        saved setup is now the Nth suggestion rather than the first."""
+        saved setup is now beaten by something strictly better."""
+        user = get_test_user(db)
+        profile = seed_profile_with_relics(
+            db, user.id, with_hash=True, owned=_graded_owned_relics()
+        )
+        profile_id = str(profile.id)
+        build = _graded_build(client, normal_user_token_headers)
+        results = _optimize(
+            client, normal_user_token_headers, build["id"], profile_id
+        )
+        beaten = _strictly_worse(results)
+        if beaten is None:
+            pytest.skip("needs a strictly worse result to rank below the top")
+        # Competition rank: one past however many results actually outscore it.
+        expected = 1 + sum(
+            1 for r in results if r["total_score"] > beaten["total_score"]
+        )
+
+        preset = _preset_from_result(beaten, build["character"], name="Stale")
+        rows = _ranks(client, normal_user_token_headers, profile_id, [preset])
+        assert len(rows) == 1
+        assert rows[0]["rank"] == expected > 1
+
+    def test_tied_result_ranks_with_the_top_not_behind_it(
+        self, client: TestClient, normal_user_token_headers: dict[str, str],
+        db: Session,
+    ) -> None:
+        """The bug this endpoint had: saving the third of three equally scoring
+        suggestions reported "#3 of 10", reading as a worse pick when nothing
+        outranks it.  Equal score = equal rank, and ``tied`` says how many
+        results share it so the badge can name the tie."""
         user = get_test_user(db)
         profile = seed_profile_with_relics(
             db, user.id, with_hash=True, owned=_distinct_owned_relics()
@@ -154,17 +234,22 @@ class TestLoadoutRanks:
         results = _optimize(
             client, normal_user_token_headers, build["id"], profile_id
         )
-        if len(results) < 2:
-            pytest.skip("needs at least two distinct results to rank")
-        assert _setup_identity(results[0]) != _setup_identity(results[1]), (
-            "the top two results must be different setups for #2 to mean "
-            "anything -- identical ones both report the better rank"
-        )
+        top = results[0]["total_score"]
+        tied = [
+            r for r in results[1:]
+            if r["total_score"] == top
+            and _setup_identity(r) != _setup_identity(results[0])
+        ]
+        if not tied:
+            pytest.skip("needs a distinct result tying the top score")
 
-        preset = _preset_from_result(results[1], build["character"], name="Stale")
+        preset = _preset_from_result(tied[-1], build["character"], name="Joint")
         rows = _ranks(client, normal_user_token_headers, profile_id, [preset])
         assert len(rows) == 1
-        assert rows[0]["rank"] == 2
+        assert rows[0]["rank"] == 1
+        assert rows[0]["tied"] == sum(
+            1 for r in results if r["total_score"] == top
+        ) > 1
 
     def test_slot_order_does_not_break_the_match(
         self, client: TestClient, normal_user_token_headers: dict[str, str],
@@ -232,21 +317,22 @@ class TestLoadoutRanks:
     ) -> None:
         user = get_test_user(db)
         profile = seed_profile_with_relics(
-            db, user.id, with_hash=True, owned=_distinct_owned_relics()
+            db, user.id, with_hash=True, owned=_graded_owned_relics()
         )
         profile_id = str(profile.id)
-        build = create_build(client, normal_user_token_headers)
+        build = _graded_build(client, normal_user_token_headers)
         results = _optimize(
             client, normal_user_token_headers, build["id"], profile_id
         )
-        if len(results) < 2:
-            pytest.skip("needs at least two distinct results to rank")
-        assert _setup_identity(results[0]) != _setup_identity(results[1]), (
-            "Old and New must be different setups, or both match rank 1"
-        )
+        # "Old" has to be a result the top one actually BEATS: a preset merely
+        # further down the list may be tied with the top and rank 1 too, which
+        # would make this test pass without ever comparing two ranks.
+        beaten = _strictly_worse(results)
+        if beaten is None:
+            pytest.skip("needs a strictly worse result for Old to hold")
 
         presets = [
-            _preset_from_result(results[1], build["character"], name="Old", index=0),
+            _preset_from_result(beaten, build["character"], name="Old", index=0),
             _preset_from_result(results[0], build["character"], name="New", index=1),
         ]
         rows = _ranks(client, normal_user_token_headers, profile_id, presets)
@@ -288,6 +374,43 @@ class TestLoadoutRanks:
         assert _ranks(
             client, normal_user_token_headers, profile_id, [preset]
         ) == []
+
+    def test_snapshot_without_ranks_falls_back_to_list_position(
+        self, client: TestClient, normal_user_token_headers: dict[str, str],
+        db: Session,
+    ) -> None:
+        """Snapshots written before top_match_ranks existed (and any the
+        backfill could not derive) still get a badge: the rank falls back to
+        list position, exactly what this endpoint reported before ties were
+        understood.  Silence would be a worse answer than an approximate rank
+        for a build the user already optimized."""
+        user = get_test_user(db)
+        profile = seed_profile_with_relics(
+            db, user.id, with_hash=True, owned=_graded_owned_relics()
+        )
+        profile_id = str(profile.id)
+        build = _graded_build(client, normal_user_token_headers)
+        results = _optimize(
+            client, normal_user_token_headers, build["id"], profile_id
+        )
+        beaten = _strictly_worse(results)
+        assert beaten is not None, "graded relics must produce a beaten result"
+
+        snap = db.exec(
+            select(OptimizationSnapshot).where(
+                OptimizationSnapshot.build_id == uuid.UUID(build["id"])
+            )
+        ).first()
+        assert snap is not None
+        snap.top_match_ranks = []
+        db.add(snap)
+        db.commit()
+
+        preset = _preset_from_result(beaten, build["character"], name="Legacy")
+        rows = _ranks(client, normal_user_token_headers, profile_id, [preset])
+        assert len(rows) == 1
+        assert rows[0]["rank"] == results.index(beaten) + 1
+        assert rows[0]["tied"] == 1
 
     def test_snapshot_without_match_keys_is_silent(
         self, client: TestClient, normal_user_token_headers: dict[str, str],

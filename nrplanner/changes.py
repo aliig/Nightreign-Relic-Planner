@@ -473,6 +473,25 @@ def serialize_match_keys(results: Sequence[VesselResult]) -> list[str]:
     return [result_match_key(r) for r in results]
 
 
+def serialize_match_ranks(results: Sequence[VesselResult]) -> list[int]:
+    """Rank per entry of ``serialize_match_keys``, ties SHARED (competition rank).
+
+    The optimizer orders results by ``(not meets_requirements, -total_score)``,
+    so equally good arrangements land in adjacent list positions in whatever
+    order the search happened to produce them.  A position is therefore not a
+    rank: saving the third of three identically-scoring loadouts is saving a
+    joint-best one, and telling the user it is "#3" reads as "you picked a worse
+    setup" when nothing outranks it.
+
+    A result's rank is 1 + the number of results STRICTLY better under that same
+    ordering key, so a tie group all reads #1 and the next distinct result reads
+    #4 (standard competition ranking).  Same order and length as
+    ``serialize_match_keys``.
+    """
+    order = [(not r.meets_requirements, -r.total_score) for r in results]
+    return [1 + sum(1 for other in order if other < key) for key in order]
+
+
 def _result_relic_fps(result: VesselResult) -> Counter:
     return Counter(
         fingerprint_owned(a.relic) for a in result.assignments if a.relic is not None

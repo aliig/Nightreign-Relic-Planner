@@ -366,6 +366,7 @@ export type LoadoutRank = {
     build_id: string;
     rank: number;
     total: number;
+    tied?: number;
     loadout_index: number;
     loadout_name: string;
 };

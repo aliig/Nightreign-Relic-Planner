@@ -197,6 +197,48 @@ describe("builds list — saved-loadout rank badge", () => {
     expect(screen.queryByTitle(/in-game loadout/)).not.toBeInTheDocument()
   })
 
+  it("says a tie out loud instead of implying a clean rank", () => {
+    // The optimizer breaks score ties arbitrarily, so several suggestions can
+    // be exactly as good as the one the player saved. The server ranks them
+    // together; the badge names the tie so "#1" isn't read as "the only one".
+    mockRanks = [
+      {
+        build_id: "build-1",
+        rank: 1,
+        total: 10,
+        tied: 3,
+        loadout_index: 0,
+        loadout_name: "Dregs Raider",
+      },
+    ]
+    renderPage()
+    expect(
+      screen.getByText("Saved: Dregs Raider · #1 of 10 (tied)"),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByTitle(
+        /ties for suggestion #1 of 10 .*3 results score the same/,
+      ),
+    ).toBeInTheDocument()
+  })
+
+  it("marks no tie when the rank stands alone", () => {
+    mockRanks = [
+      {
+        build_id: "build-1",
+        rank: 2,
+        total: 10,
+        tied: 1,
+        loadout_index: 0,
+        loadout_name: "Dregs Raider",
+      },
+    ]
+    renderPage()
+    expect(
+      screen.getByText("Saved: Dregs Raider · #2 of 10"),
+    ).toBeInTheDocument()
+  })
+
   it("names an unnamed preset instead of rendering an empty badge", () => {
     mockRanks = [
       {

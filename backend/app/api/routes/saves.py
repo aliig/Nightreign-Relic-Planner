@@ -56,6 +56,7 @@ from nrplanner.changes import (
     relics_signature,
     relics_signature_from_fingerprints,
     serialize_match_keys,
+    serialize_match_ranks,
     serialize_top_layouts,
     vessels_needing_rerun,
 )
@@ -1051,6 +1052,10 @@ def _apply_snapshot_for_stream(
     # See optimize.py: result identities in display order for the "saved as
     # loadout #N" badge on the builds page.
     top_match_keys = serialize_match_keys(results)
+    # Tie-aware rank per key: equally-scoring results share one rank, so a
+    # saved loadout is never reported as beaten by a result it merely sits
+    # behind in the list.
+    top_match_ranks = serialize_match_ranks(results)
     full_results = [r.model_dump(mode="json") for r in results]
     best_score = max((r.total_score for r in results), default=0)
     any_truncated = any(r.search_truncated for r in results)
@@ -1073,6 +1078,7 @@ def _apply_snapshot_for_stream(
             max_per_vessel=max_per_vessel,
             top_layouts=top_layouts,
             top_match_keys=top_match_keys,
+            top_match_ranks=top_match_ranks,
             full_results=full_results,
             best_score=best_score,
             any_truncated=any_truncated,
@@ -1098,6 +1104,7 @@ def _apply_snapshot_for_stream(
         snap.max_per_vessel = max_per_vessel
         snap.top_layouts = top_layouts
         snap.top_match_keys = top_match_keys
+        snap.top_match_ranks = top_match_ranks
         snap.full_results = full_results
         snap.best_score = best_score
         snap.any_truncated = any_truncated
