@@ -4,12 +4,16 @@ Fingerprint/signature/diff logic needs no game data; relevance tests use the
 real SourceDataHandler (``ds`` fixture) to resolve effect families.
 """
 from nrplanner.changes import (
+    _fp_is_relevant,
+    build_positive_sets,
     build_signature,
     diff_results,
     fingerprint_owned,
+    fp_matches,
     layout_match_key,
     mark_staged_refs,
     multiset_diff,
+    relevance_index,
     relevant_relics_signature,
     relevant_to_build,
     relic_fingerprint,
@@ -175,6 +179,63 @@ class TestRelevance:
         added = [fingerprint_owned(_relic(100, [carried]))]
         ra, _ = relevant_to_build(build, added, [], ds)
         assert ra == 1
+
+
+class TestRelevanceIndexParity:
+    """fp_matches must answer exactly what _fp_is_relevant answers.
+
+    The indexed form duplicates the relevance rule for speed (see fp_matches),
+    so like vessel_accepts it needs a test pinning the two together — over real
+    game data, across builds shaped differently enough to exercise every branch
+    of the resolution chain (direct id, text_id, display name, family, curse).
+    """
+
+    def _fingerprints(self, all_effects) -> list:
+        # A spread of real effect ids over the effect and curse slots, plus one
+        # id the game data does not know (no name/family/text_id at all).
+        ids = [e["id"] for e in all_effects]
+        step = max(1, len(ids) // 60)
+        sample = ids[::step][:60]
+        fps = [relic_fingerprint(100 + i, [e], []) for i, e in enumerate(sample)]
+        fps += [relic_fingerprint(200 + i, [], [e]) for i, e in enumerate(sample[:20])]
+        fps.append(relic_fingerprint(300, [999999999], []))
+        fps.append(relic_fingerprint(301, [999999999], [999999998]))
+        return fps
+
+    def _builds(self, ds, all_effects) -> list:
+        ids = [e["id"] for e in all_effects]
+        families = sorted({
+            f for f in (ds.get_effect_family(e) for e in ids[:400]) if f
+        })[:3]
+        return [
+            _build(required_effects=[ids[0]]),
+            _build(groups=[WeightGroup(weight=10, effects=ids[5:15])]),
+            _build(groups=[WeightGroup(weight=-5, effects=ids[20:25])]),
+            _build(groups=[WeightGroup(weight=10, families=families)]),
+            _build(required_families=families[:1], default_curse_weight=3),
+            _build(),  # wants nothing at all
+        ]
+
+    def test_matches_the_scalar_rule(self, ds, all_effects):
+        fps = self._fingerprints(all_effects)
+        index = relevance_index(fps, ds)
+        assert len(index) == len(set(fps))
+        checked = 0
+        relevant = 0
+        for build in self._builds(ds, all_effects):
+            pos_ids, pos_fams, pos_names = build_positive_sets(build, ds)
+            curses_rel = build.default_curse_weight > 0
+            for fp in fps:
+                expected = _fp_is_relevant(
+                    fp, pos_ids, pos_fams, pos_names, ds, curses_rel)
+                actual = fp_matches(
+                    index[fp], pos_ids, pos_fams, pos_names, curses_rel)
+                assert actual == expected, (build.required_effects, fp)
+                checked += 1
+                relevant += expected
+        # Guard against a vacuous pass: the sample must actually hit the
+        # relevant branches, not agree on "no" everywhere.
+        assert checked > 0 and relevant > 10
 
 
 class TestRelevantRelicsSignature:

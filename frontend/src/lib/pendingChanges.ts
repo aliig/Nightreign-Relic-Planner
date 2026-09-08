@@ -347,6 +347,32 @@ export function toggleSell(slot: number, gaHandle: number, meta?: RelicMeta) {
   })
 }
 
+/**
+ * Stage many sells in ONE store write. Trashing N relics a call at a time is
+ * O(N²) — every toggleSell re-scans the sells array, re-prunes the meta cache,
+ * re-stringifies the whole state into localStorage and notifies every
+ * subscriber (re-rendering the entire inventory table). Handles already staged
+ * are left alone, so this is idempotent — it only ever adds.
+ */
+export function addSells(
+  slot: number,
+  entries: Array<{ gaHandle: number; meta?: RelicMeta }>,
+) {
+  if (entries.length === 0) return
+  updateSlot(slot, (s) => {
+    const have = new Set(s.sells)
+    const added: number[] = []
+    const meta = { ...s.meta }
+    for (const e of entries) {
+      if (e.meta) meta[e.gaHandle] = e.meta
+      if (have.has(e.gaHandle)) continue
+      have.add(e.gaHandle)
+      added.push(e.gaHandle)
+    }
+    return { ...s, sells: [...s.sells, ...added], meta }
+  })
+}
+
 export function setFavorite(
   slot: number,
   gaHandle: number,

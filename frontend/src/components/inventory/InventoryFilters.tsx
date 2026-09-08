@@ -1,5 +1,5 @@
 import { ChevronDown, Search, X } from "lucide-react"
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 
 import { COLOR_HEX, RELIC_COLORS, RELIC_TIERS } from "@/components/RelicDisplay"
 import { Badge } from "@/components/ui/badge"
@@ -19,6 +19,7 @@ import {
   stateFacetCount,
   type TriState,
 } from "./relicFilter"
+import { TIER_META, TIER_ORDER } from "./tiers"
 
 type FacetProps = {
   f: FilterState
@@ -216,14 +217,33 @@ function StateFacet({ f, set }: FacetProps) {
           />
         </div>
         <div className="space-y-1.5">
-          <p className="text-xs font-medium text-muted-foreground">
-            In a build
-          </p>
-          <Segmented
-            value={f.used}
-            onChange={(v) => set({ used: v as TriState })}
-            options={TRI_OPTIONS}
-          />
+          <p className="text-xs font-medium text-muted-foreground">Cull tier</p>
+          <div className="flex flex-col gap-0.5">
+            {TIER_ORDER.map((t) => {
+              const checked = f.usageTiers.includes(t)
+              return (
+                <button
+                  key={t}
+                  type="button"
+                  onClick={() =>
+                    set({
+                      usageTiers: checked
+                        ? f.usageTiers.filter((x) => x !== t)
+                        : [...f.usageTiers, t],
+                    })
+                  }
+                  className="flex items-center gap-2 rounded px-1.5 py-1 text-left text-sm hover:bg-accent"
+                >
+                  <Checkbox
+                    checked={checked}
+                    tabIndex={-1}
+                    className="pointer-events-none"
+                  />
+                  {TIER_META[t].label}
+                </button>
+              )
+            })}
+          </div>
         </div>
         <div className="space-y-1.5">
           <p className="text-xs font-medium text-muted-foreground">
@@ -396,14 +416,33 @@ export function InventoryFilters({
 }) {
   const set = (patch: Partial<FilterState>) =>
     setFilter({ ...filter, ...patch })
+
+  // The input is locally controlled and pushed into FilterState on a delay:
+  // every keystroke otherwise re-filters and re-sorts the whole inventory.
+  const [draft, setDraft] = useState(filter.search)
+  const filterRef = useRef(filter)
+  filterRef.current = filter
+  useEffect(() => {
+    if (draft === filterRef.current.search) return
+    const t = setTimeout(
+      () => setFilter({ ...filterRef.current, search: draft }),
+      200,
+    )
+    return () => clearTimeout(t)
+  }, [draft, setFilter])
+  // Keep up when the search is cleared from outside (a chip's X, Clear all).
+  useEffect(() => {
+    setDraft((d) => (filter.search === "" && d !== "" ? "" : d))
+  }, [filter.search])
+
   return (
     <>
       <div className="relative">
         <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
         <Input
           placeholder="Search by name…"
-          value={filter.search}
-          onChange={(e) => set({ search: e.target.value })}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
           className="h-9 w-48 pl-8"
         />
       </div>

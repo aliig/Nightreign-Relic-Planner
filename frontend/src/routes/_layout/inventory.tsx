@@ -5,6 +5,7 @@ import { Suspense, useMemo, useState } from "react"
 
 import { GameService, SavesService } from "@/client"
 import { EmptyState } from "@/components/Common/EmptyState"
+import { OptimizeAllBar } from "@/components/Common/OptimizeAllBar"
 import { SaveFreshness } from "@/components/Common/SaveFreshness"
 import { RelicManager } from "@/components/inventory/RelicManager"
 import type { ManagedRelic } from "@/components/inventory/types"
@@ -21,6 +22,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import useAuth from "@/hooks/useAuth"
 import useCustomToast from "@/hooks/useCustomToast"
 import { useRelicUsage } from "@/hooks/useRelicUsage"
+import { useStaleBuilds } from "@/hooks/useStaleBuilds"
 import { usePendingSlot, useReconcileSlotBases } from "@/lib/pendingChanges"
 
 export const Route = createFileRoute("/_layout/inventory")({
@@ -50,7 +52,30 @@ function AuthInventoryBody({
     queryFn: () => SavesService.getProfileRelics({ profileId }),
     staleTime: 5 * 60 * 1000,
   })
-  const { usage } = useRelicUsage(profileId, slotIndex)
+  const {
+    byHandle: usage,
+    buildsById,
+    isKnown: usageKnown,
+    staleCount,
+    neverOptimizedCount,
+  } = useRelicUsage(profileId, slotIndex)
+  const { stale, known: freshnessKnown } = useStaleBuilds(profileId)
+  // The usage response already names every build, so the bar needs no extra
+  // query for its list or for which builds have ever been run.
+  const buildList = useMemo(
+    () =>
+      [...buildsById.values()].map((b) => ({ id: b.build_id, name: b.name })),
+    [buildsById],
+  )
+  const optimizedIds = useMemo(
+    () =>
+      new Set(
+        [...buildsById.values()]
+          .filter((b) => b.optimized)
+          .map((b) => b.build_id),
+      ),
+    [buildsById],
+  )
   const pending = usePendingSlot(slotIndex)
 
   // Live inventory = save relics + staged Relic Rites purchases (mints render
@@ -91,14 +116,33 @@ function AuthInventoryBody({
   )
 
   return (
-    <RelicManager
-      relics={relics}
-      effectsData={effectsData}
-      effectMap={effectMap}
-      usage={usage}
-      slotIndex={slotIndex}
-      murks={murks}
-    />
+    <div className="space-y-4">
+      {/* Buying relics in Relic Rites makes every build stale at once, which
+          is why keepers used to read as disposable here.  Same trigger the
+          builds page has; manual only — auto-running on a staged change would
+          make a rites re-roll thrash the optimizer. */}
+      {(staleCount > 0 || neverOptimizedCount > 0) && (
+        <OptimizeAllBar
+          builds={buildList}
+          stale={stale}
+          known={freshnessKnown}
+          optimized={optimizedIds}
+          profileId={profileId}
+          emptyLabel="All builds are up to date — the tiers below are current."
+          staleDetail="Relics below can read as disposable when they aren't — a build that would keep them is out of date."
+        />
+      )}
+      <RelicManager
+        relics={relics}
+        effectsData={effectsData}
+        effectMap={effectMap}
+        usage={usage}
+        buildsById={buildsById}
+        usageKnown={usageKnown}
+        slotIndex={slotIndex}
+        murks={murks}
+      />
+    </div>
   )
 }
 
@@ -203,7 +247,11 @@ function AnonInventory() {
     () => buildEffectMap((effectsData ?? []) as unknown[]),
     [effectsData],
   )
-  const { usage } = useRelicUsage(null)
+  const {
+    byHandle: usage,
+    buildsById,
+    isKnown: usageKnown,
+  } = useRelicUsage(null)
 
   const allProfiles: Array<Record<string, any>> = JSON.parse(
     sessionStorage.getItem("parsedProfiles") ?? "[]",
@@ -327,6 +375,8 @@ function AnonInventory() {
         effectsData={(effectsData ?? []) as unknown[]}
         effectMap={effectMap}
         usage={usage}
+        buildsById={buildsById}
+        usageKnown={usageKnown}
         slotIndex={Number(profile?.slot_index ?? 0)}
         murks={Number(profile?.murks ?? 0)}
       />

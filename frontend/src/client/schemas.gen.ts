@@ -1045,6 +1045,35 @@ export const BuildUpdateSchema = {
     title: 'BuildUpdate'
 } as const;
 
+export const BuildUsageInfoSchema = {
+    properties: {
+        build_id: {
+            type: 'string',
+            title: 'Build Id'
+        },
+        name: {
+            type: 'string',
+            title: 'Name'
+        },
+        fresh: {
+            type: 'boolean',
+            title: 'Fresh'
+        },
+        optimized: {
+            type: 'boolean',
+            title: 'Optimized'
+        }
+    },
+    type: 'object',
+    required: ['build_id', 'name', 'fresh', 'optimized'],
+    title: 'BuildUsageInfo',
+    description: `A build referenced by the usage map.
+
+\`\`fresh\`\` and \`\`optimized\`\` are separate on purpose: a stale build still
+contributes its (possibly outdated) placements, a never-run build
+contributes nothing at all, and only the latter is worth nagging about.`
+} as const;
+
 export const BuildsPublicSchema = {
     properties: {
         data: {
@@ -2150,6 +2179,23 @@ export const ProfilesPublicSchema = {
     title: 'ProfilesPublic'
 } as const;
 
+export const RelicBuildUseSchema = {
+    properties: {
+        build_id: {
+            type: 'string',
+            title: 'Build Id'
+        },
+        rank: {
+            type: 'integer',
+            title: 'Rank'
+        }
+    },
+    type: 'object',
+    required: ['build_id', 'rank'],
+    title: 'RelicBuildUse',
+    description: "One build's claim on one relic."
+} as const;
+
 export const RelicDeltaSchema = {
     properties: {
         added: {
@@ -2327,6 +2373,106 @@ answers the question the name alone cannot: a relic that dropped out of a
 build's best layout may or may not still be in the save, and those two are
 very different pieces of news.  It stays None where nothing checked (older
 snapshots, and the persisted layouts, which are inventory-agnostic).`
+} as const;
+
+export const RelicUsageSchema = {
+    properties: {
+        ga_handle: {
+            type: 'integer',
+            title: 'Ga Handle'
+        },
+        tier: {
+            type: 'string',
+            enum: ['in_use', 'backup', 'contender', 'dead'],
+            title: 'Tier'
+        },
+        used_by: {
+            items: {
+                '$ref': '#/components/schemas/RelicBuildUse'
+            },
+            type: 'array',
+            title: 'Used By'
+        },
+        uncertain: {
+            type: 'boolean',
+            title: 'Uncertain',
+            default: false
+        },
+        content_group: {
+            type: 'integer',
+            title: 'Content Group'
+        }
+    },
+    type: 'object',
+    required: ['ga_handle', 'tier', 'content_group'],
+    title: 'RelicUsage',
+    description: `What the app can say about one relic's disposability.
+
+\`\`uncertain\`\` is orthogonal to \`\`tier\`\` on purpose.  A relic can be rank-1
+in build A *and* wanted by a build whose results are out of date; an enum
+would force a false choice between two true statements.  Note the
+invariant: \`\`dead\`\` means no build could want it, so dead implies not
+uncertain.`
+} as const;
+
+export const RelicUsageQuerySchema = {
+    properties: {
+        profile_id: {
+            type: 'string',
+            format: 'uuid',
+            title: 'Profile Id'
+        },
+        staged_mints: {
+            items: {
+                '$ref': '#/components/schemas/StagedMint'
+            },
+            type: 'array',
+            title: 'Staged Mints'
+        }
+    },
+    type: 'object',
+    required: ['profile_id'],
+    title: 'RelicUsageQuery',
+    description: `Which builds use each relic in a profile's effective inventory.
+
+\`\`staged_sells\`\` is deliberately ABSENT, and must stay absent.  The client
+keys its cache on this request, and a staged sell changes on every trash
+click: including sells made every click invalidate the whole usage map,
+which blanked it mid-flight and made every un-used relic appear at once.
+A staged sell is display state on that page — the row is still on screen,
+marked for the bin — so the answer does not depend on it.
+
+\`\`staged_mints\`\` DO belong here: a mint has no save row at all, so leaving
+one out would report a relic the user just bought as owned by nobody.
+
+The cost of leaving sells out: a snapshot written BY a staged-sell run
+describes a sells-applied inventory and will not match the sells-free
+inventory computed here, so those builds report \`\`fresh=False\`\`.  That is
+survivable only because this endpoint never drops a stale build's
+placements — it reports them and flags them \`\`uncertain\`\`.`
+} as const;
+
+export const RelicUsageResponseSchema = {
+    properties: {
+        builds: {
+            items: {
+                '$ref': '#/components/schemas/BuildUsageInfo'
+            },
+            type: 'array',
+            title: 'Builds'
+        },
+        relics: {
+            items: {
+                '$ref': '#/components/schemas/RelicUsage'
+            },
+            type: 'array',
+            title: 'Relics'
+        }
+    },
+    type: 'object',
+    required: ['builds', 'relics'],
+    title: 'RelicUsageResponse',
+    description: 'Build usage for every relic in the effective inventory, in one request.'
 } as const;
 
 export const RelicsPublicSchema = {

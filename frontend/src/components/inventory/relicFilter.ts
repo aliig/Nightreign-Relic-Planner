@@ -5,10 +5,11 @@
  * Two layers, by design:
  *  - `applyFilters` matches **intrinsic** relic fields (name/color/tier/deep/
  *    effects) and is the cheap first pass.
- *  - `matchesState` matches **live/derived** axes (sellable/equipped/in-a-build/
+ *  - `matchesState` matches **live/derived** axes (sellable/equipped/cull tier/
  *    bookmarked) from a small `RelicDerived` the caller computes — those depend on
  *    usage data and pending favorite edits that only live in RelicManager.
  */
+import { type RelicTier, TIER_META } from "./tiers"
 import type { ManagedRelic } from "./types"
 
 /** Any/Yes/No axis. "all" = no constraint. */
@@ -24,8 +25,13 @@ export type FilterState = {
   /** Derived: a relic is sellable when not equipped, bookmarked, or unique. */
   sellable: "all" | "sellable" | "locked"
   equipped: TriState
-  /** "In a build" — used by at least one build. */
-  used: TriState
+  /**
+   * Cull tiers to keep (multi-select; [] = any).  Replaces the old boolean
+   * "in a build" axis, which could not distinguish "a build places it" from
+   * "a build could still want it".  Named `usageTiers`, not `tiers`, because
+   * `tiers` above is the relic's Grand/Polished/Delicate rarity.
+   */
+  usageTiers: RelicTier[]
   bookmarked: TriState
   effectFilter: number[]
   /** How selected effects combine: and (all) / or (any) / not (none). */
@@ -39,7 +45,7 @@ export const EMPTY_FILTER: FilterState = {
   deep: "all",
   sellable: "all",
   equipped: "all",
-  used: "all",
+  usageTiers: [],
   bookmarked: "all",
   effectFilter: [],
   effectMode: "and",
@@ -83,19 +89,26 @@ export function applyFilters(
 /** Live/derived per-relic state, computed by the caller for `matchesState`. */
 export type RelicDerived = {
   equipped: boolean
-  used: boolean
+  /** null while the usage answer is still loading — never filtered out. */
+  tier: RelicTier | null
   favorite: boolean
   sellable: boolean
 }
 
-/** Derived-axis filtering: sellability, equipped, in-a-build, bookmarked (AND). */
+/** Derived-axis filtering: sellability, equipped, cull tier, bookmarked (AND). */
 export function matchesState(f: FilterState, d: RelicDerived): boolean {
   if (f.sellable === "sellable" && !d.sellable) return false
   if (f.sellable === "locked" && d.sellable) return false
   if (f.equipped === "yes" && !d.equipped) return false
   if (f.equipped === "no" && d.equipped) return false
-  if (f.used === "yes" && !d.used) return false
-  if (f.used === "no" && d.used) return false
+  // An unknown tier (usage still loading) is never excluded — hiding rows
+  // because the answer has not arrived is how the list used to jump around.
+  if (
+    f.usageTiers.length > 0 &&
+    d.tier !== null &&
+    !f.usageTiers.includes(d.tier)
+  )
+    return false
   if (f.bookmarked === "yes" && !d.favorite) return false
   if (f.bookmarked === "no" && d.favorite) return false
   return true
@@ -106,7 +119,7 @@ export function stateFacetCount(f: FilterState): number {
   return (
     (f.sellable !== "all" ? 1 : 0) +
     (f.equipped !== "all" ? 1 : 0) +
-    (f.used !== "all" ? 1 : 0) +
+    (f.usageTiers.length > 0 ? 1 : 0) +
     (f.bookmarked !== "all" ? 1 : 0)
   )
 }
@@ -119,7 +132,7 @@ export function isFilterActive(f: FilterState): boolean {
     f.deep !== "all" ||
     f.sellable !== "all" ||
     f.equipped !== "all" ||
-    f.used !== "all" ||
+    f.usageTiers.length > 0 ||
     f.bookmarked !== "all" ||
     f.effectFilter.length > 0
   )
@@ -175,11 +188,11 @@ export function activeFilterChips(
       label: `Equipped: ${TRI_LABEL[f.equipped]}`,
       clear: { equipped: "all" },
     })
-  if (f.used !== "all")
+  for (const t of f.usageTiers)
     chips.push({
-      key: "used",
-      label: `In a build: ${TRI_LABEL[f.used]}`,
-      clear: { used: "all" },
+      key: `usage:${t}`,
+      label: TIER_META[t].label,
+      clear: { usageTiers: f.usageTiers.filter((x) => x !== t) },
     })
   if (f.bookmarked !== "all")
     chips.push({

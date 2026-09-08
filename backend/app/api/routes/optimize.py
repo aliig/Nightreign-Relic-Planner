@@ -26,23 +26,28 @@ nothing and return change=null.
 """
 import json
 import uuid
-from collections.abc import Callable
+from collections import Counter
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from nrplanner.changes import (
+    build_positive_sets,
     build_signature,
     diff_results,
     fingerprint_owned,
+    fp_matches,
     layout_match_key,
     mark_staged_refs,
+    relevance_index,
     relevant_relics_signature,
     relic_fingerprint,
     relics_signature,
     serialize_match_keys,
     serialize_top_layouts,
+    vessel_accepts,
 )
 from nrplanner.constants import CHARACTER_NAMES
 from nrplanner.cumulative import summarize_cumulative_effects
@@ -889,6 +894,281 @@ def list_build_freshness(
         )
         for b in builds
     ]
+
+
+class RelicUsageQuery(BaseModel):
+    """Which builds use each relic in a profile's effective inventory.
+
+    ``staged_sells`` is deliberately ABSENT, and must stay absent.  The client
+    keys its cache on this request, and a staged sell changes on every trash
+    click: including sells made every click invalidate the whole usage map,
+    which blanked it mid-flight and made every un-used relic appear at once.
+    A staged sell is display state on that page — the row is still on screen,
+    marked for the bin — so the answer does not depend on it.
+
+    ``staged_mints`` DO belong here: a mint has no save row at all, so leaving
+    one out would report a relic the user just bought as owned by nobody.
+
+    The cost of leaving sells out: a snapshot written BY a staged-sell run
+    describes a sells-applied inventory and will not match the sells-free
+    inventory computed here, so those builds report ``fresh=False``.  That is
+    survivable only because this endpoint never drops a stale build's
+    placements — it reports them and flags them ``uncertain``.
+    """
+    profile_id: uuid.UUID
+    staged_mints: list[StagedMint] = Field(default_factory=list)
+
+
+class RelicBuildUse(BaseModel):
+    """One build's claim on one relic."""
+    build_id: str
+    # The best-ranked layout that needs THIS MANY copies of this relic's
+    # content (see the binding rule in list_relic_usage): rank 1 means the
+    # build's current best arrangement places this copy.
+    rank: int
+
+
+class RelicUsage(BaseModel):
+    """What the app can say about one relic's disposability.
+
+    ``uncertain`` is orthogonal to ``tier`` on purpose.  A relic can be rank-1
+    in build A *and* wanted by a build whose results are out of date; an enum
+    would force a false choice between two true statements.  Note the
+    invariant: ``dead`` means no build could want it, so dead implies not
+    uncertain.
+    """
+    ga_handle: int
+    tier: Literal["in_use", "backup", "contender", "dead"]
+    used_by: list[RelicBuildUse] = Field(default_factory=list)
+    uncertain: bool = False
+    # Shared by content-identical, interchangeable copies, so the UI can
+    # explain why copy #1 lists two builds and copy #3 lists one.
+    content_group: int
+
+
+class BuildUsageInfo(BaseModel):
+    """A build referenced by the usage map.
+
+    ``fresh`` and ``optimized`` are separate on purpose: a stale build still
+    contributes its (possibly outdated) placements, a never-run build
+    contributes nothing at all, and only the latter is worth nagging about.
+    """
+    build_id: str
+    name: str
+    fresh: bool
+    optimized: bool
+
+
+class RelicUsageResponse(BaseModel):
+    """Build usage for every relic in the effective inventory, in one request."""
+    builds: list[BuildUsageInfo]
+    relics: list[RelicUsage]
+
+
+def _snapshot_demand(
+    full_results: list[dict],
+) -> dict[tuple, list[int]]:
+    """Per fingerprint, ``ranks[i-1]`` = best rank whose layout needs >= i copies.
+
+    A stored layout cannot say WHICH physical copy it used — the solver
+    explicitly collapses same-content copies (``_dedup_rank``) and handles from
+    an earlier upload can be stale — so a snapshot yields a count per
+    fingerprint per rank, and nothing more.
+
+    The naive rule ("demand = max over layouts, bind that many copies at the
+    fingerprint's best rank") gets the count right and the ranks wrong: a relic
+    placed once at rank 1 and three times at rank 7 would mark all three copies
+    in_use, telling the user their best loadout uses three copies of something
+    it uses once.
+    """
+    demand: dict[tuple, list[int]] = {}
+    for rank, layout in enumerate(full_results, start=1):
+        counts: Counter = Counter()
+        for a in layout.get("assignments", []):
+            r = a.get("relic")
+            if r:
+                counts[relic_fingerprint(
+                    r["real_id"], r["effects"], r["curses"])] += 1
+        for fp, n in counts.items():
+            ranks = demand.setdefault(fp, [])
+            while len(ranks) < n:
+                ranks.append(rank)  # ranks ascend, so append is the minimum
+    return demand
+
+
+def _reachable_keys(
+    build: BuildDefinition, keys: Iterable[tuple[str, bool]], ds: Any,
+) -> set[tuple[str, bool]] | None:
+    """Which of these (color, is_deep) keys a vessel of this build can hold.
+
+    Free strengthening of ``dead``: a deep relic can never help an
+    ``include_deep=False`` build, and a placement key that reaches no vessel of
+    the build's character is unusable at any score.  Returns None ("assume
+    everything is reachable") when the character name is unknown — a bulk
+    endpoint must not 422 the whole page over one bad build.
+    """
+    try:
+        hero_type = _resolve_hero_type(build.character)
+    except HTTPException:
+        return None
+    vessels = [list(v.get("Colors", [])) for v in ds.get_all_vessels_for_hero(hero_type)]
+    return {
+        key for key in keys
+        if any(vessel_accepts(c, key, build.include_deep) for c in vessels)
+    }
+
+
+@router.post("/relic-usage", response_model=RelicUsageResponse)
+def list_relic_usage(
+    req: RelicUsageQuery,
+    current_user: CurrentUser,
+    session: SessionDep,
+    ds: GameDataDep,
+) -> RelicUsageResponse:
+    """Report, per relic, which builds place it and how disposable it is.
+
+    This is the read behind the inventory page's cull tiers.  One request for
+    the whole inventory: the effective relics are loaded once, every build's
+    snapshot is judged against them with the SAME freshness rule the builds
+    page uses (``_snapshot_is_fresh`` — never a second opinion), and each
+    relic is bucketed:
+
+    - ``in_use``    a build's current best layout places this copy
+    - ``backup``    only a build's alternative layouts place it
+    - ``contender`` placed nowhere, but some build could still score it
+    - ``dead``      provably cannot help any build the user has
+
+    ``candidate`` (the contender test) is relevance AND placement eligibility,
+    or a pin: the same relevance predicate the freshness hash uses, so tiering
+    and freshness agree by construction.  ``BuildScorer.positive_pre_score``
+    would be the obvious test and is the wrong one — it skips effects that are
+    inert for the build's character, so a relic carrying a REQUIRED effect the
+    character cannot use would score 0 and be called dead.
+
+    Stale builds are never dropped.  Their placements stand and the relics they
+    could want are flagged ``uncertain``, because the relics most worth keeping
+    after a Relic Rites spree are exactly the ones that invalidated the
+    snapshot — reporting those as unused is the bug this endpoint exists to
+    kill.
+    """
+    profile = session.get(Profile, req.profile_id)
+    if not profile or profile.owner_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Profile not found")
+
+    builds = session.exec(
+        select(Build).where(Build.owner_id == current_user.id)
+    ).all()
+    snaps = session.exec(
+        select(OptimizationSnapshot).where(
+            OptimizationSnapshot.owner_id == current_user.id,
+            OptimizationSnapshot.slot_index == profile.slot_index,
+        )
+    ).all()
+    snap_by_build = {s.build_id: s for s in snaps}
+
+    staged = bool(req.staged_mints)
+    inventory = _effective_inventory(session, profile, [], req.staged_mints, ds)
+
+    # Per build: freshness verdict + the compact demand table.  The parsed
+    # full_results blob (~23 KB each) is reduced inside the loop and dropped —
+    # holding all of them at once is tens of MB of live dicts.
+    build_infos: list[BuildUsageInfo] = []
+    demands: dict[uuid.UUID, dict[tuple, list[int]]] = {}
+    build_defs: dict[uuid.UUID, BuildDefinition] = {}
+    for b in builds:
+        snap = snap_by_build.get(b.id)
+        fresh = _snapshot_is_fresh(snap, b, profile, staged, inventory, ds)
+        optimized = snap is not None and bool(snap.full_results)
+        build_infos.append(BuildUsageInfo(
+            build_id=str(b.id), name=b.name, fresh=fresh, optimized=optimized,
+        ))
+        build_defs[b.id] = build_def_from_db(b)
+        if optimized and snap is not None:
+            demands[b.id] = _snapshot_demand(snap.full_results)
+
+    owned = inventory.owned
+    # Group by content: same-fingerprint copies are interchangeable (color and
+    # deepness both derive from real_id), so a layout that "used" a fingerprint
+    # could have used any of them.
+    by_fp: dict[tuple, list[int]] = {}
+    fp_key: dict[tuple, tuple[str, bool]] = {}
+    for r in owned:
+        fp = fingerprint_owned(r)
+        by_fp.setdefault(fp, []).append(r.ga_handle)
+        fp_key[fp] = (r.color, r.is_deep)
+    # Real handles before staged mints: mint handles are negative, and a plain
+    # sort would bind a speculative, not-yet-exported purchase ahead of a
+    # content-identical relic the user actually owns.
+    for handles in by_fp.values():
+        handles.sort(key=lambda h: (h < 0, h))
+    group_of = {fp: i for i, fp in enumerate(by_fp)}
+
+    # Bind copies.  Every build binds the same prefix copies[fp][:n], so the
+    # answer never depends on build iteration order.  Builds share copies:
+    # they are independent alternatives over the whole inventory, not gear
+    # equipped at the same time.  Demand above what is owned (a snapshot that
+    # predates a sale) binds what exists and never errors — the build already
+    # reports fresh=False, since a used relic is by definition relevant.
+    used_by: dict[int, list[RelicBuildUse]] = {}
+    for b_id, demand in demands.items():
+        for fp, ranks in demand.items():
+            copies = by_fp.get(fp, ())
+            for i in range(min(len(ranks), len(copies))):
+                used_by.setdefault(copies[i], []).append(
+                    RelicBuildUse(build_id=str(b_id), rank=ranks[i]))
+
+    # Candidacy: which builds could still want each fingerprint.  Resolving
+    # each distinct fingerprint once turns ~builds x fingerprints worth of
+    # game-data lookups into three set intersections apiece.
+    index = relevance_index(by_fp, ds)
+    keys_present = {fp_key[fp] for fp in by_fp}
+    wanted_by: dict[tuple, list[uuid.UUID]] = {fp: [] for fp in by_fp}
+    for b in builds:
+        bd = build_defs[b.id]
+        pos_ids, pos_fams, pos_names = build_positive_sets(bd, ds)
+        curses_rel = bd.default_curse_weight > 0
+        keys = _reachable_keys(bd, keys_present, ds)
+        pinned = set(bd.pinned_relics)
+        for fp, handles in by_fp.items():
+            # Pinned relics participate regardless of score or placement.
+            if not any(h in pinned for h in handles):
+                if keys is not None and fp_key[fp] not in keys:
+                    continue
+                if not fp_matches(
+                    index[fp], pos_ids, pos_fams, pos_names, curses_rel
+                ):
+                    continue
+            wanted_by[fp].append(b.id)
+
+    stale_builds = {
+        uuid.UUID(i.build_id) for i in build_infos if not i.fresh
+    }
+    # Floor on `dead`: a user with no builds — or whose builds all name a
+    # character the game data does not know — must never be told their entire
+    # inventory is disposable.  With nothing to judge against, everything is a
+    # contender.
+    have_judgement = bool(builds)
+
+    relics: list[RelicUsage] = []
+    for r in owned:
+        fp = fingerprint_owned(r)
+        uses = used_by.get(r.ga_handle, [])
+        wanted = wanted_by.get(fp, [])
+        if uses:
+            tier = "in_use" if any(u.rank == 1 for u in uses) else "backup"
+        elif wanted or not have_judgement:
+            tier = "contender"
+        else:
+            tier = "dead"
+        relics.append(RelicUsage(
+            ga_handle=r.ga_handle,
+            tier=tier,
+            used_by=sorted(uses, key=lambda u: (u.rank, u.build_id)),
+            uncertain=any(b_id in stale_builds for b_id in wanted),
+            content_group=group_of[fp],
+        ))
+
+    return RelicUsageResponse(builds=build_infos, relics=relics)
 
 
 class BuildSnapshotSummary(BaseModel):

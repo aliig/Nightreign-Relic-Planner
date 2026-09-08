@@ -42,7 +42,7 @@ const f = (over: Partial<FilterState>): FilterState => ({
 
 const d = (over: Partial<RelicDerived>): RelicDerived => ({
   equipped: false,
-  used: false,
+  tier: "dead",
   favorite: false,
   sellable: true,
   ...over,
@@ -159,9 +159,27 @@ describe("matchesState", () => {
     )
   })
 
-  it("in-a-build tri-state", () => {
-    expect(matchesState(f({ used: "yes" }), d({ used: true }))).toBe(true)
-    expect(matchesState(f({ used: "no" }), d({ used: true }))).toBe(false)
+  it("cull-tier multi-select keeps only the chosen tiers", () => {
+    expect(matchesState(f({ usageTiers: ["dead"] }), d({ tier: "dead" }))).toBe(
+      true,
+    )
+    expect(
+      matchesState(f({ usageTiers: ["dead"] }), d({ tier: "in_use" })),
+    ).toBe(false)
+    expect(
+      matchesState(
+        f({ usageTiers: ["dead", "contender"] }),
+        d({ tier: "contender" }),
+      ),
+    ).toBe(true)
+  })
+
+  it("never hides a relic whose tier is still unknown", () => {
+    // Usage arrives asynchronously; filtering rows out while the answer is in
+    // flight is what made the list jump around on every trash click.
+    expect(matchesState(f({ usageTiers: ["dead"] }), d({ tier: null }))).toBe(
+      true,
+    )
   })
 
   it("bookmarked tri-state reads favorite", () => {
@@ -179,14 +197,14 @@ describe("matchesState", () => {
   it("ANDs across axes", () => {
     expect(
       matchesState(
-        f({ equipped: "yes", used: "no" }),
-        d({ equipped: true, used: false }),
+        f({ equipped: "yes", usageTiers: ["dead"] }),
+        d({ equipped: true, tier: "dead" }),
       ),
     ).toBe(true)
     expect(
       matchesState(
-        f({ equipped: "yes", used: "no" }),
-        d({ equipped: true, used: true }),
+        f({ equipped: "yes", usageTiers: ["dead"] }),
+        d({ equipped: true, tier: "in_use" }),
       ),
     ).toBe(false)
   })
@@ -224,6 +242,14 @@ describe("isFilterActive / activeFilterChips", () => {
       (c) => c.label === "Red",
     )
     expect(chip?.clear).toEqual({ colors: ["Blue"] })
+  })
+
+  it("emits one removable chip per selected cull tier", () => {
+    const filter = f({ usageTiers: ["dead", "in_use"] })
+    const chips = activeFilterChips(filter, EFFECT_MAP)
+    expect(chips.map((c) => c.label)).toEqual(["Dead weight", "In use"])
+    expect(chips[0].clear).toEqual({ usageTiers: ["in_use"] })
+    expect(isFilterActive(filter)).toBe(true)
   })
 
   it("NOT-mode effect chips are prefixed", () => {

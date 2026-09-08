@@ -231,6 +231,20 @@ export type BuildUpdate = {
 };
 
 /**
+ * A build referenced by the usage map.
+ *
+ * ``fresh`` and ``optimized`` are separate on purpose: a stale build still
+ * contributes its (possibly outdated) placements, a never-run build
+ * contributes nothing at all, and only the latter is worth nagging about.
+ */
+export type BuildUsageInfo = {
+    build_id: string;
+    name: string;
+    fresh: boolean;
+    optimized: boolean;
+};
+
+/**
  * Cumulative in-game bonus for one effect family across a whole vessel.
  *
  * Computed at serve time by nrplanner.cumulative.summarize_cumulative_effects
@@ -521,6 +535,14 @@ export type ProfilesPublic = {
 };
 
 /**
+ * One build's claim on one relic.
+ */
+export type RelicBuildUse = {
+    build_id: string;
+    rank: number;
+};
+
+/**
  * How many relics were gained/lost versus the previous save.
  */
 export type RelicDelta = {
@@ -574,6 +596,57 @@ export type RelicRef = {
 export type RelicsPublic = {
     data: Array<RelicPublic>;
     count: number;
+};
+
+/**
+ * What the app can say about one relic's disposability.
+ *
+ * ``uncertain`` is orthogonal to ``tier`` on purpose.  A relic can be rank-1
+ * in build A *and* wanted by a build whose results are out of date; an enum
+ * would force a false choice between two true statements.  Note the
+ * invariant: ``dead`` means no build could want it, so dead implies not
+ * uncertain.
+ */
+export type RelicUsage = {
+    ga_handle: number;
+    tier: 'in_use' | 'backup' | 'contender' | 'dead';
+    used_by?: Array<RelicBuildUse>;
+    uncertain?: boolean;
+    content_group: number;
+};
+
+export type tier = 'in_use' | 'backup' | 'contender' | 'dead';
+
+/**
+ * Which builds use each relic in a profile's effective inventory.
+ *
+ * ``staged_sells`` is deliberately ABSENT, and must stay absent.  The client
+ * keys its cache on this request, and a staged sell changes on every trash
+ * click: including sells made every click invalidate the whole usage map,
+ * which blanked it mid-flight and made every un-used relic appear at once.
+ * A staged sell is display state on that page — the row is still on screen,
+ * marked for the bin — so the answer does not depend on it.
+ *
+ * ``staged_mints`` DO belong here: a mint has no save row at all, so leaving
+ * one out would report a relic the user just bought as owned by nobody.
+ *
+ * The cost of leaving sells out: a snapshot written BY a staged-sell run
+ * describes a sells-applied inventory and will not match the sells-free
+ * inventory computed here, so those builds report ``fresh=False``.  That is
+ * survivable only because this endpoint never drops a stale build's
+ * placements — it reports them and flags them ``uncertain``.
+ */
+export type RelicUsageQuery = {
+    profile_id: string;
+    staged_mints?: Array<StagedMint>;
+};
+
+/**
+ * Build usage for every relic in the effective inventory, in one request.
+ */
+export type RelicUsageResponse = {
+    builds: Array<BuildUsageInfo>;
+    relics: Array<RelicUsage>;
 };
 
 /**
@@ -993,6 +1066,12 @@ export type OptimizeListBuildFreshnessData = {
 };
 
 export type OptimizeListBuildFreshnessResponse = (Array<BuildFreshness>);
+
+export type OptimizeListRelicUsageData = {
+    requestBody: RelicUsageQuery;
+};
+
+export type OptimizeListRelicUsageResponse = (RelicUsageResponse);
 
 export type OptimizeListBuildSummariesResponse = (Array<BuildSnapshotSummary>);
 

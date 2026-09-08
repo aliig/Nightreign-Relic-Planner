@@ -440,6 +440,51 @@ describe("pendingChanges staged-diff views", () => {
   })
 })
 
+describe("addSells (batched staged sells)", () => {
+  beforeEach(() => {
+    localStorage.clear()
+  })
+
+  // Every store write ends in exactly one persist(), so counting setItem calls
+  // counts store writes — the thing that used to be O(N) for a bulk trash.
+  it("stages 500 sells in a single store write", async () => {
+    const pc = await freshStore()
+    const entries = Array.from({ length: 500 }, (_, i) => ({ gaHandle: i + 1 }))
+    const persist = vi.spyOn(Storage.prototype, "setItem")
+    pc.addSells(0, entries)
+    expect(persist).toHaveBeenCalledTimes(1)
+    persist.mockRestore()
+    expect(pc.readSlot(0).sells).toHaveLength(500)
+  })
+
+  it("is idempotent on handles that are already staged", async () => {
+    const pc = await freshStore()
+    pc.toggleSell(0, 7)
+    pc.addSells(0, [{ gaHandle: 7 }, { gaHandle: 8 }, { gaHandle: 7 }])
+    expect(pc.readSlot(0).sells).toEqual([7, 8])
+  })
+
+  it("preserves the label cache for each staged handle", async () => {
+    const pc = await freshStore()
+    pc.addSells(0, [
+      { gaHandle: 1, meta: { name: "R1", murk: 150 } },
+      { gaHandle: 2, meta: { name: "R2", murk: 550 } },
+    ])
+    expect(pc.readSlot(0).meta[1]).toEqual({ name: "R1", murk: 150 })
+    expect(pc.readSlot(0).meta[2]).toEqual({ name: "R2", murk: 550 })
+    expect(pc.murkAdjustment(pc.readSlot(0))).toBe(700)
+  })
+
+  it("does nothing for an empty selection", async () => {
+    const pc = await freshStore()
+    const persist = vi.spyOn(Storage.prototype, "setItem")
+    pc.addSells(0, [])
+    expect(persist).not.toHaveBeenCalled()
+    persist.mockRestore()
+    expect(pc.readAll()).toEqual({})
+  })
+})
+
 describe("live Murk emulation (murkAdjustment / effectiveMurks)", () => {
   const spec = (realId: number, effects = [1, 2, 3]) => ({
     real_id: realId,

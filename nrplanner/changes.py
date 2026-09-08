@@ -14,7 +14,7 @@ import hashlib
 import json
 from collections import Counter
 from collections.abc import Iterable, Sequence
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, NamedTuple, Optional
 
 from nrplanner.constants import EMPTY_EFFECT
 from nrplanner.models import (
@@ -191,6 +191,73 @@ def _fp_is_relevant(
         if fam is not None and fam in pos_fams:
             return True
     return False
+
+
+class FingerprintFacts(NamedTuple):
+    """Everything the relevance test needs about one fingerprint, resolved once.
+
+    ``_fp_is_relevant`` walks up to six effect ids through four ``ds`` lookups
+    each.  Answering "is this relic relevant?" for every (build, fingerprint)
+    pair — ~75 builds x ~2000 fingerprints — that way is ~150k times the same
+    handful of lookups.  Resolving each distinct fingerprint ONCE into these
+    flat sets turns the per-pair test into three set intersections.
+    """
+    ids: frozenset[int]        # effect + curse ids, plus their text_ids
+    names: frozenset[str]      # display names of those ids
+    families: frozenset[str]   # family names of those ids
+    has_curse: bool
+
+
+def fingerprint_facts(fp: Fingerprint, ds: "SourceDataHandler") -> FingerprintFacts:
+    """Resolve one fingerprint's ids/names/families — see FingerprintFacts."""
+    ids: set[int] = set()
+    names: set[str] = set()
+    families: set[str] = set()
+    for e in _fp_all_ids(fp):
+        ids.add(e)
+        tid = ds.get_effect_text_id(e)
+        if tid != -1:
+            ids.add(tid)
+        name = ds.get_effect_name(e)
+        if name is not None:
+            names.add(name)
+        fam = ds.get_effect_family(e)
+        if fam is not None:
+            families.add(fam)
+    return FingerprintFacts(
+        frozenset(ids), frozenset(names), frozenset(families), _fp_has_curse(fp)
+    )
+
+
+def relevance_index(
+    fps: Iterable[Fingerprint], ds: "SourceDataHandler"
+) -> dict[Fingerprint, FingerprintFacts]:
+    """Facts for each distinct fingerprint, for repeated relevance tests."""
+    index: dict[Fingerprint, FingerprintFacts] = {}
+    for fp in fps:
+        if fp not in index:
+            index[fp] = fingerprint_facts(fp, ds)
+    return index
+
+
+def fp_matches(
+    facts: FingerprintFacts, pos_ids: set[int], pos_fams: set[str],
+    pos_names: set[str], curses_relevant: bool = False,
+) -> bool:
+    """Indexed form of :func:`_fp_is_relevant` — same answer, no ``ds`` lookups.
+
+    The duplication is deliberate, like :func:`vessel_accepts`: the bulk
+    relic-usage endpoint tests every build against every fingerprint and cannot
+    afford the lookup-per-id form.  ``test_relevance_index_parity`` pins the two
+    implementations together against the real save fixture.
+    """
+    if curses_relevant and facts.has_curse:
+        return True
+    return bool(
+        facts.ids & pos_ids
+        or (pos_names and facts.names & pos_names)
+        or facts.families & pos_fams
+    )
 
 
 def relevant_changes(

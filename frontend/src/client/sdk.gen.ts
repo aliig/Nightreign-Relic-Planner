@@ -3,7 +3,7 @@
 import type { CancelablePromise } from './core/CancelablePromise';
 import { OpenAPI } from './core/OpenAPI';
 import { request as __request } from './core/request';
-import type { BuildsListBuildsData, BuildsListBuildsResponse, BuildsCreateBuildData, BuildsCreateBuildResponse, BuildsListFeaturedBuildsData, BuildsListFeaturedBuildsResponse, BuildsGetBuildData, BuildsGetBuildResponse, BuildsUpdateBuildData, BuildsUpdateBuildResponse, BuildsDeleteBuildData, BuildsDeleteBuildResponse, BuildsToggleFeaturedData, BuildsToggleFeaturedResponse, BuildsCloneBuildData, BuildsCloneBuildResponse, DebugExportDebugStateData, DebugExportDebugStateResponse, GameGetEffectsResponse, GameGetFamiliesResponse, GameGetCharactersResponse, GameGetVesselsData, GameGetVesselsResponse, GameGetStackingCategoriesResponse, GameGetColorsResponse, GameCumulativeEffectsData, GameCumulativeEffectsResponse, GameRollRelicData, GameRollRelicResponse, LoginLoginAccessTokenData, LoginLoginAccessTokenResponse, LoginTestTokenResponse, LoginRecoverPasswordData, LoginRecoverPasswordResponse, LoginResetPasswordData, LoginResetPasswordResponse, LoginRecoverPasswordHtmlContentData, LoginRecoverPasswordHtmlContentResponse, OauthLoginGoogleResponse, OauthGoogleCallbackData, OauthGoogleCallbackResponse, OptimizeRunOptimizeData, OptimizeRunOptimizeResponse, OptimizeRunOptimizeStreamData, OptimizeRunOptimizeStreamResponse, OptimizeOptimizeSlotAlternativeData, OptimizeOptimizeSlotAlternativeResponse, OptimizeQuerySnapshotData, OptimizeQuerySnapshotResponse, OptimizeListBuildFreshnessData, OptimizeListBuildFreshnessResponse, OptimizeListBuildSummariesResponse, OptimizeMarkChangeReviewedData, OptimizeMarkChangeReviewedResponse, OptimizeListLoadoutRanksData, OptimizeListLoadoutRanksResponse, PrivateCreateUserData, PrivateCreateUserResponse, SavesUploadSaveData, SavesUploadSaveResponse, SavesUploadSaveStreamData, SavesUploadSaveStreamResponse, SavesGetSaveStatusResponse, SavesListProfilesResponse, SavesGetProfileRelicsData, SavesGetProfileRelicsResponse, SavesGetProfileLoadoutsData, SavesGetProfileLoadoutsResponse, SavesExportSaveData, SavesExportSaveResponse, SavesExportAddRelicsData, SavesExportAddRelicsResponse, SavesRitesPlanData, SavesRitesPlanResponse, SavesRitesPlanStreamData, SavesRitesPlanStreamResponse, SavesExportLoadoutsData, SavesExportLoadoutsResponse, UsersReadUsersData, UsersReadUsersResponse, UsersCreateUserData, UsersCreateUserResponse, UsersReadUserMeResponse, UsersDeleteUserMeResponse, UsersUpdateUserMeData, UsersUpdateUserMeResponse, UsersUpdatePasswordMeData, UsersUpdatePasswordMeResponse, UsersRegisterUserData, UsersRegisterUserResponse, UsersReadUserByIdData, UsersReadUserByIdResponse, UsersUpdateUserData, UsersUpdateUserResponse, UsersDeleteUserData, UsersDeleteUserResponse, UtilsTestEmailData, UtilsTestEmailResponse, UtilsHealthCheckResponse } from './types.gen';
+import type { BuildsListBuildsData, BuildsListBuildsResponse, BuildsCreateBuildData, BuildsCreateBuildResponse, BuildsListFeaturedBuildsData, BuildsListFeaturedBuildsResponse, BuildsGetBuildData, BuildsGetBuildResponse, BuildsUpdateBuildData, BuildsUpdateBuildResponse, BuildsDeleteBuildData, BuildsDeleteBuildResponse, BuildsToggleFeaturedData, BuildsToggleFeaturedResponse, BuildsCloneBuildData, BuildsCloneBuildResponse, DebugExportDebugStateData, DebugExportDebugStateResponse, GameGetEffectsResponse, GameGetFamiliesResponse, GameGetCharactersResponse, GameGetVesselsData, GameGetVesselsResponse, GameGetStackingCategoriesResponse, GameGetColorsResponse, GameCumulativeEffectsData, GameCumulativeEffectsResponse, GameRollRelicData, GameRollRelicResponse, LoginLoginAccessTokenData, LoginLoginAccessTokenResponse, LoginTestTokenResponse, LoginRecoverPasswordData, LoginRecoverPasswordResponse, LoginResetPasswordData, LoginResetPasswordResponse, LoginRecoverPasswordHtmlContentData, LoginRecoverPasswordHtmlContentResponse, OauthLoginGoogleResponse, OauthGoogleCallbackData, OauthGoogleCallbackResponse, OptimizeRunOptimizeData, OptimizeRunOptimizeResponse, OptimizeRunOptimizeStreamData, OptimizeRunOptimizeStreamResponse, OptimizeOptimizeSlotAlternativeData, OptimizeOptimizeSlotAlternativeResponse, OptimizeQuerySnapshotData, OptimizeQuerySnapshotResponse, OptimizeListBuildFreshnessData, OptimizeListBuildFreshnessResponse, OptimizeListRelicUsageData, OptimizeListRelicUsageResponse, OptimizeListBuildSummariesResponse, OptimizeMarkChangeReviewedData, OptimizeMarkChangeReviewedResponse, OptimizeListLoadoutRanksData, OptimizeListLoadoutRanksResponse, PrivateCreateUserData, PrivateCreateUserResponse, SavesUploadSaveData, SavesUploadSaveResponse, SavesUploadSaveStreamData, SavesUploadSaveStreamResponse, SavesGetSaveStatusResponse, SavesListProfilesResponse, SavesGetProfileRelicsData, SavesGetProfileRelicsResponse, SavesGetProfileLoadoutsData, SavesGetProfileLoadoutsResponse, SavesExportSaveData, SavesExportSaveResponse, SavesExportAddRelicsData, SavesExportAddRelicsResponse, SavesRitesPlanData, SavesRitesPlanResponse, SavesRitesPlanStreamData, SavesRitesPlanStreamResponse, SavesExportLoadoutsData, SavesExportLoadoutsResponse, UsersReadUsersData, UsersReadUsersResponse, UsersCreateUserData, UsersCreateUserResponse, UsersReadUserMeResponse, UsersDeleteUserMeResponse, UsersUpdateUserMeData, UsersUpdateUserMeResponse, UsersUpdatePasswordMeData, UsersUpdatePasswordMeResponse, UsersRegisterUserData, UsersRegisterUserResponse, UsersReadUserByIdData, UsersReadUserByIdResponse, UsersUpdateUserData, UsersUpdateUserResponse, UsersDeleteUserData, UsersDeleteUserResponse, UtilsTestEmailData, UtilsTestEmailResponse, UtilsHealthCheckResponse } from './types.gen';
 
 export class BuildsService {
     /**
@@ -604,6 +604,50 @@ export class OptimizeService {
         return __request(OpenAPI, {
             method: 'POST',
             url: '/api/v1/optimize/freshness',
+            body: data.requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: 'Validation Error'
+            }
+        });
+    }
+    
+    /**
+     * List Relic Usage
+     * Report, per relic, which builds place it and how disposable it is.
+     *
+     * This is the read behind the inventory page's cull tiers.  One request for
+     * the whole inventory: the effective relics are loaded once, every build's
+     * snapshot is judged against them with the SAME freshness rule the builds
+     * page uses (``_snapshot_is_fresh`` — never a second opinion), and each
+     * relic is bucketed:
+     *
+     * - ``in_use``    a build's current best layout places this copy
+     * - ``backup``    only a build's alternative layouts place it
+     * - ``contender`` placed nowhere, but some build could still score it
+     * - ``dead``      provably cannot help any build the user has
+     *
+     * ``candidate`` (the contender test) is relevance AND placement eligibility,
+     * or a pin: the same relevance predicate the freshness hash uses, so tiering
+     * and freshness agree by construction.  ``BuildScorer.positive_pre_score``
+     * would be the obvious test and is the wrong one — it skips effects that are
+     * inert for the build's character, so a relic carrying a REQUIRED effect the
+     * character cannot use would score 0 and be called dead.
+     *
+     * Stale builds are never dropped.  Their placements stand and the relics they
+     * could want are flagged ``uncertain``, because the relics most worth keeping
+     * after a Relic Rites spree are exactly the ones that invalidated the
+     * snapshot — reporting those as unused is the bug this endpoint exists to
+     * kill.
+     * @param data The data for the request.
+     * @param data.requestBody
+     * @returns RelicUsageResponse Successful Response
+     * @throws ApiError
+     */
+    public static listRelicUsage(data: OptimizeListRelicUsageData): CancelablePromise<OptimizeListRelicUsageResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/api/v1/optimize/relic-usage',
             body: data.requestBody,
             mediaType: 'application/json',
             errors: {
