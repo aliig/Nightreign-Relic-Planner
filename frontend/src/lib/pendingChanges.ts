@@ -967,6 +967,24 @@ export function replaceTargets(
 }
 
 /**
+ * The live loadout that already carries `name`, if any (trimmed, case- and
+ * whitespace-insensitive — the game shows names as typed, so "Fire Build" and
+ * "fire  build" read as the same loadout to a player).
+ *
+ * The game itself permits duplicate preset names, so this never blocks an add:
+ * it only lets the UI offer "replace that one instead".
+ */
+export function findLoadoutNameConflict(
+  targets: ReplaceTarget[],
+  name: string,
+): ReplaceTarget | undefined {
+  const norm = (s: string) => s.trim().replace(/\s+/g, " ").toLocaleLowerCase()
+  const want = norm(name)
+  if (!want) return undefined
+  return targets.find((t) => norm(t.name ?? "") === want)
+}
+
+/**
  * Queue "replace `target` with this relic set" with clean diff semantics:
  * an existing preset gets ONE overwrite op (a repeat replace supersedes the
  * earlier staged op), and a staged add is swapped in place (same name, new

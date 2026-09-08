@@ -56,6 +56,7 @@ import {
 } from "@/lib/buildChange"
 import {
   addLoadoutOp,
+  findLoadoutNameConflict,
   queueReplaceLoadout,
   type ReplaceTarget,
   replaceTargets,
@@ -827,6 +828,9 @@ function SaveLoadoutDialog({
   const [name, setName] = useState("")
   // Selected replace target: "idx-<presetIndex>" | "add-<stagedOpId>".
   const [overwriteKey, setOverwriteKey] = useState<string>("")
+  // A same-named live loadout the user has been warned about, awaiting their
+  // "replace it" / "add anyway" answer. Null until they try to add.
+  const [conflict, setConflict] = useState<ReplaceTarget | null>(null)
 
   // The LIVE preset list, not the raw save's (staged deletes/renames/reset/
   // adds composed) — same world the Loadouts page renders. All semantics live
@@ -847,42 +851,65 @@ function SaveLoadoutDialog({
 
   const valid = mode === "add" ? name.trim().length > 0 : overwriteKey !== ""
 
-  function doQueue() {
-    if (!valid) return
-    if (mode === "add") {
-      addLoadoutOp(target.slotIndex, {
-        kind: "add",
-        character: target.character,
-        vessel_id: vessel.vessel_id,
-        ga_handles: gaHandles,
-        name: name.trim(),
-        vesselName: vessel.vessel_name,
-      })
-      showSuccessToast(
-        `Added loadout "${name.trim()}" — export from the Changes panel to save it.`,
-      )
-    } else {
-      const t = targets.find((x) => keyOf(x) === overwriteKey)
-      if (!t) return
-      queueReplaceLoadout(target.slotIndex, t, {
-        character: target.character,
-        vessel_id: vessel.vessel_id,
-        ga_handles: gaHandles,
-        vesselName: vessel.vessel_name,
-      })
-      showSuccessToast(
-        `Replaced ${t.kind === "staged-add" ? "staged loadout " : ""}"${
-          t.name || "loadout"
-        }" — export from the Changes panel to save it.`,
-      )
-    }
+  function close() {
     onOpenChange(false)
     setName("")
     setOverwriteKey("")
+    setConflict(null)
+  }
+
+  function commitAdd() {
+    addLoadoutOp(target.slotIndex, {
+      kind: "add",
+      character: target.character,
+      vessel_id: vessel.vessel_id,
+      ga_handles: gaHandles,
+      name: name.trim(),
+      vesselName: vessel.vessel_name,
+    })
+    showSuccessToast(
+      `Added loadout "${name.trim()}" — export from the Changes panel to save it.`,
+    )
+    close()
+  }
+
+  function commitReplace(t: ReplaceTarget) {
+    queueReplaceLoadout(target.slotIndex, t, {
+      character: target.character,
+      vessel_id: vessel.vessel_id,
+      ga_handles: gaHandles,
+      vesselName: vessel.vessel_name,
+    })
+    showSuccessToast(
+      `Replaced ${t.kind === "staged-add" ? "staged loadout " : ""}"${
+        t.name || "loadout"
+      }" — export from the Changes panel to save it.`,
+    )
+    close()
+  }
+
+  function doQueue() {
+    if (!valid) return
+    if (mode === "add") {
+      // The game allows duplicate preset names, so a clash is a question, not
+      // an error: warn once, then let them replace or keep both.
+      const clash = findLoadoutNameConflict(targets, name)
+      if (clash) {
+        setConflict(clash)
+        return
+      }
+      commitAdd()
+    } else {
+      const t = targets.find((x) => keyOf(x) === overwriteKey)
+      if (t) commitReplace(t)
+    }
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog
+      open={open}
+      onOpenChange={(v) => (v ? onOpenChange(true) : close())}
+    >
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Save as in-game loadout</DialogTitle>
@@ -899,14 +926,20 @@ function SaveLoadoutDialog({
             <Button
               variant={mode === "add" ? "default" : "outline"}
               size="sm"
-              onClick={() => setMode("add")}
+              onClick={() => {
+                setMode("add")
+                setConflict(null)
+              }}
             >
               Create new
             </Button>
             <Button
               variant={mode === "overwrite" ? "default" : "outline"}
               size="sm"
-              onClick={() => setMode("overwrite")}
+              onClick={() => {
+                setMode("overwrite")
+                setConflict(null)
+              }}
             >
               Replace existing
             </Button>
@@ -919,12 +952,23 @@ function SaveLoadoutDialog({
               placeholder="Loadout name"
               value={name}
               maxLength={18}
-              onChange={(e) => setName(e.target.value)}
+              onChange={(e) => {
+                setName(e.target.value)
+                setConflict(null)
+              }}
               onKeyDown={(e) => e.key === "Enter" && doQueue()}
             />
             <div className="text-xs text-muted-foreground">
               {name.length}/18
             </div>
+            {conflict && (
+              <p className="text-xs text-amber-600 dark:text-amber-500">
+                {target.character} already has a
+                {conflict.kind === "staged-add" ? " staged" : ""} loadout named
+                “{conflict.name || "(unnamed)"}”. Replace it, or add a second
+                one with the same name?
+              </p>
+            )}
           </div>
         ) : (
           <Select value={overwriteKey} onValueChange={setOverwriteKey}>
@@ -943,12 +987,23 @@ function SaveLoadoutDialog({
         )}
 
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
+          <Button variant="outline" onClick={close}>
             Cancel
           </Button>
-          <Button onClick={doQueue} disabled={!valid}>
-            {mode === "add" ? "Add loadout" : "Replace loadout"}
-          </Button>
+          {conflict ? (
+            <>
+              <Button variant="outline" onClick={commitAdd}>
+                Add anyway
+              </Button>
+              <Button onClick={() => commitReplace(conflict)}>
+                Replace it
+              </Button>
+            </>
+          ) : (
+            <Button onClick={doQueue} disabled={!valid}>
+              {mode === "add" ? "Add loadout" : "Replace loadout"}
+            </Button>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>

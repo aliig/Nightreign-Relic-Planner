@@ -778,6 +778,59 @@ describe("replace-loadout targets (live preset list)", () => {
   })
 })
 
+describe("loadout name conflicts (findLoadoutNameConflict)", () => {
+  const EXISTING = [
+    { index: 0, name: "Keep Me" },
+    { index: 1, name: "Fire  Build" },
+  ]
+
+  it("matches an existing loadout ignoring case and extra whitespace", async () => {
+    const pc = await freshStore()
+    const t = pc.replaceTargets(EXISTING, pc.readSlot(0), "Wylder")
+    expect(pc.findLoadoutNameConflict(t, "  fire build ")).toMatchObject({
+      kind: "existing",
+      index: 1,
+    })
+  })
+
+  it("returns undefined for a fresh name or a blank one", async () => {
+    const pc = await freshStore()
+    const t = pc.replaceTargets(EXISTING, pc.readSlot(0), "Wylder")
+    expect(pc.findLoadoutNameConflict(t, "Poison")).toBeUndefined()
+    expect(pc.findLoadoutNameConflict(t, "   ")).toBeUndefined()
+  })
+
+  it("sees staged adds and ignores staged-deleted loadouts", async () => {
+    const pc = await freshStore()
+    pc.addLoadoutOp(0, { kind: "delete", index: 0, name: "Keep Me" })
+    pc.addLoadoutOp(0, {
+      kind: "add",
+      character: "Wylder",
+      vessel_id: 5,
+      ga_handles: [9],
+      name: "Staged One",
+    })
+    const t = pc.replaceTargets(EXISTING, pc.readSlot(0), "Wylder")
+    expect(pc.findLoadoutNameConflict(t, "Keep Me")).toBeUndefined()
+    expect(pc.findLoadoutNameConflict(t, "staged one")).toMatchObject({
+      kind: "staged-add",
+    })
+  })
+
+  it("does not see another character's staged loadout", async () => {
+    const pc = await freshStore()
+    pc.addLoadoutOp(0, {
+      kind: "add",
+      character: "Raider",
+      vessel_id: 6,
+      ga_handles: [8],
+      name: "Shared Name",
+    })
+    const t = pc.replaceTargets([], pc.readSlot(0), "Wylder")
+    expect(pc.findLoadoutNameConflict(t, "Shared Name")).toBeUndefined()
+  })
+})
+
 describe("live loadout list (effectiveLoadouts)", () => {
   const SAVED = [
     {
