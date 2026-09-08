@@ -31,6 +31,7 @@ export type RelicRowProps = {
   usage: RelicUsage | undefined
   buildsById: Map<string, BuildUsageInfo>
   usageKnown: boolean
+  usageUnavailable: boolean
   selected: boolean
   trashed: boolean
   sellable: boolean
@@ -59,6 +60,7 @@ function RelicRowInner({
   usage,
   buildsById,
   usageKnown,
+  usageUnavailable,
   selected,
   trashed,
   sellable,
@@ -166,7 +168,14 @@ function RelicRowInner({
       </td>
 
       <td className="flex flex-col items-start gap-1">
-        {!usageKnown || !tier ? (
+        {usageUnavailable ? (
+          <span
+            className="text-xs text-muted-foreground"
+            title="Build usage could not be loaded, so this relic has no tier."
+          >
+            —
+          </span>
+        ) : !usageKnown || !tier ? (
           <span className="inline-block h-5 w-20 animate-pulse rounded bg-muted" />
         ) : (
           <Tooltip>

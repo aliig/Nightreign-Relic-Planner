@@ -56,6 +56,7 @@ function AuthInventoryBody({
     byHandle: usage,
     buildsById,
     isKnown: usageKnown,
+    unavailable: usageUnavailable,
     staleCount,
     neverOptimizedCount,
   } = useRelicUsage(profileId, slotIndex)
@@ -139,6 +140,7 @@ function AuthInventoryBody({
         usage={usage}
         buildsById={buildsById}
         usageKnown={usageKnown}
+        usageUnavailable={usageUnavailable}
         slotIndex={slotIndex}
         murks={murks}
       />
@@ -251,6 +253,7 @@ function AnonInventory() {
     byHandle: usage,
     buildsById,
     isKnown: usageKnown,
+    unavailable: usageUnavailable,
   } = useRelicUsage(null)
 
   const allProfiles: Array<Record<string, any>> = JSON.parse(
@@ -377,6 +380,7 @@ function AnonInventory() {
         usage={usage}
         buildsById={buildsById}
         usageKnown={usageKnown}
+        usageUnavailable={usageUnavailable}
         slotIndex={Number(profile?.slot_index ?? 0)}
         murks={Number(profile?.murks ?? 0)}
       />

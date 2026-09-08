@@ -18,6 +18,7 @@ export type RelicTableProps = {
   usage: Map<number, RelicUsage>
   buildsById: Map<string, BuildUsageInfo>
   usageKnown: boolean
+  usageUnavailable: boolean
   effectMap: Map<number, string>
   selection: Set<number>
   trashed: Set<number>
@@ -50,6 +51,7 @@ export function RelicTable({
   usage,
   buildsById,
   usageKnown,
+  usageUnavailable,
   effectMap,
   selection,
   trashed,
@@ -125,6 +127,7 @@ export function RelicTable({
                 usage={usage.get(relic.gaHandle)}
                 buildsById={buildsById}
                 usageKnown={usageKnown}
+                usageUnavailable={usageUnavailable}
                 selected={selection.has(relic.gaHandle)}
                 trashed={trashed.has(relic.gaHandle)}
                 sellable={isSellable(relic)}

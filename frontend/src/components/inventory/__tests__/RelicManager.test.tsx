@@ -128,25 +128,27 @@ const BUILDS = new Map<string, BuildUsageInfo>([
   ],
 ])
 
-function renderManager() {
+function renderManager(over: { usageKnown?: boolean } = {}) {
   return render(
     <RelicManager
       relics={RELICS}
       effectsData={[]}
       effectMap={new Map()}
-      usage={USAGE}
+      usage={over.usageKnown === false ? new Map() : USAGE}
       buildsById={BUILDS}
-      usageKnown={true}
+      usageKnown={over.usageKnown ?? true}
+      usageUnavailable={false}
       slotIndex={0}
       murks={0}
     />,
   )
 }
 
-/** Open the State facet and tick one cull tier. */
+/** Open the State facet and tick one cull tier.  The option's accessible name
+ *  is its label followed by its hint, so match on the label prefix. */
 function selectTier(label: string) {
   fireEvent.click(screen.getByRole("button", { name: /State/ }))
-  fireEvent.click(screen.getByRole("button", { name: label }))
+  fireEvent.click(screen.getByRole("button", { name: new RegExp(`^${label}`) }))
 }
 
 let restoreLayout: () => void
@@ -171,6 +173,42 @@ describe("RelicManager tier filter", () => {
     expect(screen.getByText("In use")).toBeInTheDocument()
     expect(screen.getByText("Contender")).toBeInTheDocument()
     expect(screen.getAllByText("Dead weight")).toHaveLength(2)
+  })
+
+  it("ignores a selected tier while the usage answer has not landed", () => {
+    // matchesState lets a null tier through so a row cannot vanish mid-flight.
+    // As a FILTER that would list the whole inventory under "Dead weight" and
+    // invite select-all + trash, so the axis is dropped until usage is known.
+    const { rerender } = renderManager()
+    selectTier("Dead weight")
+    expect(
+      screen.getByRole("checkbox", { name: "Select all 2 matching" }),
+    ).toBeInTheDocument()
+
+    // Same component, same chosen tier, usage now unknown: every relic is
+    // listed again rather than 1,550 rows masquerading as dead weight.
+    rerender(
+      <RelicManager
+        relics={RELICS}
+        effectsData={[]}
+        effectMap={new Map()}
+        usage={new Map()}
+        buildsById={BUILDS}
+        usageKnown={false}
+        usageUnavailable={false}
+        slotIndex={0}
+        murks={0}
+      />,
+    )
+    expect(
+      screen.getByRole("checkbox", { name: "Select all 4 matching" }),
+    ).toBeInTheDocument()
+  })
+
+  it("disables the tier control until usage is known", () => {
+    renderManager({ usageKnown: false })
+    fireEvent.click(screen.getByRole("button", { name: /State/ }))
+    expect(screen.getByRole("button", { name: /Dead weight/ })).toBeDisabled()
   })
 
   it("narrows the list to the chosen tier", () => {

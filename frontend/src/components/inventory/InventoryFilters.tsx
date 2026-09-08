@@ -184,7 +184,11 @@ function TypeFacet({ f, set }: FacetProps) {
   )
 }
 
-function StateFacet({ f, set }: FacetProps) {
+function StateFacet({
+  f,
+  set,
+  usageKnown,
+}: FacetProps & { usageKnown: boolean }) {
   return (
     <Popover>
       <PopoverTrigger asChild>
@@ -218,6 +222,10 @@ function StateFacet({ f, set }: FacetProps) {
         </div>
         <div className="space-y-1.5">
           <p className="text-xs font-medium text-muted-foreground">Cull tier</p>
+          <p className="text-xs text-muted-foreground">
+            How disposable a relic is, judged against{" "}
+            <strong>your builds</strong>.
+          </p>
           <div className="flex flex-col gap-0.5">
             {TIER_ORDER.map((t) => {
               const checked = f.usageTiers.includes(t)
@@ -225,6 +233,7 @@ function StateFacet({ f, set }: FacetProps) {
                 <button
                   key={t}
                   type="button"
+                  disabled={!usageKnown}
                   onClick={() =>
                     set({
                       usageTiers: checked
@@ -232,18 +241,28 @@ function StateFacet({ f, set }: FacetProps) {
                         : [...f.usageTiers, t],
                     })
                   }
-                  className="flex items-center gap-2 rounded px-1.5 py-1 text-left text-sm hover:bg-accent"
+                  className="flex items-start gap-2 rounded px-1.5 py-1 text-left text-sm hover:bg-accent disabled:pointer-events-none disabled:opacity-50"
                 >
                   <Checkbox
                     checked={checked}
                     tabIndex={-1}
-                    className="pointer-events-none"
+                    className="pointer-events-none mt-0.5"
                   />
-                  {TIER_META[t].label}
+                  <span>
+                    {TIER_META[t].label}
+                    <span className="block text-xs text-muted-foreground">
+                      {TIER_META[t].hint}
+                    </span>
+                  </span>
                 </button>
               )
             })}
           </div>
+          {!usageKnown && (
+            <p className="text-xs text-muted-foreground">
+              Available once build usage loads.
+            </p>
+          )}
         </div>
         <div className="space-y-1.5">
           <p className="text-xs font-medium text-muted-foreground">
@@ -409,10 +428,13 @@ export function InventoryFilters({
   filter,
   setFilter,
   effectsData,
+  usageKnown,
 }: {
   filter: FilterState
   setFilter: (next: FilterState) => void
   effectsData: unknown[]
+  /** Gates the cull-tier axis: it cannot be asked before the answer lands. */
+  usageKnown: boolean
 }) {
   const set = (patch: Partial<FilterState>) =>
     setFilter({ ...filter, ...patch })
@@ -449,7 +471,7 @@ export function InventoryFilters({
       <ColorFacet f={filter} set={set} />
       <TierFacet f={filter} set={set} />
       <TypeFacet f={filter} set={set} />
-      <StateFacet f={filter} set={set} />
+      <StateFacet f={filter} set={set} usageKnown={usageKnown} />
       <EffectsFacet f={filter} set={set} effectsData={effectsData} />
     </>
   )

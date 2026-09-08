@@ -35,13 +35,16 @@ export function useRelicUsage(
   staleCount: number
   neverOptimizedCount: number
   isKnown: boolean
+  /** The request failed. Distinct from "still loading": a failure must be
+   *  shown, and must NOT leave the page pulsing a skeleton forever. */
+  unavailable: boolean
 } {
   const pending = usePendingSlot(slotIndex ?? null)
   const mints = pending.mints
   // Mint identity, sells excluded — see the note above.
   const mintsKey = useMemo(() => mints.map((m) => m.handle).join(","), [mints])
 
-  const { data } = useQuery({
+  const { data, isError } = useQuery({
     queryKey: ["relic-usage", profileId, mintsKey],
     queryFn: () =>
       OptimizeService.listRelicUsage({
@@ -75,6 +78,7 @@ export function useRelicUsage(
       staleCount: builds.filter((b) => !b.fresh && b.optimized).length,
       neverOptimizedCount: builds.filter((b) => !b.optimized).length,
       isKnown: !!profileId && data !== undefined,
+      unavailable: isError,
     }
-  }, [data, profileId])
+  }, [data, profileId, isError])
 }

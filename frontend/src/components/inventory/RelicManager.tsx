@@ -71,6 +71,7 @@ export function RelicManager({
   usage,
   buildsById,
   usageKnown,
+  usageUnavailable,
   slotIndex,
   murks,
 }: {
@@ -81,9 +82,11 @@ export function RelicManager({
   // one placed copy marked every content-identical copy as used.
   usage: Map<number, RelicUsage>
   buildsById: Map<string, BuildUsageInfo>
-  // False until the first usage response lands.  Rendering "Unused" while the
+  // False until the first usage response lands.  Rendering a verdict while the
   // answer is still in flight is the lie this page kept telling.
   usageKnown: boolean
+  // The usage request FAILED (as opposed to not having landed yet).
+  usageUnavailable: boolean
   slotIndex: number
   murks: number
 }) {
@@ -148,8 +151,14 @@ export function RelicManager({
     // The State axes (sellable/equipped/in-a-build/bookmarked) depend on live
     // usage + pending favorites, which only exist here — so they're filtered
     // here rather than in applyFilters, which only sees relic-intrinsic fields.
+    // Until the usage answer lands, the tier axis is DROPPED rather than
+    // passed unknown tiers: matchesState lets a null tier through (a row must
+    // not vanish mid-flight), which as a filter would list the entire
+    // inventory under "Dead weight" and invite the user to select all and
+    // trash it.  No answer means the question cannot be asked yet.
+    const stateFilter = usageKnown ? filter : { ...filter, usageTiers: [] }
     list = list.filter((r) =>
-      matchesState(filter, {
+      matchesState(stateFilter, {
         equipped: r.equipped,
         tier: usage.get(r.gaHandle)?.tier ?? null,
         favorite: effectiveFavorite(r),
@@ -204,6 +213,7 @@ export function RelicManager({
     effectMap,
     usageSort,
     usage,
+    usageKnown,
     showTrashed,
     trashed,
     isSellable,
@@ -353,6 +363,7 @@ export function RelicManager({
               filter={filter}
               setFilter={setFilter}
               effectsData={effectsData}
+              usageKnown={usageKnown}
             />
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -442,6 +453,13 @@ export function RelicManager({
         />
       </div>
 
+      {usageUnavailable && (
+        <p className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-600 dark:text-amber-400">
+          Build usage could not be loaded, so relics have no cull tier and the
+          tier filter is off. Everything else on this page still works.
+        </p>
+      )}
+
       {visible.length === 0 ? (
         <p className="text-sm text-muted-foreground py-8 text-center">
           No relics match the current filters.
@@ -452,6 +470,7 @@ export function RelicManager({
           usage={usage}
           buildsById={buildsById}
           usageKnown={usageKnown}
+          usageUnavailable={usageUnavailable}
           effectMap={effectMap}
           selection={selection}
           trashed={trashed}
